@@ -1,6 +1,7 @@
 # Asig 开发文档
 
-> Asig
+> Asig 简洁的、最权威的开发维护手册，语义冲突时以本文档为准。
+> 没有明确允许，Agent 不可修改本文档。
 
 Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸浮窗。
 监控 Claude Code / CodeBuddy / OpenClaw，Trae 待支持。
