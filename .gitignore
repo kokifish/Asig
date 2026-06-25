@@ -1,0 +1,11 @@
+# Rust
+/target
+**/*.rs.bk
+
+# macOS
+.DS_Store
+
+# 编辑器
+.vscode/
+.idea/
+*.swp

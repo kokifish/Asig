@@ -1,0 +1,16 @@
+[package]
+name = "agent-light-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# 内核刻意零 macOS/AppKit 依赖 —— 这是"留跨平台口子"的硬保证:
+# 未来 crates/app-windows 可直接复用整个 core,不拖入 AppKit。
+[dependencies]
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs       = "5"
+libc       = "0.2"
+# Phase 2/3 再按需开启:
+# notify   = "6"                                            # push:hook 事件 / 文件监听
+# rusqlite = { version = "0.32", features = ["bundled"] }   # openclaw sqlite

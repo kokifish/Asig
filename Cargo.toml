@@ -1,0 +1,16 @@
+[workspace]
+members  = ["crates/core", "crates/app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# 极致轻量:体积优先,契合 <60MB / <1% CPU 目标。
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

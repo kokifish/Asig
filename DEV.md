@@ -6,6 +6,10 @@
 Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸浮窗。
 监控 Claude Code / CodeBuddy / OpenClaw，Trae 待支持。
 
+## Principals
+
+- 
+
 ## Tech Overview
 
 - **内核**: Rust workspace `crates/core`，零 AppKit 依赖 — 可移植，Windows 壳可直接复用
@@ -22,7 +26,11 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 
 性能预算: 运行内存 < 60MB，CPU 平均 < 1%
 
-## Color and State Priority
+## Design
+
+- 需要轮询的，默认3s轮询一次
+
+### Color and State Priority
 
 一个 `AgentStatus` 同时决定**灯的颜色 + 灯效(动画)**,UI 层只消费 `status.light()`。
 

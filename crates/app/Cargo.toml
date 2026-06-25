@@ -1,0 +1,51 @@
+[package]
+name = "agent-light"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "agent-light"
+path = "src/main.rs"
+
+[dependencies]
+agent-light-core = { path = "../core" }
+
+# objc2 生态版本固定,避免宏/API 漂移。
+# ⚠️ 类型/协议默认藏在 cargo feature 后,必须按需开启。
+objc2            = "0.5"
+objc2-foundation = { version = "0.2", features = [
+    "NSString", "NSTimer", "NSObject", "NSNotification",
+    "NSGeometry", # NSRect/NSPoint/NSSize/CGFloat
+    "NSValue",    # NSNumber:脉冲动画的 from/to 值
+] }
+objc2-app-kit = { version = "0.2", features = [
+    # NSApplication 的 struct 实际挂在 NSResponder feature 下(parent-feature 门控),
+    # 故父类链也要开。
+    "NSResponder",
+    "NSApplication",
+    "NSStatusBar",
+    "NSStatusItem",
+    "NSStatusBarButton",
+    "NSMenu",
+    "NSMenuItem",
+    "NSButton",
+    "NSControl",
+    "NSView",
+    # Phase 2 浮窗:
+    "NSWindow",
+    "NSColor",
+    "NSBezierPath",
+    "NSGraphics",
+    # Phase 2.5 设置面板:
+    "NSTextField",
+    "NSScreen",
+    "NSFont",
+] }
+# CoreAnimation:CALayer 透明度脉冲(交 render server 驱动,app CPU ~0%)。
+objc2-quartz-core = { version = "0.2", features = [
+    "CALayer",
+    "CAAnimation", # 含 CABasicAnimation
+    "CAMediaTiming",
+    "CAMediaTimingFunction",
+] }
