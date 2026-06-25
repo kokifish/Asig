@@ -28,13 +28,13 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 | 优先级 | 状态 | 灯 | 默认动效 | 含义 |
 |:---:|---|:---:|---|---|
 | 5 | `Error` | 🔴 红 | 快闪 | agent 报错且无法自动恢复 |
-| 4 | `NeedsAttention` | 🟠 琥珀 | 慢闪 | 待决策（要权限 / 要输入） |
+| 4 | `NeedsDeci` | 🟠 琥珀 | 慢闪 | 待决策（要权限 / 要输入） |
 | 3 | `Offline` | 🟣 紫 | 常亮 | 异常 / 卡住 / 进程没了 / 未知 |
 | 2 | `Working` | 🟡 黄 | 呼吸-慢速 | 正在跑 |
 | 1 | `Done` | 🟢 绿 | 波纹 | 完成 / 空闲 / 初始默认态 |
 
 - **Done Notification**: 在别的状态转入`Done`时，默认持续1分钟的 Done Notification，用深绿色表示，默认动效为快速呼吸
 - **聚合规则**：同一个Agent多个会话同时存在时，全局灯取**优先级最高**的那一个（`AgentStatus::priority()`，数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
-- **Sticky 锁定态**：`NeedsAttention` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
+- **Sticky 锁定态**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
 - **灯效种类**：`Steady`（常亮）/ `Pulse`（呼吸，透明度渐变）/ `Blink`（明灭）。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
 - **颜色枚举**：颜色与状态一一对应，定义在内核、平台无关；app 层翻译成具体 RGB
