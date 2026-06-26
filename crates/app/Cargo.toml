@@ -41,6 +41,8 @@ objc2-app-kit = { version = "0.2", features = [
     "NSTextField",
     "NSScreen",
     "NSFont",
+    "NSSlider",
+    "NSPopUpButton",
 ] }
 # CoreAnimation:CALayer 透明度脉冲(交 render server 驱动,app CPU ~0%)。
 objc2-quartz-core = { version = "0.2", features = [

@@ -1,6 +1,6 @@
 //! 菜单栏灯:NSStatusItem + 按钮 emoji。点击按钮弹 popover(见 panel.rs)。
 
-use agent_light_core::AgentStatus;
+use agent_light_core::{AgentStatus, LightAnim};
 use objc2::rc::Retained;
 use objc2::runtime::{Bool, NSObject};
 use objc2::{class, msg_send, msg_send_id, sel, DeclaredClass};
@@ -8,7 +8,7 @@ use objc2_app_kit::{NSStatusBar, NSStatusBarButton, NSStatusItem};
 use objc2_foundation::{NSString, NSTimer};
 
 use crate::app_delegate::AppDelegate;
-use crate::palette::status_emoji;
+use crate::palette::color_emoji;
 
 /// 建状态栏项,并把按钮点击接到 `togglePopover:`。
 pub fn build(delegate: &Retained<AppDelegate>) {
@@ -16,7 +16,7 @@ pub fn build(delegate: &Retained<AppDelegate>) {
         unsafe { msg_send_id![class!(NSStatusBar), systemStatusBar] };
     let item: Retained<NSStatusItem> =
         unsafe { msg_send_id![&sb, statusItemWithLength: -1.0f64] };
-    set_light(&item, AgentStatus::Offline, false);
+    set_light(&item, &AgentStatus::Offline.light());
 
     // 点状态栏按钮 → 弹/收 popover
     let button: Retained<NSStatusBarButton> = unsafe { msg_send_id![&item, button] };
@@ -28,15 +28,16 @@ pub fn build(delegate: &Retained<AppDelegate>) {
     delegate.ivars().status_item.replace(Some(item));
 }
 
-/// 按状态把按钮标题设成对应 emoji。Done Notification 期间用 💚 区分(emoji 无法表达深绿)。
-pub fn set_light(item: &NSStatusItem, status: AgentStatus, done_notif: bool) {
-    let button: Retained<NSStatusBarButton> = unsafe { msg_send_id![item, button] };
-    let emoji = if done_notif && status == AgentStatus::Done {
-        "💚"
-    } else {
-        status_emoji(status)
+/// 按灯效(颜色)把按钮标题设成对应 emoji。Done Notification 是深绿 → 💚。
+pub fn set_light(item: &NSStatusItem, anim: &LightAnim) {
+    let color = match anim {
+        LightAnim::Steady { color } => *color,
+        LightAnim::Pulse { color, .. } => *color,
+        LightAnim::Blink { color, .. } => *color,
+        LightAnim::Ripple { color, .. } => *color,
     };
-    let title = NSString::from_str(emoji);
+    let button: Retained<NSStatusBarButton> = unsafe { msg_send_id![item, button] };
+    let title = NSString::from_str(color_emoji(color));
     let _: () = unsafe { msg_send![&button, setTitle: &*title] };
 }
 

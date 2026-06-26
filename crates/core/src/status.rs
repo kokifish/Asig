@@ -40,7 +40,8 @@ impl AgentStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Color {
     Green,     // Done
     DarkGreen, // Done Notification(刚转入 Done 的 1 分钟内)

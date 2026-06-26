@@ -36,6 +36,14 @@ cargo build --release -p agent-light
 ./target/release/agent-light
 ```
 
+打包成正式 `.app`(菜单栏 accessory,不占 Dock,可拖进 `/Applications`):
+
+```bash
+./scripts/make-app.sh               # 产物: build/Asig.app
+open build/Asig.app                 # 运行测试
+cp -R build/Asig.app /Applications/ # 安装
+```
+
 > 国内网络拉依赖慢,可配 rsproxy 镜像(见 DEV.md「依赖镜像」)。
 
 启动后:右上角菜单栏出现灯;屏幕上方出现一个药丸浮窗。**零配置**,自动发现已安装的 agent 会话。
@@ -62,6 +70,6 @@ cargo build --release -p agent-light
 - 药丸浮窗默认点击穿透;在**设置**里取消勾选「浮窗点击穿透」即可用鼠标拖动浮窗位置。
 - 🟣(异常 / 不可观测):所有会话都消失时自然出现;另外 **Asig 见过的 Claude 进程若崩溃/被杀**(残留 session 文件)也会标 🟣。🟠(需决策)与 🔴(报错)Claude Code 的状态文件不提供,需接 hook 才能精准触发(详见 DEV.md)。
 - OpenClaw 的「需决策」态还不够准(待补 trajectory 解析)。
-- 设置面板为初版占位,真实控件(启用 Agent / 间隔 / 浮窗开关 / 主题)待补。
+- 设置面板(菜单栏灯 → 设置…):**浮窗大小**滑块、**浮窗点击穿透**勾选、以及**各状态样式**(每个状态可独立选动画 常亮/呼吸/明灭/波纹 + 颜色)。改动即时生效并持久化到 `~/Library/Application Support/Asig/settings.json`。启用 Agent / 轮询间隔 等待补。
 
 更多信息见 [DEV.md](./DEV.md)。

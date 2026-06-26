@@ -5,10 +5,12 @@
 
 pub mod aggregate;
 pub mod claude;
+pub mod config;
 pub mod openclaw;
 pub mod source;
 pub mod status;
 
+pub use config::{Anim, Settings, StateStyle};
 pub use source::{AgentKind, AgentSession, AgentSource};
 pub use status::{transition, AgentStatus, Color, LightAnim};
 
@@ -132,9 +134,9 @@ impl Monitor {
         Snapshot { sessions, global, done_notif }
     }
 
-    /// 推荐轮询间隔。poll 路径下 2s 足够;push(hook)通道接入后可放宽为兜底。
+    /// 推荐轮询间隔。DEV.md Design:默认 3s。
     pub fn poll_interval() -> Duration {
-        Duration::from_millis(2000)
+        Duration::from_millis(3000)
     }
 }
 

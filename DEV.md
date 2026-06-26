@@ -1,4 +1,4 @@
-# Asig 开发文档
+# Asig 设计与开发
 
 > Asig 简洁的、最权威的开发维护手册，语义冲突时以本文档为准。
 > 没有明确允许，Agent 不可修改本文档。
@@ -8,7 +8,8 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 
 ## Principals
 
-- 
+- 结构清晰，高内聚低耦合
+- 不过度设计，避免不必要的薄封装
 
 ## Tech Overview
 
@@ -47,3 +48,24 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 - **Sticky 锁定态**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
 - **灯效种类**：`Steady`（常亮）/ `Pulse`（呼吸，透明度渐变）/ `Blink`（明灭）。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
 - **颜色枚举**：颜色与状态一一对应，定义在内核、平台无关；app 层翻译成具体 RGB
+
+### Signal Light
+
+- Def: 在桌面上的可以配置动效、大小的叫 Signal Light
+- Default Position: 初始位置在主屏幕的左上角，在macOS窗口的红黄蓝按钮下方
+
+### Signal Icon
+
+- Def: 在菜单栏上的，无动效且不可设置动效的叫 Signal Icon
+
+### Drop-down Panel
+
+- Def: 单击菜单栏图标后的弹窗
+- Position: 菜单栏单击后在图标右下方弹出菜单栏弹窗，菜单栏弹窗左侧和菜单栏Asig图标左侧对齐，但如果右侧空间不足，则右侧贴屏幕边缘。不可拖动不可自定义大小
+- Upper Button: 从左至右分别为`设置`-用于打开 Settings Panel 的最左侧按钮，`锁定`-用于快速设置是否可以拖动圆角单选按钮，`退出`-用于退出Asig的最右侧按钮
+
+### Settings Panel
+
+- Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
+- Position: 默认在屏幕中央，可以拖动
+

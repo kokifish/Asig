@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use agent_light_core::{Monitor, Snapshot};
+use agent_light_core::{Monitor, Settings, Snapshot};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::NSObject;
 use objc2::{class, declare_class, msg_send, msg_send_id, mutability, ClassType, DeclaredClass};
@@ -24,6 +24,8 @@ pub struct AppIvars {
     pub settings_window: RefCell<Option<Retained<NSWindow>>>,
     /// 浮窗是否点击穿透。true=穿透(默认);false=接收鼠标可拖动。
     pub click_through: RefCell<bool>,
+    /// 用户设置(灯大小 + 各状态样式);启动加载,改动即存盘。
+    pub settings: RefCell<Settings>,
     /// 上一轮的状态签名;相同则跳过渲染(省 CPU)。
     pub last_sig: RefCell<String>,
 }
@@ -56,16 +58,37 @@ declare_class!(
             self.render(&snap);
         }
 
-        /// 点状态栏 Asig:弹出/收起详情 popover。首次点击时懒创建窗口。
+        /// 单击菜单栏 Signal Icon:弹/收 Drop-down Panel。位置按图标算;隐藏即丢弃,
+        /// 下次显示重建(拿最新位置 + 锁定态 + 不占常驻内存)。
         #[method(togglePopover:)]
         fn toggle_popover(&self, _sender: *mut NSObject) {
-            if self.ivars().popover.borrow().is_none() {
-                let p = crate::panel::build(self);
-                *self.ivars().popover.borrow_mut() = Some(p);
+            let visible = self
+                .ivars()
+                .popover
+                .borrow()
+                .as_ref()
+                .map(crate::panel::is_visible)
+                .unwrap_or(false);
+            if visible {
+                if let Some(p) = self.ivars().popover.borrow().as_ref() {
+                    crate::panel::hide(p);
+                }
+                *self.ivars().popover.borrow_mut() = None;
+                return;
             }
-            if let Some(p) = self.ivars().popover.borrow().as_ref() {
-                crate::panel::toggle(p);
-            }
+            let pos = self
+                .ivars()
+                .status_item
+                .borrow()
+                .as_ref()
+                .map(|item| {
+                    crate::panel::dropdown_position_for(&**item, crate::panel::PANEL_W, crate::panel::PANEL_H)
+                });
+            let p = crate::panel::build(self, pos);
+            crate::panel::show(&p);
+            *self.ivars().popover.borrow_mut() = Some(p);
+            let snap = self.ivars().monitor.poll();
+            self.render(&snap);
         }
 
         /// popover 里"设置…"按钮:打开设置窗口。首次打开时懒创建。
@@ -96,6 +119,38 @@ declare_class!(
             *self.ivars().click_through.borrow_mut() = on;
             self.apply_click_through();
         }
+
+        /// 设置面板「大小」滑块 action。
+        #[method(changeSize:)]
+        fn change_size(&self, sender: *mut NSObject) {
+            let v: f64 = unsafe { msg_send![sender, doubleValue] };
+            self.ivars().settings.borrow_mut().dot_size = v.round().max(6.0) as u32;
+            self.settings_changed();
+        }
+
+        /// 设置面板「状态样式」下拉 action。tag = state_idx*2 + field(0=动画,1=颜色)。
+        #[method(changeStyle:)]
+        fn change_style(&self, sender: *mut NSObject) {
+            let tag: i64 = unsafe { msg_send![sender, tag] };
+            let idx: i64 = unsafe { msg_send![sender, indexOfSelectedItem] };
+            let state_idx = (tag / 2) as usize;
+            let field = tag % 2;
+            let status = crate::settings::STATE_ORDER.get(state_idx).copied();
+            let Some(status) = status else { return };
+            let mut settings = self.ivars().settings.borrow_mut();
+            let default = Settings::default();
+            let st = settings
+                .styles
+                .entry(status)
+                .or_insert(*default.styles.get(&status).unwrap());
+            match field {
+                0 => st.anim = crate::settings::ANIM_ORDER[idx as usize],
+                1 => st.color = crate::settings::COLOR_ORDER[idx as usize],
+                _ => {}
+            }
+            drop(settings);
+            self.settings_changed();
+        }
     }
 );
 
@@ -110,17 +165,29 @@ impl AppDelegate {
 }
 
 impl AppDelegate {
-    /// 把快照渲染到所有 UI(菜单栏灯 + 浮窗 + popover)。
+    /// 把快照渲染到所有 UI(菜单栏灯 + 浮窗 + popover)。灯效来自用户设置。
     fn render(&self, snap: &Snapshot) {
+        let anim = self.ivars().settings.borrow().light(snap);
         if let Some(item) = self.ivars().status_item.borrow().as_ref() {
-            crate::tray::set_light(item, snap.global, snap.done_notif);
+            crate::tray::set_light(item, &anim);
         }
         if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
-            crate::overlay::set_light(view, snap.light());
+            crate::overlay::set_light(view, anim);
         }
         if let Some(p) = self.ivars().popover.borrow().as_ref() {
             crate::panel::update_label(p, snap);
         }
+    }
+
+    /// 设置改动后:存盘 + 立即重应用(圆点大小 + 灯效),不等下一轮 tick。
+    fn settings_changed(&self) {
+        self.ivars().settings.borrow().save();
+        let dot = self.ivars().settings.borrow().dot_size;
+        if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
+            crate::overlay::set_size(view, dot);
+        }
+        let snap = self.ivars().monitor.poll();
+        self.render(&snap);
     }
 }
 

@@ -6,7 +6,9 @@
 //!   - Ripple 波纹:一个自绘环子视图,动其 layer "transform.scale" + "opacity",
 //!     从中心扩散并淡出(环也自绘,故无需 CGColor)。
 //!
-//! 窗口比核心圆点大一圈(48×48 内放 16×16 圆点),给波纹环留出扩散空间。
+//! 窗口固定大尺寸(120×120,透明 + 默认点击穿透),核心圆点按设置 `dot_size` 居中绘制、
+//! 波纹环在其中扩散。改大小只重绘圆点,**不**改窗口尺寸 —— 避免运行时对窗口发
+//! setFrame 结构体消息(此前 KVO 窗口 setFrame 曾崩)。
 
 use std::cell::RefCell;
 
@@ -18,38 +20,8 @@ use objc2_app_kit::{NSBezierPath, NSColor, NSView, NSWindow};
 use objc2_foundation::{CGFloat, NSNumber, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::{CABasicAnimation, CALayer};
 
-// 窗口与核心圆点的几何。
-const WIN: CGFloat = 48.0;
-const DOT: CGFloat = 16.0;
-const DOT_ORIGIN: CGFloat = (WIN - DOT) / 2.0; // 圆点左下角,使其居中
-
-// ---- 灯效规格(供 animation 模块 / 后续 Phase 用)----
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
-pub struct CoreAnimSpec {
-    pub color: Color,
-    pub kind: AnimKind,
-    pub period_ms: u32,
-}
-#[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
-pub enum AnimKind {
-    Steady,
-    Pulse,
-    Blink,
-    Ripple,
-    Gif,
-}
-impl CoreAnimSpec {
-    pub fn from(a: LightAnim) -> Self {
-        match a {
-            LightAnim::Steady { color } => Self { color, kind: AnimKind::Steady, period_ms: 0 },
-            LightAnim::Pulse { color, period_ms } => Self { color, kind: AnimKind::Pulse, period_ms },
-            LightAnim::Blink { color, period_ms } => Self { color, kind: AnimKind::Blink, period_ms },
-            LightAnim::Ripple { color, period_ms } => Self { color, kind: AnimKind::Ripple, period_ms },
-        }
-    }
-}
+/// 固定窗口尺寸(透明,容得下最大圆点 + 波纹扩散)。
+const WIN: CGFloat = 120.0;
 
 // ---- Color -> NSColor ----
 pub fn nscolor(c: Color) -> Retained<NSColor> {
@@ -73,10 +45,16 @@ fn anim_color(a: LightAnim) -> Color {
     }
 }
 
+/// 圆点在窗口内居中的左下角 origin。
+fn dot_origin(dot: CGFloat) -> CGFloat {
+    (WIN - dot) / 2.0
+}
+
 // ---- PillView:自绘圆点 + 持有可选的波纹环 ----
 pub struct PillState {
     pub color: Retained<NSColor>,
     pub ring: Option<Retained<RingView>>,
+    pub dot: CGFloat,
 }
 
 declare_class!(
@@ -105,10 +83,11 @@ declare_class!(
         fn draw_rect(&self, _dirty: NSRect) {
             let b = self.ivars().borrow();
             let color: &NSColor = &*b.color;
-            let dot = NSRect::new(NSPoint::new(DOT_ORIGIN, DOT_ORIGIN), NSSize::new(DOT, DOT));
-            let radius = DOT / 2.0;
+            let dot = b.dot;
+            let o = dot_origin(dot);
+            let rect = NSRect::new(NSPoint::new(o, o), NSSize::new(dot, dot));
             let path: Retained<NSBezierPath> = unsafe {
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(dot, radius, radius)
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, dot / 2.0, dot / 2.0)
             };
             let _: () = unsafe { msg_send![color, set] };
             unsafe { path.fill() };
@@ -117,15 +96,11 @@ declare_class!(
 );
 
 impl PillView {
-    fn new(color: Retained<NSColor>, frame: NSRect) -> Retained<Self> {
+    fn new(color: Retained<NSColor>, frame: NSRect, dot: CGFloat) -> Retained<Self> {
         let allocated: Allocated<Self> = unsafe { msg_send_id![Self::class(), alloc] };
-        let partial = allocated.set_ivars(RefCell::new(PillState { color, ring: None }));
+        let partial =
+            allocated.set_ivars(RefCell::new(PillState { color, ring: None, dot }));
         unsafe { msg_send_id![super(partial), initWithFrame: frame] }
-    }
-
-    fn rust_set_color(&self, color: Retained<NSColor>) {
-        self.ivars().borrow_mut().color = color;
-        let _: () = unsafe { msg_send![self, setNeedsDisplay: Bool::YES] };
     }
 }
 
@@ -175,7 +150,7 @@ impl RingView {
 }
 
 // ---- 构建浮窗 ----
-pub fn build() -> (Retained<NSWindow>, Retained<PillView>) {
+pub fn build(dot_size: u32) -> (Retained<NSWindow>, Retained<PillView>) {
     let frame = NSRect::new(NSPoint::new(220.0, 820.0), NSSize::new(WIN, WIN));
 
     let alloc: Allocated<NSWindow> = unsafe { msg_send_id![class!(NSWindow), alloc] };
@@ -201,7 +176,8 @@ pub fn build() -> (Retained<NSWindow>, Retained<PillView>) {
         let _: () = msg_send![&window, setReleasedWhenClosed: Bool::NO];
     }
 
-    let view = PillView::new(nscolor(Color::Purple), NSRect::new(NSPoint::new(0.0, 0.0), frame.size));
+    let dot = dot_size as CGFloat;
+    let view = PillView::new(nscolor(Color::Purple), NSRect::new(NSPoint::new(0.0, 0.0), frame.size), dot);
     let _: () = unsafe { msg_send![&view, setWantsLayer: Bool::YES] };
     let _: () = unsafe { msg_send![&window, setContentView: &*view] };
     let _: () = unsafe { msg_send![&window, orderFrontRegardless] };
@@ -211,6 +187,18 @@ pub fn build() -> (Retained<NSWindow>, Retained<PillView>) {
 /// 切换浮窗是否点击穿透。on=true → 忽略鼠标(穿透);on=false → 接收鼠标,可拖动。
 pub fn set_click_through(window: &NSWindow, on: bool) {
     let _: () = unsafe { msg_send![window, setIgnoresMouseEvents: Bool::new(on)] };
+}
+
+/// 改圆点大小:更新 dot、拆掉按旧尺寸建的波纹环(下次 set_light 重建)、重绘。
+pub fn set_size(view: &PillView, dot_size: u32) {
+    {
+        let mut st = view.ivars().borrow_mut();
+        st.dot = dot_size as CGFloat;
+        if let Some(ring) = st.ring.take() {
+            let _: () = unsafe { msg_send![&*ring, removeFromSuperview] };
+        }
+    }
+    let _: () = unsafe { msg_send![view, setNeedsDisplay: Bool::YES] };
 }
 
 // ---- 按灯效更新颜色 + 动画 ----
@@ -236,6 +224,13 @@ pub fn set_light(view: &PillView, anim: LightAnim) {
     }
 }
 
+impl PillView {
+    fn rust_set_color(&self, color: Retained<NSColor>) {
+        self.ivars().borrow_mut().color = color;
+        let _: () = unsafe { msg_send![self, setNeedsDisplay: Bool::YES] };
+    }
+}
+
 /// opacity 在 [from, 1.0] 间往复。from=0 → 明灭(Blink);from=0.4 → 呼吸(Pulse)。
 fn add_pulse(layer: &CALayer, from: f64, period_ms: u32) {
     let basic: Retained<CABasicAnimation> = unsafe {
@@ -258,7 +253,9 @@ fn add_pulse(layer: &CALayer, from: f64, period_ms: u32) {
 /// 波纹:一个自绘环子视图,transform.scale 从 1.0 扩到 2.6、opacity 从 0.85 淡到 0,
 /// 单向循环(末尾近乎透明,故回弹不可见,视觉上即连续扩散的环)。
 fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
-    let ring_frame = NSRect::new(NSPoint::new(DOT_ORIGIN, DOT_ORIGIN), NSSize::new(DOT, DOT));
+    let dot = view.ivars().borrow().dot;
+    let o = dot_origin(dot);
+    let ring_frame = NSRect::new(NSPoint::new(o, o), NSSize::new(dot, dot));
     let ring = RingView::new(nscolor(color), ring_frame);
     unsafe {
         let _: () = msg_send![&ring, setWantsLayer: Bool::YES];
