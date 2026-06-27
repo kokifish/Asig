@@ -23,7 +23,7 @@ pub struct Snapshot {
     pub sessions: Vec<AgentSession>,
     /// 全局灯态(多会话聚合)。
     pub global: AgentStatus,
-    /// 刚转入 Done 的 1 分钟内为 true —— UI 据此显示 Done Notification
+    /// 刚转入 Done 的 30 秒内为 true —— UI 据此显示 Done Notification
     /// (深绿、快速呼吸);过期或离开 Done 后回退到 `global` 的默认灯效。
     pub done_notif: bool,
 }
@@ -46,7 +46,7 @@ pub struct Monitor {
     latched: RefCell<HashMap<String, AgentStatus>>,
     /// 上一轮的全局态。用于检测「转入 Done」的边沿。
     prev_global: RefCell<AgentStatus>,
-    /// 最近一次「全局态转入 Done」的时刻。Done Notification 1 分钟窗口用。
+    /// 最近一次「全局态转入 Done」的时刻。Done Notification 30 秒窗口用。
     done_since: RefCell<Option<Instant>>,
 }
 
@@ -111,7 +111,7 @@ impl Monitor {
         let global = aggregate::global_status(&sessions);
 
         // 5) Done Notification 边沿检测:全局态从「非 Done」转入「Done」时
-        //    记下时刻;在随后 1 分钟内 done_notif=true。离开 Done 即清零,
+        //    记下时刻;在随后 30 秒内 done_notif=true。离开 Done 即清零,
         //    下次再进重新计时。
         let now = Instant::now();
         let entered_done =
@@ -126,7 +126,7 @@ impl Monitor {
             }
         }
         let done_notif = match *self.done_since.borrow() {
-            Some(t) => global == AgentStatus::Done && now.duration_since(t) < Duration::from_secs(60),
+            Some(t) => global == AgentStatus::Done && now.duration_since(t) < Duration::from_secs(30),
             None => false,
         };
         *self.prev_global.borrow_mut() = global;
@@ -184,7 +184,7 @@ mod tests {
             script: vec![
                 vec![AgentStatus::Working], // 起步:Working
                 vec![AgentStatus::Done],    // 转入 Done → notif 应亮
-                vec![AgentStatus::Done],    // 仍是 Done(60s 内)→ notif 仍亮
+                vec![AgentStatus::Done],    // 仍是 Done(30s 内)→ notif 仍亮
                 vec![AgentStatus::Working], // 离开 Done → notif 灭
                 vec![AgentStatus::Done],    // 再进 Done → notif 再亮
             ],
@@ -200,7 +200,7 @@ mod tests {
 
         let s = m.poll();
         assert_eq!(s.global, AgentStatus::Done);
-        assert!(s.done_notif, "60s 窗口内继续 Done,notif 保持");
+        assert!(s.done_notif, "30s 窗口内继续 Done,notif 保持");
 
         let s = m.poll();
         assert_eq!(s.global, AgentStatus::Working);

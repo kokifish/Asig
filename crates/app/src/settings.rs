@@ -5,7 +5,7 @@
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
 use objc2::{class, msg_send, msg_send_id, sel, DeclaredClass};
-use objc2_app_kit::{NSApplication, NSPopUpButton, NSSlider, NSTextField, NSView, NSWindow};
+use objc2_app_kit::{NSApplication, NSButton, NSPopUpButton, NSSlider, NSTextField, NSView, NSWindow};
 use objc2_foundation::{CGFloat, NSPoint, NSRect, NSSize, NSString};
 
 use agent_light_core::{AgentStatus, Anim, Color, Settings};
@@ -93,7 +93,20 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         let _: () = msg_send![&content, addSubview: &*slider];
     }
 
-    // —— 各状态样式 ——(点击穿透 / 可拖动 已移至 Drop-down 的「锁定」)
+    // —— 浮窗点击穿透(与 Drop-down「锁定」同步同一开关 toggleClickThrough:) ——
+    let cb_click: Retained<NSButton> = unsafe { msg_send_id![class!(NSButton), new] };
+    let click_on = *delegate.ivars().click_through.borrow();
+    unsafe {
+        let _: () = msg_send![&cb_click, setButtonType: 3u64]; // NSSwitchButton 圆角勾选
+        let _: () = msg_send![&cb_click, setTitle: &*NSString::from_str("浮窗点击穿透(取消则可用鼠标拖动)")];
+        let _: () = msg_send![&cb_click, setState: if click_on { 1i64 } else { 0 }];
+        let _: () = msg_send![&cb_click, setTarget: delegate];
+        let _: () = msg_send![&cb_click, setAction: sel!(toggleClickThrough:)];
+        let _: () = msg_send![&cb_click, setFrame: NSRect::new(NSPoint::new(20.0, 445.0), NSSize::new(400.0, 22.0))];
+        let _: () = msg_send![&content, addSubview: &*cb_click];
+    }
+
+    // —— 各状态样式 ——
     add_label(&content, NSRect::new(NSPoint::new(20.0, 424.0), NSSize::new(200.0, 20.0)), "各状态样式");
     add_label(&content, NSRect::new(NSPoint::new(150.0, 400.0), NSSize::new(100.0, 16.0)), "动画");
     add_label(&content, NSRect::new(NSPoint::new(290.0, 400.0), NSSize::new(100.0, 16.0)), "颜色");

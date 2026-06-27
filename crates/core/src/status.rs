@@ -44,7 +44,7 @@ impl AgentStatus {
 #[serde(rename_all = "snake_case")]
 pub enum Color {
     Green,     // Done
-    DarkGreen, // Done Notification(刚转入 Done 的 1 分钟内)
+    DarkGreen, // Done Notification(刚转入 Done 的 30 秒内)
     Yellow,    // Working
     Amber,     // NeedsDeci
     Red,       // Error

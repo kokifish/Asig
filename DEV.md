@@ -1,6 +1,6 @@
 # Asig 设计与开发
 
-> Asig 简洁的、最权威的开发维护手册，语义冲突时以本文档为准。
+> Asig 简洁的、最权威的开发维护手册，语义冲突时以本文档为准，包括README.md和源码。
 > 没有明确允许，Agent 不可修改本文档。
 
 Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸浮窗。
@@ -31,7 +31,7 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 
 - 需要轮询的，默认3s轮询一次
 
-### Color and State Priority
+### Signal Color and State Priority
 
 一个 `AgentStatus` 同时决定**灯的颜色 + 灯效(动画)**,UI 层只消费 `status.light()`。
 
@@ -43,11 +43,29 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 | 2 | `Working` | 🟡 黄 | 呼吸-慢速 | 正在跑 |
 | 1 | `Done` | 🟢 绿 | 波纹 | 完成 / 空闲 / 初始默认态 |
 
-- **Done Notification**: 在别的状态转入`Done`时，默认持续1分钟的 Done Notification，用深绿色表示，默认动效为快速呼吸
+- **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 Done Notification，用深绿色表示，默认动效为快速呼吸
 - **聚合规则**：同一个Agent多个会话同时存在时，全局灯取**优先级最高**的那一个（`AgentStatus::priority()`，数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
 - **Sticky 锁定态**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
-- **灯效种类**：`Steady`（常亮）/ `Pulse`（呼吸，透明度渐变）/ `Blink`（明灭）。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
+- **灯效种类**：`Steady`（常亮）/ `Pulse`（呼吸）/ `Blink`（明灭）/ `Ripple`（波纹），共 4 种（详见 [Light Animations](#light-animations)）。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
 - **颜色枚举**：颜色与状态一一对应，定义在内核、平台无关；app 层翻译成具体 RGB
+
+### Light Animations
+
+灯效 = 颜色 + 动画（`LightAnim`）。一个 `AgentStatus` → 一套默认灯效（见上表），用户可在 Settings Panel 覆盖（动效种类 / 颜色 / 周期）。
+
+**全部交 CoreAnimation 在 render server 上驱动 GPU 插值，app 进程 ~0% CPU。**
+
+| 动效 | 英文 | 视觉 | 动到的 layer 属性 | 周期语义 |
+|---|---|---|---|---|
+| 常亮 | Steady（solid） | 不变，纯色常亮 | 无 | 无周期，period_ms 置 0 |
+| 呼吸 | Pulse（breathing） | 透明度 ~0.4↔1 缓慢往复 | `opacity` | 完整循环（含来回） |
+| 明灭 | Blink（blink/flash） | 透明度 0↔1 往复 | `opacity` | 完整循环（含来回） |
+| 波纹 | Ripple（sonar） | 一个环从中心扩散并淡出 | `transform.scale` + `opacity`（独立 RingView） | 单程一次扩散 |
+
+- 默认周期：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（慢呼吸）/ `Done`=1600（波纹）。「快闪/慢闪」是**同一 Blink 的不同周期**，不是两种动效。
+- **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（DarkGreen，450ms）覆盖全局态。
+- 可配置：Settings 里每状态独立改 动效 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
+- 载体：Signal Light 浮窗——圆点本体做 Steady/Pulse/Blink，波纹用独立 `RingView` 子视图叠加扩散；Signal Icon（菜单栏）无动效，只显示静态色块/emoji，不可设动效。
 
 ### Signal Light
 
@@ -62,10 +80,11 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 
 - Def: 单击菜单栏图标后的弹窗
 - Position: 菜单栏单击后在图标右下方弹出菜单栏弹窗，菜单栏弹窗左侧和菜单栏Asig图标左侧对齐，但如果右侧空间不足，则右侧贴屏幕边缘。不可拖动不可自定义大小
-- Upper Button: 从左至右分别为`设置`-用于打开 Settings Panel 的最左侧按钮，`锁定`-用于快速设置是否可以拖动圆角单选按钮，`退出`-用于退出Asig的最右侧按钮
+- Upper Button: 从左至右分别为`设置`-用于打开 Settings Panel 的最左侧按钮，`锁定`-用于快速设置是否可以拖动圆角单选按钮（与 Settings Panel「浮窗点击穿透」同步同一开关），`退出`-用于退出Asig的最右侧按钮
 
 ### Settings Panel
 
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
 - Position: 默认在屏幕中央，可以拖动
+- Content: 浮窗大小（滑块）、各状态样式（每状态可独立设 动画/颜色/周期）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）
 
