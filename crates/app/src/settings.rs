@@ -1,11 +1,8 @@
-//! 设置窗口(左侧栏导航)。
-//! 左栏:General + 6 状态 tab(按 DEV.md「Left Side Tabs」顺序,左对齐;状态 tab = 当前色
-//! 圆点 + 英文简称)+ 底部图标行(关于 functional;官网/调试/捐赠/退出 占位禁用,单色 SF Symbol)。
-//! 右区:8 个 pane 切换。状态 pane = State Settings Card(Reset + Color 色块单选 + Animation
-//! 单选 + Speed Hz)。
-//!
-//! 控件 tag 协议(仅控件,pane 按 Vec 索引切):
-//! - base = tab_id * 1000;sub: COLOR_OFF+i(颜色)、ANIM_OFF+i(动画)、SPEED_OFF、SPEED_LABEL_OFF、RESET_OFF。
+//! 设置窗口(左侧栏导航)。界面文案按 `Settings.lang`(默认中文)本地化,可切全英文。
+//! 左栏:General + 6 状态 tab(左对齐;状态 tab = 当前色圆点 + 本地化简称)+ 底部单色 SF Symbol
+//! 图标行(关于 functional;其余占位禁用)。右区:8 pane。
+//! 状态 pane = State Settings Card(Reset + Color 色块单选 + Animation 单选 + Speed Hz),
+//! 颜色/动画/速度各占一行。
 
 use std::collections::HashMap;
 
@@ -19,7 +16,7 @@ use objc2_app_kit::{
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use agent_light_core::{Anim, Color, StateStyle, StyleKey};
+use agent_light_core::{Anim, Color, Lang, StateStyle, StyleKey};
 
 use crate::app_delegate::AppDelegate;
 use crate::overlay::swatch_image;
@@ -48,26 +45,29 @@ pub const POLL_PRESETS_MS: [u32; 5] = [1000, 2000, 3000, 5000, 10000];
 pub const TAB_GENERAL: i64 = 0;
 pub const TAB_ABOUT: i64 = 7;
 
-/// 状态 tab(DEV.md「Left Side Tabs」顺序);label 为英文简称。
-const STATE_TABS: [(i64, StyleKey, &str); 6] = [
-    (1, StyleKey::DoneNotif, "DoneNotif"),
-    (2, StyleKey::Done, "Done"),
-    (3, StyleKey::Working, "Working"),
-    (4, StyleKey::NeedsDeci, "NeedsDeci"),
-    (5, StyleKey::Error, "Error"),
-    (6, StyleKey::Offline, "Offline"),
+/// 状态 tab 顺序(DEV.md「Left Side Tabs」)。label 由 `Strings.state` 按本地化填。
+const STATE_KEYS: [(i64, StyleKey); 6] = [
+    (1, StyleKey::DoneNotif),
+    (2, StyleKey::Done),
+    (3, StyleKey::Working),
+    (4, StyleKey::NeedsDeci),
+    (5, StyleKey::Error),
+    (6, StyleKey::Offline),
 ];
 
-// tag sub 偏移(base = tab_id*1000)。
-pub const COLOR_OFF: i64 = 10; // +i(0..6)
-pub const ANIM_OFF: i64 = 20; // +i(0..3)
+// 状态控件 tag sub 偏移(base = tab_id*1000)。
+pub const COLOR_OFF: i64 = 10;
+pub const ANIM_OFF: i64 = 20;
 pub const SPEED_OFF: i64 = 30;
 pub const SPEED_LABEL_OFF: i64 = 31;
 pub const RESET_OFF: i64 = 40;
+// General pane 语言单选 tag。
+pub const LANG_EN_TAG: i64 = 501;
+pub const LANG_ZH_TAG: i64 = 502;
 
 pub const SPEED_MIN: f64 = 0.2;
 pub const SPEED_MAX: f64 = 5.0;
-const SWATCH_D: CGFloat = 26.0;
+const SWATCH_D: CGFloat = 24.0;
 
 /// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
 pub struct StateControls {
@@ -77,18 +77,100 @@ pub struct StateControls {
     pub speed_label: Retained<NSTextField>,
 }
 
+/// 当前语言的全部界面文案。
+struct Strings {
+    general: &'static str,
+    light_size: &'static str,
+    click_through: &'static str,
+    poll_interval: &'static str,
+    launch_login: &'static str,
+    language: &'static str,
+    reset: &'static str,
+    color: &'static str,
+    animation: &'static str,
+    speed: &'static str,
+    version: &'static str,
+    state: [&'static str; 6], // 与 STATE_KEYS 同序
+    anim: [&'static str; 3],
+    poll_opts: [&'static str; 5],
+    reset_confirm_title: &'static str,
+    reset_confirm_msg: &'static str,
+    reset_yes: &'static str,
+    reset_no: &'static str,
+}
+
+/// General「Reset 全部」确认对话框的文案(按当前语言):(title, msg, yes, no)。
+pub fn reset_confirm_texts(l: Lang) -> (&'static str, &'static str, &'static str, &'static str) {
+    let s = strings_for(l);
+    (
+        s.reset_confirm_title,
+        s.reset_confirm_msg,
+        s.reset_yes,
+        s.reset_no,
+    )
+}
+
+fn strings_for(l: Lang) -> Strings {
+    match l {
+        Lang::Zh => Strings {
+            general: "常规",
+            light_size: "浮窗大小",
+            click_through: "浮窗点击穿透(取消则可拖动)",
+            poll_interval: "轮询间隔",
+            launch_login: "开机启动(待实现)",
+            language: "语言",
+            reset: "重置",
+            color: "颜色",
+            animation: "效果",
+            speed: "速度",
+            version: "版本 ",
+            state: ["完成通知", "完成", "运行", "待决策", "报错", "离线"],
+            anim: ["常亮", "呼吸", "波纹"],
+            poll_opts: ["1 秒", "2 秒", "3 秒", "5 秒", "10 秒"],
+            reset_confirm_title: "重置全部设置",
+            reset_confirm_msg: "将所有自定义(语言 + 各状态灯效)恢复为默认值。确认?",
+            reset_yes: "重置",
+            reset_no: "取消",
+        },
+        Lang::En => Strings {
+            general: "General",
+            light_size: "Light size",
+            click_through: "Click-through (off = draggable)",
+            poll_interval: "Poll interval",
+            launch_login: "Launch at login (TBD)",
+            language: "Language",
+            reset: "Reset",
+            color: "Color",
+            animation: "Animation",
+            speed: "Speed",
+            version: "Version ",
+            state: [
+                "DoneNotif",
+                "Done",
+                "Working",
+                "NeedsDeci",
+                "Error",
+                "Offline",
+            ],
+            anim: ["Steady", "Pulse", "Ripple"],
+            poll_opts: ["1 s", "2 s", "3 s", "5 s", "10 s"],
+            reset_confirm_title: "Reset all settings",
+            reset_confirm_msg: "Restore all custom settings (language + per-state styles) to defaults?",
+            reset_yes: "Reset",
+            reset_no: "Cancel",
+        },
+    }
+}
+
 pub fn stylekey_of_tab(tab: i64) -> Option<StyleKey> {
-    STATE_TABS
-        .iter()
-        .find(|(t, _, _)| *t == tab)
-        .map(|(_, k, _)| *k)
+    STATE_KEYS.iter().find(|(t, _)| *t == tab).map(|(_, k)| *k)
 }
 
 fn tab_of_key(key: StyleKey) -> i64 {
-    STATE_TABS
+    STATE_KEYS
         .iter()
-        .find(|(_, k, _)| *k == key)
-        .map(|(t, _, _)| *t)
+        .find(|(_, k)| *k == key)
+        .map(|(t, _)| *t)
         .unwrap_or(TAB_GENERAL)
 }
 
@@ -116,6 +198,9 @@ fn sf_symbol(name: &str) -> Retained<NSImage> {
 }
 
 pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
+    let lang = delegate.ivars().settings.borrow().lang;
+    let st = strings_for(lang);
+
     let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(W, H));
     let alloc: Allocated<NSWindow> = unsafe { msg_send![class!(NSWindow), alloc] };
     let window: Retained<NSWindow> = unsafe {
@@ -137,7 +222,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         NSPoint::new(0.0, 0.0),
         NSSize::new(SIDEBAR_W, H),
     ));
-    build_sidebar(&sidebar, delegate);
+    build_sidebar(&sidebar, delegate, &st);
     unsafe {
         let _: () = msg_send![&content, addSubview: &*sidebar];
     }
@@ -149,13 +234,13 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     // 8 pane:General + 6 状态(各带 StateControls)+ About。按 pane id(=索引)排。
     let mut panes: Vec<Retained<NSView>> = Vec::with_capacity(8);
     let mut controls_map: HashMap<StyleKey, StateControls> = HashMap::new();
-    panes.push(build_general_pane(delegate));
-    for (_, key, _) in STATE_TABS {
-        let (pane, c) = build_state_pane(delegate, key);
-        controls_map.insert(key, c);
+    panes.push(build_general_pane(delegate, &st));
+    for (i, (_, key)) in STATE_KEYS.iter().enumerate() {
+        let (pane, c) = build_state_pane(delegate, *key, st.state[i], &st);
+        controls_map.insert(*key, c);
         panes.push(pane);
     }
-    panes.push(build_about_pane());
+    panes.push(build_about_pane(&st));
     for (i, pane) in panes.iter().enumerate() {
         unsafe {
             let _: () = msg_send![pane, setHidden: Bool::new(i != 0)];
@@ -176,27 +261,25 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     window
 }
 
-/// 侧栏:顶部 tab(General + 6 状态,左对齐;状态 tab = 当前色圆点 + 英文简称)+ 底部单色图标行。
-fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate) {
+/// 侧栏:顶部 tab(General + 6 状态,左对齐;状态 tab = 当前色圆点 + 本地化简称)+ 底部单色图标行。
+fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &Strings) {
     let tab_w = SIDEBAR_W - 16.0;
-    // General
     add_tab_button(
         sidebar,
         NSRect::new(NSPoint::new(8.0, H - 44.0), NSSize::new(tab_w, 28.0)),
-        "General",
+        st.general,
         None,
         TAB_GENERAL,
         delegate,
     );
-    // 状态 tab(自上而下)
-    for (i, (tag, key, name)) in STATE_TABS.iter().enumerate() {
+    for (i, (tag, key)) in STATE_KEYS.iter().enumerate() {
         let y = H - 44.0 - (i as CGFloat + 1.0) * 32.0;
         let color = delegate.ivars().settings.borrow().style_for(*key).color;
         let img = swatch_image(color, 14.0, false);
         add_tab_button(
             sidebar,
             NSRect::new(NSPoint::new(8.0, y), NSSize::new(tab_w, 28.0)),
-            name,
+            st.state[i],
             Some(&img),
             *tag,
             delegate,
@@ -233,9 +316,15 @@ pub fn update_tab_prefixes(delegate: &AppDelegate, selected: i64) {
     let Some(sidebar) = delegate.ivars().settings_sidebar.borrow().as_ref().cloned() else {
         return;
     };
-    let mut tabs: Vec<(i64, &str)> = vec![(TAB_GENERAL, "General")];
-    tabs.extend(STATE_TABS.iter().map(|(t, _, n)| (*t, *n)));
-    for (tag, label) in tabs {
+    let st = strings_for(delegate.ivars().settings.borrow().lang);
+    let mut labels: Vec<(i64, &str)> = vec![(TAB_GENERAL, st.general)];
+    labels.extend(
+        STATE_KEYS
+            .iter()
+            .zip(st.state.iter())
+            .map(|((t, _), n)| (*t, *n)),
+    );
+    for (tag, label) in labels {
         let Some(b) = view_with_tag(&sidebar, tag) else {
             continue;
         };
@@ -250,14 +339,14 @@ pub fn update_tab_prefixes(delegate: &AppDelegate, selected: i64) {
     }
 }
 
-/// content view 里按 tag 找子视图(仅用于侧栏 tab 按钮;控件用 StateControls)。
+/// content view 里按 tag 找子视图(仅侧栏 tab 按钮;状态控件用 StateControls)。
 pub fn view_with_tag(view: &Retained<NSView>, tag: i64) -> Option<Retained<NSView>> {
     unsafe { msg_send![view, viewWithTag: tag] }
 }
 
 // ---- 各 pane ----
 
-fn build_general_pane(delegate: &AppDelegate) -> Retained<NSView> {
+fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> {
     let pane = new_view(NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
@@ -267,17 +356,18 @@ fn build_general_pane(delegate: &AppDelegate) -> Retained<NSView> {
 
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, y), NSSize::new(160.0, 20.0)),
-        "General",
+        NSRect::new(NSPoint::new(pad, y), NSSize::new(200.0, 20.0)),
+        st.general,
         false,
         true,
     );
     y -= 38.0;
 
+    // Light size
     add_text(
         &pane,
         NSRect::new(NSPoint::new(pad, y), NSSize::new(160.0, 20.0)),
-        "Light size",
+        st.light_size,
         false,
         false,
     );
@@ -295,8 +385,9 @@ fn build_general_pane(delegate: &AppDelegate) -> Retained<NSView> {
         sel!(changeSize:),
         delegate,
     );
-    y -= 44.0;
+    y -= 36.0;
 
+    // Click-through
     let click_on = *delegate.ivars().click_through.borrow();
     add_checkbox(
         &pane,
@@ -304,17 +395,18 @@ fn build_general_pane(delegate: &AppDelegate) -> Retained<NSView> {
             NSPoint::new(pad, y),
             NSSize::new(CONTENT_W - pad * 2.0, 22.0),
         ),
-        "Click-through(取消则可用鼠标拖动)",
+        st.click_through,
         click_on,
         sel!(toggleClickThrough:),
         delegate,
     );
-    y -= 36.0;
+    y -= 32.0;
 
+    // Poll interval(标签 + 下拉,一行)
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, y), NSSize::new(120.0, 20.0)),
-        "Poll interval",
+        NSRect::new(NSPoint::new(pad, y + 2.0), NSSize::new(120.0, 20.0)),
+        st.poll_interval,
         false,
         false,
     );
@@ -322,21 +414,22 @@ fn build_general_pane(delegate: &AppDelegate) -> Retained<NSView> {
     add_popup(
         &pane,
         NSRect::new(NSPoint::new(pad + 130.0, y - 2.0), NSSize::new(120.0, 26.0)),
-        &["1 秒", "2 秒", "3 秒", "5 秒", "10 秒"],
+        &st.poll_opts,
         poll_preset_index(poll_ms),
         sel!(changePollInterval:),
         delegate,
         0,
     );
-    y -= 40.0;
+    y -= 34.0;
 
+    // Launch at login(占位禁用)
     let launch = add_checkbox(
         &pane,
         NSRect::new(
             NSPoint::new(pad, y),
             NSSize::new(CONTENT_W - pad * 2.0, 22.0),
         ),
-        "Launch at login(待实现)",
+        st.launch_login,
         false,
         sel!(noop:),
         delegate,
@@ -344,22 +437,73 @@ fn build_general_pane(delegate: &AppDelegate) -> Retained<NSView> {
     unsafe {
         let _: () = msg_send![&launch, setEnabled: Bool::NO];
     }
+    y -= 34.0;
+
+    // Language(标签 + English/中文 单选,一行)
+    add_text(
+        &pane,
+        NSRect::new(NSPoint::new(pad, y + 2.0), NSSize::new(80.0, 20.0)),
+        st.language,
+        false,
+        false,
+    );
+    let lang = delegate.ivars().settings.borrow().lang;
+    add_radio_button(
+        &pane,
+        NSRect::new(NSPoint::new(pad + 90.0, y), NSSize::new(90.0, 22.0)),
+        "English",
+        LANG_EN_TAG,
+        delegate,
+        sel!(changeLanguage:),
+    );
+    add_radio_button(
+        &pane,
+        NSRect::new(NSPoint::new(pad + 180.0, y), NSSize::new(90.0, 22.0)),
+        "中文",
+        LANG_ZH_TAG,
+        delegate,
+        sel!(changeLanguage:),
+    );
+    // 初始选中
+    let want_tag = if lang == Lang::En {
+        LANG_EN_TAG
+    } else {
+        LANG_ZH_TAG
+    };
+    for t in [LANG_EN_TAG, LANG_ZH_TAG] {
+        if let Some(b) = view_with_tag(&pane, t) {
+            unsafe {
+                let _: () = msg_send![&b, setState: if t == want_tag { 1i64 } else { 0 }];
+            }
+        }
+    }
+    y -= 38.0;
+
+    // Reset(全部,确认对话框)
+    let _ = add_plain_button(
+        &pane,
+        NSRect::new(NSPoint::new(pad, y), NSSize::new(120.0, 28.0)),
+        st.reset,
+        0,
+        sel!(resetAll:),
+        delegate,
+    );
 
     pane
 }
 
-fn build_state_pane(delegate: &AppDelegate, key: StyleKey) -> (Retained<NSView>, StateControls) {
+fn build_state_pane(
+    delegate: &AppDelegate,
+    key: StyleKey,
+    name: &str,
+    st: &Strings,
+) -> (Retained<NSView>, StateControls) {
     let pane = new_view(NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
     let pad = 24.0;
     let base = tab_of_key(key) * 1000;
-    let name = STATE_TABS
-        .iter()
-        .find(|(_, k, _)| *k == key)
-        .map(|(_, _, n)| *n)
-        .unwrap_or("?");
 
     // 标题 + 右上角 Reset
     add_text(
@@ -369,73 +513,78 @@ fn build_state_pane(delegate: &AppDelegate, key: StyleKey) -> (Retained<NSView>,
         false,
         true,
     );
-    let reset = add_plain_button(
+    let _ = add_plain_button(
         &pane,
         NSRect::new(
             NSPoint::new(CONTENT_W - pad - 70.0, H - 48.0),
             NSSize::new(70.0, 24.0),
         ),
-        "Reset",
+        st.reset,
         base + RESET_OFF,
         sel!(resetStateStyle:),
         delegate,
     );
-    let _ = reset;
 
-    // Color:横向 6 色块单选(选中带环)
+    // Color:标签 + 横向色块单选,一行
+    let row_c = H - 104.0;
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, H - 96.0), NSSize::new(120.0, 20.0)),
-        "Color",
+        NSRect::new(NSPoint::new(pad, row_c + 4.0), NSSize::new(60.0, 20.0)),
+        st.color,
         false,
         false,
     );
     let mut color_btns: Vec<Retained<NSButton>> = Vec::with_capacity(6);
     for (i, &color) in COLOR_ORDER.iter().enumerate() {
-        let x = pad + i as CGFloat * 40.0;
+        let x = pad + 70.0 + i as CGFloat * 34.0;
         color_btns.push(add_swatch_button(
             &pane,
-            NSRect::new(NSPoint::new(x, H - 128.0), NSSize::new(SWATCH_D, SWATCH_D)),
+            NSRect::new(
+                NSPoint::new(x, row_c - 2.0),
+                NSSize::new(SWATCH_D, SWATCH_D),
+            ),
             color,
             base + COLOR_OFF + i as i64,
             delegate,
         ));
     }
 
-    // Animation:3 单选(radio)
+    // Animation:标签 + 3 单选,一行
+    let row_a = H - 148.0;
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, H - 168.0), NSSize::new(120.0, 20.0)),
-        "Animation",
+        NSRect::new(NSPoint::new(pad, row_a + 4.0), NSSize::new(60.0, 20.0)),
+        st.animation,
         false,
         false,
     );
-    let anim_names = ["Steady", "Pulse", "Ripple"];
     let mut anim_btns: Vec<Retained<NSButton>> = Vec::with_capacity(3);
-    for (i, nm) in anim_names.iter().enumerate() {
+    for (i, &nm) in st.anim.iter().enumerate() {
         anim_btns.push(add_radio_button(
             &pane,
             NSRect::new(
-                NSPoint::new(pad + i as CGFloat * 100.0, H - 200.0),
+                NSPoint::new(pad + 70.0 + i as CGFloat * 100.0, row_a),
                 NSSize::new(90.0, 22.0),
             ),
             nm,
             base + ANIM_OFF + i as i64,
             delegate,
+            sel!(changeAnim:),
         ));
     }
 
-    // Speed:Hz 滑块(0.2–5)
+    // Speed:标签 + 滑块 + Hz,一行
+    let row_s = H - 192.0;
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, H - 244.0), NSSize::new(120.0, 20.0)),
-        "Speed",
+        NSRect::new(NSPoint::new(pad, row_s + 4.0), NSSize::new(60.0, 20.0)),
+        st.speed,
         false,
         false,
     );
     let speed = add_slider(
         &pane,
-        NSRect::new(NSPoint::new(pad, H - 276.0), NSSize::new(240.0, 22.0)),
+        NSRect::new(NSPoint::new(pad + 70.0, row_s), NSSize::new(240.0, 22.0)),
         SPEED_MIN,
         SPEED_MAX,
         1.0,
@@ -446,7 +595,7 @@ fn build_state_pane(delegate: &AppDelegate, key: StyleKey) -> (Retained<NSView>,
     let speed_label = add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(pad + 250.0, H - 276.0),
+            NSPoint::new(pad + 70.0 + 250.0, row_s + 4.0),
             NSSize::new(70.0, 20.0),
         ),
         "—",
@@ -461,13 +610,12 @@ fn build_state_pane(delegate: &AppDelegate, key: StyleKey) -> (Retained<NSView>,
         speed,
         speed_label,
     };
-    // 按 settings 初始刷新一遍(选中态 / radio / 速度)
     let style = delegate.ivars().settings.borrow().style_for(key);
     refresh_state_controls(&controls, style);
     (pane, controls)
 }
 
-/// 按某状态的当前样式,刷新其 pane 的色块(选中带环)/ radio 选中 / 速度滑块+标签。
+/// 按某状态当前样式,刷新其 pane 的色块(选中带环)/ radio 选中 / 速度滑块+标签。
 pub fn refresh_state_controls(c: &StateControls, style: StateStyle) {
     let steady = style.anim == Anim::Steady;
     for (i, btn) in c.color.iter().enumerate() {
@@ -499,7 +647,7 @@ pub fn refresh_state_controls(c: &StateControls, style: StateStyle) {
     }
 }
 
-fn build_about_pane() -> Retained<NSView> {
+fn build_about_pane(st: &Strings) -> Retained<NSView> {
     let pane = new_view(NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
@@ -514,7 +662,7 @@ fn build_about_pane() -> Retained<NSView> {
     add_text(
         &pane,
         NSRect::new(NSPoint::new(0.0, H - 190.0), NSSize::new(CONTENT_W, 20.0)),
-        &format!("Version {}", env!("CARGO_PKG_VERSION")),
+        &format!("{}{}", st.version, env!("CARGO_PKG_VERSION")),
         true,
         false,
     );
@@ -544,7 +692,7 @@ fn set_tag<T: objc2::Message>(view: &Retained<T>, tag: i64) {
     }
 }
 
-/// 无边框按钮(Reset 等):标题 + action。
+/// 无边框按钮(Reset):标题 + action。
 fn add_plain_button(
     pane: &Retained<NSView>,
     frame: NSRect,
@@ -555,7 +703,7 @@ fn add_plain_button(
 ) -> Retained<NSButton> {
     let btn: Retained<NSButton> = unsafe { msg_send![class!(NSButton), new] };
     unsafe {
-        let _: () = msg_send![&btn, setBordered: Bool::NO];
+        let _: () = msg_send![&btn, setBezelStyle: 1u64]; // rounded
         let _: () = msg_send![&btn, setTitle: &*NSString::from_str(title)];
         let _: () = msg_send![&btn, setTag: tag];
         let _: () = msg_send![&btn, setTarget: delegate];
@@ -582,7 +730,7 @@ fn add_tab_button(
         let _: () = msg_send![&btn, setTitle: &*NSString::from_str(title)];
         if let Some(img) = image {
             let _: () = msg_send![&btn, setImage: &**img];
-            let _: () = msg_send![&btn, setImagePosition: 2i64]; // NSCellImagePositionImageLeft
+            let _: () = msg_send![&btn, setImagePosition: 2i64]; // image left
         }
         let _: () = msg_send![&btn, setTag: tag];
         let _: () = msg_send![&btn, setTarget: delegate];
@@ -593,7 +741,7 @@ fn add_tab_button(
     btn
 }
 
-/// 底栏图标按钮:单色 SF Symbol 图标,点击 switchSettingsTab:。
+/// 底栏图标按钮:单色 SF Symbol,无标题(image only)。
 fn add_icon_button(
     pane: &Retained<NSView>,
     frame: NSRect,
@@ -605,8 +753,9 @@ fn add_icon_button(
     let img = sf_symbol(symbol);
     unsafe {
         let _: () = msg_send![&btn, setBordered: Bool::NO];
+        let _: () = msg_send![&btn, setTitle: &*NSString::from_str("")]; // 消掉默认 "Button"
         let _: () = msg_send![&btn, setImage: &*img];
-        let _: () = msg_send![&btn, setImagePosition: 5i64]; // NSCellImagePositionImageOnly
+        let _: () = msg_send![&btn, setImagePosition: 5i64]; // image only
         let _: () = msg_send![&btn, setTag: tag];
         let _: () = msg_send![&btn, setTarget: delegate];
         let _: () = msg_send![&btn, setAction: sel!(switchSettingsTab:)];
@@ -616,7 +765,7 @@ fn add_icon_button(
     btn
 }
 
-/// 色块单选按钮:无边框,图片=该色 swatch。
+/// 色块单选按钮:无边框、无标题,图片=该色 swatch(选中带环)。
 fn add_swatch_button(
     pane: &Retained<NSView>,
     frame: NSRect,
@@ -628,7 +777,7 @@ fn add_swatch_button(
     let img = swatch_image(color, SWATCH_D, false);
     unsafe {
         let _: () = msg_send![&btn, setBordered: Bool::NO];
-        let _: () = msg_send![&btn, setButtonType: 4u64]; // NSButtonTypeRadio(让 AppKit 互斥)
+        let _: () = msg_send![&btn, setTitle: &*NSString::from_str("")]; // 消掉默认 "Button"
         let _: () = msg_send![&btn, setImage: &*img];
         let _: () = msg_send![&btn, setImagePosition: 5i64]; // image only
         let _: () = msg_send![&btn, setTag: tag];
@@ -640,13 +789,14 @@ fn add_swatch_button(
     btn
 }
 
-/// 动画单选:radio 按钮(标题=动画英文名)。
+/// 单选按钮(radio):标题 + action。
 fn add_radio_button(
     pane: &Retained<NSView>,
     frame: NSRect,
     title: &str,
     tag: i64,
     delegate: &AppDelegate,
+    action: Sel,
 ) -> Retained<NSButton> {
     let btn: Retained<NSButton> = unsafe { msg_send![class!(NSButton), new] };
     unsafe {
@@ -654,7 +804,7 @@ fn add_radio_button(
         let _: () = msg_send![&btn, setTitle: &*NSString::from_str(title)];
         let _: () = msg_send![&btn, setTag: tag];
         let _: () = msg_send![&btn, setTarget: delegate];
-        let _: () = msg_send![&btn, setAction: sel!(changeAnim:)];
+        let _: () = msg_send![&btn, setAction: action];
         let _: () = msg_send![&btn, setFrame: frame];
         let _: () = msg_send![&**pane, addSubview: &*btn];
     }
@@ -676,7 +826,7 @@ fn add_text(
             let _: () = msg_send![&label, setFont: &*font];
         }
         if center {
-            let _: () = msg_send![&label, setAlignment: 2i64]; // center
+            let _: () = msg_send![&label, setAlignment: 2i64];
         }
         let _: () = msg_send![&label, setFrame: frame];
         let _: () = msg_send![&**pane, addSubview: &*label];

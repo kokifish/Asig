@@ -2,13 +2,15 @@
 
 use std::cell::RefCell;
 
-use agent_light_core::{Anim, LightPosition, Monitor, Settings, Snapshot, StyleKey};
+use agent_light_core::{Anim, Lang, LightPosition, Monitor, Settings, Snapshot, StyleKey};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
 use objc2::{
     ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send,
 };
-use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSStatusItem, NSView, NSWindow};
+use objc2_app_kit::{
+    NSAlert, NSApplication, NSApplicationDelegate, NSStatusItem, NSView, NSWindow,
+};
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString, NSTimer};
 use std::collections::HashMap;
 
@@ -222,6 +224,53 @@ define_class!(
             self.settings_changed();
         }
 
+        /// General「Language」单选 action。tag = LANG_EN_TAG / LANG_ZH_TAG。切换后重建设置窗。
+        #[unsafe(method(changeLanguage:))]
+        fn change_language(&self, sender: *mut NSObject) {
+            let tag: i64 = unsafe { msg_send![sender, tag] };
+            let lang = if tag == crate::settings::LANG_EN_TAG {
+                Lang::En
+            } else {
+                Lang::Zh
+            };
+            self.ivars().settings.borrow_mut().lang = lang;
+            self.ivars().settings.borrow().save();
+            self.rebuild_settings();
+        }
+
+        /// General「Reset 全部」action:确认对话框 → 重置所有自定义(语言 + 各状态)→ 重应用 + 重建。
+        #[unsafe(method(resetAll:))]
+        fn reset_all(&self, _sender: *mut NSObject) {
+            let lang = self.ivars().settings.borrow().lang;
+            let (title, msg, yes, no) = crate::settings::reset_confirm_texts(lang);
+            let alert: Retained<NSAlert> = unsafe { msg_send![class!(NSAlert), new] };
+            unsafe {
+                let _: () = msg_send![&alert, setMessageText: &*NSString::from_str(title)];
+                let _: () = msg_send![&alert, setInformativeText: &*NSString::from_str(msg)];
+                let _: () = msg_send![&alert, addButtonWithTitle: &*NSString::from_str(yes)];
+                let _: () = msg_send![&alert, addButtonWithTitle: &*NSString::from_str(no)];
+            }
+            let resp: i64 = unsafe { msg_send![&alert, runModal] };
+            if resp != 1000 {
+                return; // NSAlertFirstButtonReturn = 1000;非「重置」则取消
+            }
+            // 重置全部自定义
+            *self.ivars().settings.borrow_mut() = Settings::default();
+            self.ivars().settings.borrow().save();
+            *self.ivars().click_through.borrow_mut() = true;
+            // 重应用:浮窗大小 + 点击穿透 + tick 重排
+            let dot = self.ivars().settings.borrow().dot_size;
+            if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
+                crate::overlay::set_size(view, dot);
+            }
+            self.apply_click_through();
+            let ms = self.ivars().settings.borrow().poll_interval_ms;
+            crate::tray::reschedule(self, ms as f64 / 1000.0);
+            let snap = self.ivars().monitor.poll();
+            self.render(&snap);
+            self.rebuild_settings();
+        }
+
         /// 侧栏 tab / 关于图标点击:切换右侧 pane。tag = pane id(0=常规 … 7=关于)。
         #[unsafe(method(switchSettingsTab:))]
         fn switch_settings_tab(&self, sender: *mut NSObject) {
@@ -279,6 +328,23 @@ impl AppDelegate {
         let style = self.ivars().settings.borrow().style_for(key);
         if let Some(c) = self.ivars().state_controls.borrow().get(&key) {
             crate::settings::refresh_state_controls(c, style);
+        }
+    }
+
+    /// 关闭旧设置窗、丢弃其 pane/控件引用,按当前(可能已变的语言/设置)重新构建并显示。
+    fn rebuild_settings(&self) {
+        if let Some(w) = self.ivars().settings_window.borrow_mut().take() {
+            let _: () = unsafe { msg_send![&w, close] };
+        }
+        *self.ivars().settings_panes.borrow_mut() = None;
+        *self.ivars().settings_sidebar.borrow_mut() = None;
+        *self.ivars().settings_content.borrow_mut() = None;
+        *self.ivars().settings_selected.borrow_mut() = 0;
+        self.ivars().state_controls.borrow_mut().clear();
+        let w = crate::settings::build(self);
+        *self.ivars().settings_window.borrow_mut() = Some(w);
+        if let Some(w) = self.ivars().settings_window.borrow().as_ref() {
+            crate::settings::show(w);
         }
     }
 }

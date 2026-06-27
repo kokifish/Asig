@@ -69,6 +69,15 @@ impl StateStyle {
     }
 }
 
+/// 界面语言。默认中文。serde 持久化,切换后整个 Settings Panel 重绘。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Lang {
+    #[default]
+    Zh,
+    En,
+}
+
 /// 可配置灯效的键:5 个真实 `AgentStatus` + Done-Notification(派生态,非真实状态)。
 /// 用它统一做 `Settings` 的键 + Settings Panel 的行,避免给 Done-Notification 特判。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -155,6 +164,9 @@ pub struct Settings {
     /// 轮询间隔(ms)。DEV.md 默认 3s。app 层据此重排 tick 定时器。
     #[serde(default = "default_poll_interval_ms")]
     pub poll_interval_ms: u32,
+    /// 界面语言。默认中文。
+    #[serde(default)]
+    pub lang: Lang,
 }
 
 fn default_poll_interval_ms() -> u32 {
@@ -172,6 +184,7 @@ impl Default for Settings {
             styles,
             light_pos: None,
             poll_interval_ms: default_poll_interval_ms(),
+            lang: Lang::default(),
         }
     }
 }
