@@ -122,10 +122,12 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 #### General Settings Card
 
+- Language: 单行单选列表: English, 中文。默认中文
+- Reset: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值
 
 #### State Settings Card
 
 - Reset: 右上角"reset"按钮可以将这个State的所有配置恢复为默认值
-- Color: "颜色"为横向的单选按钮，按钮中间为颜色展示，选中时外圈有选中的效果
-- Animations: 单选，选中效果同"Color"
-- Speed: 波纹/呼吸 支持自定义速度，范围为0.2Hz - 5Hz
+- Color: "颜色"为横向的单选按钮，按钮中间为颜色展示，选中时外圈有选中的效果。"颜色: " + 颜色单选按钮 总共占据一行
+- Animations: "效果"单选，选中效果同"Color"。总共占据一行
+- Speed: "速度"调整。波纹/呼吸 支持自定义速度，范围为0.2Hz - 5Hz。总共占据一行
