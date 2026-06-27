@@ -115,5 +115,15 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
   - 各状态 pane(每状态一个): 颜色 / 动画 / 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。
   - 关于 pane: 版本号 + GitHub 链接（纯展示）。
   - 各状态可独立改 动画 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
-- Left Side Tabs(in order): 常规(General), DoneNotif, Done, Working, NeedsDeci, Error, Offline.
+- Left Side Tabs(in order): 常规(General), DoneNotif, Done, Working, NeedsDeci, Error, Offline. Left aligned
 - Left Side Buttons(底部图标行, 左→右): 关于(About, 打开「关于」pane)、访问官网、调试、捐赠、退出Asig。除「关于」外均为占位禁用按钮(留待实现)。
+
+#### General Settings Card
+
+
+#### State Settings Card
+
+- Reset: 右上角"reset"按钮可以将这个State的所有配置恢复为默认值
+- Color: "颜色"为横向的单选按钮，按钮中间为颜色展示，选中时外圈有选中的效果
+- Animations: 单选，选中效果同"Color"
+- Speed: 波纹/呼吸 支持自定义速度，范围为0.2Hz - 5Hz
