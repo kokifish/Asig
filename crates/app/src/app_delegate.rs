@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use agent_light_core::{Monitor, Settings, Snapshot};
+use agent_light_core::{Monitor, Settings, Snapshot, StyleKey};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::NSObject;
 use objc2::{class, declare_class, msg_send, msg_send_id, mutability, ClassType, DeclaredClass};
@@ -128,21 +128,17 @@ declare_class!(
             self.settings_changed();
         }
 
-        /// 设置面板「状态样式」下拉 action。tag = state_idx*2 + field(0=动画,1=颜色)。
+        /// 设置面板「样式」下拉 action。tag = key_idx*2 + field(0=动画,1=颜色)。
+        /// key_idx 索引 `StyleKey::ALL`(5 状态 + Done-Notification)。
         #[method(changeStyle:)]
         fn change_style(&self, sender: *mut NSObject) {
             let tag: i64 = unsafe { msg_send![sender, tag] };
             let idx: i64 = unsafe { msg_send![sender, indexOfSelectedItem] };
-            let state_idx = (tag / 2) as usize;
+            let key_idx = (tag / 2) as usize;
             let field = tag % 2;
-            let status = crate::settings::STATE_ORDER.get(state_idx).copied();
-            let Some(status) = status else { return };
+            let Some(key) = StyleKey::ALL.get(key_idx).copied() else { return };
             let mut settings = self.ivars().settings.borrow_mut();
-            let default = Settings::default();
-            let st = settings
-                .styles
-                .entry(status)
-                .or_insert(*default.styles.get(&status).unwrap());
+            let st = settings.styles.entry(key).or_insert(key.default_style());
             match field {
                 0 => st.anim = crate::settings::ANIM_ORDER[idx as usize],
                 1 => st.color = crate::settings::COLOR_ORDER[idx as usize],

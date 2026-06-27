@@ -42,8 +42,9 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 | 3 | `Offline` | 🟣 紫 | 常亮 | 异常 / 卡住 / 进程没了 / 未知 |
 | 2 | `Working` | 🟡 黄 | 呼吸-慢速 | 正在跑 |
 | 1 | `Done` | 🟢 绿 | 波纹 | 完成 / 空闲 / 初始默认态 |
+| 1 | `Done-Notification` | 深绿 | 快速呼吸 | 其他状态转入Done状态 |
 
-- **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 Done Notification，用深绿色表示，默认动效为快速呼吸
+- **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 Done-Notification，用深绿色表示，默认动效为快速呼吸
 - **聚合规则**：同一个Agent多个会话同时存在时，全局灯取**优先级最高**的那一个（`AgentStatus::priority()`，数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
 - **Sticky 锁定态**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
 - **灯效种类**：`Steady`（常亮）/ `Pulse`（呼吸）/ `Blink`（明灭）/ `Ripple`（波纹），共 4 种（详见 [Light Animations](#light-animations)）。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
@@ -57,10 +58,10 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 
 | 动效 | 英文 | 视觉 | 动到的 layer 属性 | 周期语义 |
 |---|---|---|---|---|
-| 常亮 | Steady（solid） | 不变，纯色常亮 | 无 | 无周期，period_ms 置 0 |
-| 呼吸 | Pulse（breathing） | 透明度 ~0.4↔1 缓慢往复 | `opacity` | 完整循环（含来回） |
-| 明灭 | Blink（blink/flash） | 透明度 0↔1 往复 | `opacity` | 完整循环（含来回） |
-| 波纹 | Ripple（sonar） | 一个环从中心扩散并淡出 | `transform.scale` + `opacity`（独立 RingView） | 单程一次扩散 |
+| 常亮 | Steady | 不变，纯色常亮 | 无 | 无周期，period_ms 置 0 |
+| 呼吸 | Pulse | 透明度 ~0.3↔1 缓慢往复 | `opacity` | 完整循环（含来回） |
+| 明灭 | Blink | 透明度 0↔1 往复 | `opacity` | 完整循环（含来回） |
+| 波纹 | Ripple | 一个环从中心扩散并淡出 | `transform.scale` + `opacity`（独立 RingView） | 单程一次扩散 |
 
 - 默认周期：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（慢呼吸）/ `Done`=1600（波纹）。「快闪/慢闪」是**同一 Blink 的不同周期**，不是两种动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（DarkGreen，450ms）覆盖全局态。

@@ -8,7 +8,7 @@ use objc2::{class, msg_send, msg_send_id, sel, DeclaredClass};
 use objc2_app_kit::{NSApplication, NSButton, NSPopUpButton, NSSlider, NSTextField, NSView, NSWindow};
 use objc2_foundation::{CGFloat, NSPoint, NSRect, NSSize, NSString};
 
-use agent_light_core::{AgentStatus, Anim, Color, Settings};
+use agent_light_core::{Anim, Color, StyleKey};
 
 use crate::app_delegate::AppDelegate;
 use crate::palette::{anim_name, color_name};
@@ -16,43 +16,33 @@ use crate::palette::{anim_name, color_name};
 const W: CGFloat = 440.0;
 const H: CGFloat = 540.0;
 
-/// 状态在 UI 里的固定顺序(与下拉 tag 编码一致;app_delegate 解码也用它)。
-pub const STATE_ORDER: [AgentStatus; 5] = [
-    AgentStatus::Done,
-    AgentStatus::Working,
-    AgentStatus::NeedsDeci,
-    AgentStatus::Error,
-    AgentStatus::Offline,
-];
 pub const ANIM_ORDER: [Anim; 4] = [Anim::Steady, Anim::Pulse, Anim::Blink, Anim::Ripple];
 pub const COLOR_ORDER: [Color; 6] =
     [Color::Green, Color::DarkGreen, Color::Yellow, Color::Amber, Color::Red, Color::Purple];
 
-fn state_name(s: AgentStatus) -> &'static str {
-    match s {
-        AgentStatus::Done => "Done · 完成",
-        AgentStatus::Working => "Working · 运行",
-        AgentStatus::NeedsDeci => "NeedsDeci · 待决策",
-        AgentStatus::Error => "Error · 报错",
-        AgentStatus::Offline => "Offline · 离线",
+fn state_name(k: StyleKey) -> &'static str {
+    match k {
+        StyleKey::Done => "Done · 完成",
+        StyleKey::Working => "Working · 运行",
+        StyleKey::NeedsDeci => "NeedsDeci · 待决策",
+        StyleKey::Error => "Error · 报错",
+        StyleKey::Offline => "Offline · 离线",
+        StyleKey::DoneNotif => "Done-Notif · 完成通知",
     }
 }
 
 pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     // 快照当前设置,用作各控件的初始值。
-    let defaults = Settings::default();
     let (dot, rows): (f64, Vec<(usize, usize)>) = {
         let s = delegate.ivars().settings.borrow();
         let dot = s.dot_size as f64;
-        let rows = STATE_ORDER
+        let rows = StyleKey::ALL
             .iter()
-            .map(|st| {
-                let style = s.styles.get(st).or_else(|| defaults.styles.get(st));
-                let anim = style.map(|x| x.anim).unwrap_or(Anim::Steady);
-                let color = style.map(|x| x.color).unwrap_or(Color::Green);
+            .map(|&k| {
+                let style = s.style_for(k); // 含缺省回退
                 (
-                    ANIM_ORDER.iter().position(|a| *a == anim).unwrap_or(0),
-                    COLOR_ORDER.iter().position(|c| *c == color).unwrap_or(0),
+                    ANIM_ORDER.iter().position(|a| *a == style.anim).unwrap_or(0),
+                    COLOR_ORDER.iter().position(|c| *c == style.color).unwrap_or(0),
                 )
             })
             .collect();
@@ -117,11 +107,11 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         COLOR_ORDER.iter().map(|c| NSString::from_str(color_name(*c))).collect();
 
     for (i, (anim_sel, color_sel)) in rows.iter().enumerate() {
-        let y = 248.0 + (4 - i) as CGFloat * 30.0; // 自上而下:Done 在顶
+        let y = 224.0 + (5 - i) as CGFloat * 30.0; // 6 行自上而下:Done 在顶,Done-Notif 在底
         add_label(
             &content,
             NSRect::new(NSPoint::new(20.0, y + 4.0), NSSize::new(130.0, 20.0)),
-            state_name(STATE_ORDER[i]),
+            state_name(StyleKey::ALL[i]),
         );
         add_style_popup(
             &content,
