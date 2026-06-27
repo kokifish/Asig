@@ -3,7 +3,7 @@
 //! 渲染:自绘 NSView(NSBezierPath 圆角 + NSColor 填充)——绕开 CALayer 的 CGColor 依赖。
 //! 灯效(全部交 render server 进程驱动 GPU 插值,本进程 CPU ~0%):
 //!   - Steady 常亮 / Pulse 呼吸(快闪·慢闪·呼吸只是周期不同):动 layer "opacity";
-//!   - Ripple 波纹:一个自绘环子视图,动其 layer "transform.scale" + "opacity",
+//!   - Ripple 波纹:一个自绘环子视图,动其 layer "transform"(绕圆心缩放的 CATransform3D)+ "opacity",
 //!     从中心扩散并淡出(环也自绘,故无需 CGColor)。
 //!
 //! 窗口固定大尺寸(120×120,透明 + 默认点击穿透),核心圆点按设置 `dot_size` 居中绘制、
@@ -16,9 +16,12 @@ use std::cell::RefCell;
 use agent_light_core::{Color, LightAnim, LightPosition};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
-use objc2::{class, declare_class, msg_send, msg_send_id, mutability, ClassType, DeclaredClass};
+use objc2::{ClassType, DefinedClass, MainThreadOnly, class, define_class, msg_send};
 use objc2_app_kit::{NSBezierPath, NSColor, NSScreen, NSView, NSWindow};
-use objc2_foundation::{CGFloat, NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue};
+use objc2_core_foundation::CGFloat;
+use objc2_foundation::{
+    NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue,
+};
 use objc2_quartz_core::{CABasicAnimation, CALayer, CATransform3D, NSValueCATransform3DAdditions};
 
 /// 固定窗口尺寸(透明,容得下最大圆点 + 波纹扩散)。
@@ -34,7 +37,7 @@ pub fn nscolor(c: Color) -> Retained<NSColor> {
         Color::Red => (0.92, 0.22, 0.22),       // Error
         Color::Purple => (0.62, 0.36, 0.90),    // Offline
     };
-    unsafe { NSColor::colorWithCalibratedRed_green_blue_alpha(r, g, b, 1.0) }
+    NSColor::colorWithCalibratedRed_green_blue_alpha(r, g, b, 1.0)
 }
 
 fn anim_color(a: LightAnim) -> Color {
@@ -54,19 +57,19 @@ fn dot_origin(dot: CGFloat) -> CGFloat {
 
 /// 当前所有屏幕(screens[0] 是主屏 / 菜单栏所在屏)。
 fn screens() -> Vec<Retained<NSScreen>> {
-    let arr: Retained<NSArray<NSScreen>> = unsafe { msg_send_id![class!(NSScreen), screens] };
+    let arr: Retained<NSArray<NSScreen>> = unsafe { msg_send![class!(NSScreen), screens] };
     let n: usize = unsafe { msg_send![&arr, count] };
     (0..n)
-        .map(|i| unsafe { msg_send_id![&arr, objectAtIndex: i] })
+        .map(|i| unsafe { msg_send![&arr, objectAtIndex: i] })
         .collect()
 }
 
 /// 屏幕的 CGDirectDisplayID(经 deviceDescription[@"NSScreenNumber"]);取不到返回 0。
 fn screen_device_id(screen: &NSScreen) -> u32 {
     let dict: Retained<NSDictionary<NSString, NSObject>> =
-        unsafe { msg_send_id![screen, deviceDescription] };
+        unsafe { msg_send![screen, deviceDescription] };
     let num: Retained<NSNumber> =
-        unsafe { msg_send_id![&dict, objectForKey: &*NSString::from_str("NSScreenNumber")] };
+        unsafe { msg_send![&dict, objectForKey: &*NSString::from_str("NSScreenNumber")] };
     let v: i64 = unsafe { msg_send![&num, integerValue] };
     v as u32
 }
@@ -103,7 +106,7 @@ fn default_origin(win: CGFloat) -> NSPoint {
     let vf: NSRect = match screens().into_iter().next() {
         Some(s) => unsafe { msg_send![&s, visibleFrame] },
         None => {
-            let main: Retained<NSScreen> = unsafe { msg_send_id![class!(NSScreen), mainScreen] };
+            let main: Retained<NSScreen> = unsafe { msg_send![class!(NSScreen), mainScreen] };
             unsafe { msg_send![&main, visibleFrame] }
         }
     };
@@ -115,8 +118,12 @@ fn default_origin(win: CGFloat) -> NSPoint {
 /// - saved 所在屏仍在 → 贴该屏恢复,并夹到其可见区内(防分辨率变化跑出屏外);
 /// - 屏已断开 / saved=None → 主屏左上角默认。
 fn resolve_origin(saved: Option<LightPosition>, win: CGFloat) -> NSPoint {
-    let Some(p) = saved else { return default_origin(win) };
-    let Some(s) = screen_with_id(p.screen_id) else { return default_origin(win) };
+    let Some(p) = saved else {
+        return default_origin(win);
+    };
+    let Some(s) = screen_with_id(p.screen_id) else {
+        return default_origin(win);
+    };
     let vf: NSRect = unsafe { msg_send![&s, visibleFrame] };
     let max_x = (vf.origin.x + vf.size.width - win).max(vf.origin.x);
     let max_y = (vf.origin.y + vf.size.height - win).max(vf.origin.y);
@@ -130,73 +137,62 @@ pub struct PillState {
     pub dot: CGFloat,
 }
 
-declare_class!(
+define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "PillView"]
+    #[ivars = RefCell<PillState>]
     pub struct PillView;
 
-    unsafe impl ClassType for PillView {
-        type Super = NSView;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "PillView";
-    }
-
-    impl DeclaredClass for PillView {
-        type Ivars = RefCell<PillState>;
-    }
-
     #[allow(non_snake_case)]
-    unsafe impl PillView {
+    impl PillView {
         /// 允许点击药丸拖动无边框窗口(配合 window movableByWindowBackground)。
         /// 仅在「关闭点击穿透」时窗口才接收鼠标事件,故只在那时生效。
-        #[method(mouseDownCanMoveWindow)]
+        #[unsafe(method(mouseDownCanMoveWindow))]
         fn mouse_down_can_move_window(&self) -> Bool {
             Bool::YES
         }
 
-        #[method(drawRect:)]
+        #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             let b = self.ivars().borrow();
-            let color: &NSColor = &*b.color;
+            let color: &NSColor = &b.color;
             let dot = b.dot;
             let o = dot_origin(dot);
             let rect = NSRect::new(NSPoint::new(o, o), NSSize::new(dot, dot));
-            let path: Retained<NSBezierPath> = unsafe {
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, dot / 2.0, dot / 2.0)
-            };
+            let path: Retained<NSBezierPath> = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, dot / 2.0, dot / 2.0);
             let _: () = unsafe { msg_send![color, set] };
-            unsafe { path.fill() };
+            path.fill();
         }
     }
 );
 
 impl PillView {
     fn new(color: Retained<NSColor>, frame: NSRect, dot: CGFloat) -> Retained<Self> {
-        let allocated: Allocated<Self> = unsafe { msg_send_id![Self::class(), alloc] };
-        let partial =
-            allocated.set_ivars(RefCell::new(PillState { color, ring: None, dot }));
-        unsafe { msg_send_id![super(partial), initWithFrame: frame] }
+        let allocated: Allocated<Self> = unsafe { msg_send![Self::class(), alloc] };
+        let partial = allocated.set_ivars(RefCell::new(PillState {
+            color,
+            ring: None,
+            dot,
+        }));
+        unsafe { msg_send![super(partial), initWithFrame: frame] }
     }
 }
 
 // ---- RingView:波纹环(自绘描边圆,故无需 CGColor)----
-declare_class!(
+define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "RingView"]
+    #[ivars = RefCell<Retained<NSColor>>]
     pub struct RingView;
 
-    unsafe impl ClassType for RingView {
-        type Super = NSView;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "RingView";
-    }
-
-    impl DeclaredClass for RingView {
-        type Ivars = RefCell<Retained<NSColor>>;
-    }
-
     #[allow(non_snake_case)]
-    unsafe impl RingView {
-        #[method(drawRect:)]
+    impl RingView {
+        #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             let b = self.ivars().borrow();
-            let color: &NSColor = &*b;
+            let color: &NSColor = &b;
             let bounds: NSRect = unsafe { msg_send![self, bounds] };
             let lw: CGFloat = 1.5;
             let inset = NSRect::new(
@@ -204,9 +200,7 @@ declare_class!(
                 NSSize::new(bounds.size.width - lw, bounds.size.height - lw),
             );
             let r = inset.size.height / 2.0;
-            let path: Retained<NSBezierPath> = unsafe {
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(inset, r, r)
-            };
+            let path: Retained<NSBezierPath> = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(inset, r, r);
             let _: () = unsafe { msg_send![&path, setLineWidth: lw] };
             let _: () = unsafe { msg_send![color, set] };
             let _: () = unsafe { msg_send![&path, stroke] };
@@ -216,21 +210,24 @@ declare_class!(
 
 impl RingView {
     fn new(color: Retained<NSColor>, frame: NSRect) -> Retained<Self> {
-        let allocated: Allocated<Self> = unsafe { msg_send_id![Self::class(), alloc] };
+        let allocated: Allocated<Self> = unsafe { msg_send![Self::class(), alloc] };
         let partial = allocated.set_ivars(RefCell::new(color));
-        unsafe { msg_send_id![super(partial), initWithFrame: frame] }
+        unsafe { msg_send![super(partial), initWithFrame: frame] }
     }
 }
 
 // ---- 构建浮窗 ----
 /// `saved` = 上次记忆的位置(含所在屏 id);None 或该屏已断开 → 主屏左上角默认。
-pub fn build(dot_size: u32, saved: Option<LightPosition>) -> (Retained<NSWindow>, Retained<PillView>) {
+pub fn build(
+    dot_size: u32,
+    saved: Option<LightPosition>,
+) -> (Retained<NSWindow>, Retained<PillView>) {
     let origin = resolve_origin(saved, WIN);
     let frame = NSRect::new(origin, NSSize::new(WIN, WIN));
 
-    let alloc: Allocated<NSWindow> = unsafe { msg_send_id![class!(NSWindow), alloc] };
+    let alloc: Allocated<NSWindow> = unsafe { msg_send![class!(NSWindow), alloc] };
     let window: Retained<NSWindow> = unsafe {
-        msg_send_id![
+        msg_send![
             alloc,
             initWithContentRect: frame,
             styleMask: 0u64, // NSWindowStyleMaskBorderless
@@ -239,7 +236,7 @@ pub fn build(dot_size: u32, saved: Option<LightPosition>) -> (Retained<NSWindow>
         ]
     };
 
-    let clear = unsafe { NSColor::clearColor() };
+    let clear = NSColor::clearColor();
     unsafe {
         let _: () = msg_send![&window, setOpaque: Bool::NO];
         let _: () = msg_send![&window, setBackgroundColor: &*clear];
@@ -252,7 +249,11 @@ pub fn build(dot_size: u32, saved: Option<LightPosition>) -> (Retained<NSWindow>
     }
 
     let dot = dot_size as CGFloat;
-    let view = PillView::new(nscolor(Color::Purple), NSRect::new(NSPoint::new(0.0, 0.0), frame.size), dot);
+    let view = PillView::new(
+        nscolor(Color::Purple),
+        NSRect::new(NSPoint::new(0.0, 0.0), frame.size),
+        dot,
+    );
     let _: () = unsafe { msg_send![&view, setWantsLayer: Bool::YES] };
     let _: () = unsafe { msg_send![&window, setContentView: &*view] };
     let _: () = unsafe { msg_send![&window, orderFrontRegardless] };
@@ -280,7 +281,7 @@ pub fn set_size(view: &PillView, dot_size: u32) {
 pub fn set_light(view: &PillView, anim: LightAnim) {
     view.rust_set_color(nscolor(anim_color(anim)));
 
-    let layer: Retained<CALayer> = unsafe { msg_send_id![view, layer] };
+    let layer: Retained<CALayer> = unsafe { msg_send![view, layer] };
     // 先清掉旧的:opacity 动画 + 波纹环子视图。
     let _: () = unsafe { msg_send![&layer, removeAnimationForKey: &*NSString::from_str("pulse")] };
     let _: () = unsafe { msg_send![&layer, setOpacity: 1.0f32] };
@@ -309,10 +310,11 @@ impl PillView {
 fn add_pulse(layer: &CALayer, period_ms: u32) {
     const FLOOR: f64 = 0.2;
     let basic: Retained<CABasicAnimation> = unsafe {
-        msg_send_id![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")]
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")]
     };
-    let from_n: Retained<NSNumber> = unsafe { msg_send_id![class!(NSNumber), numberWithDouble: FLOOR] };
-    let to_n: Retained<NSNumber> = unsafe { msg_send_id![class!(NSNumber), numberWithDouble: 1.0f64] };
+    let from_n: Retained<NSNumber> =
+        unsafe { msg_send![class!(NSNumber), numberWithDouble: FLOOR] };
+    let to_n: Retained<NSNumber> = unsafe { msg_send![class!(NSNumber), numberWithDouble: 1.0f64] };
     // autoreverses 下 duration 是半周期;period_ms 为完整周期。
     let duration = period_ms as f64 / 1000.0 / 2.0;
     unsafe {
@@ -321,7 +323,7 @@ fn add_pulse(layer: &CALayer, period_ms: u32) {
         let _: () = msg_send![&basic, setDuration: duration];
         let _: () = msg_send![&basic, setAutoreverses: Bool::YES];
         let _: () = msg_send![&basic, setRepeatCount: f32::INFINITY];
-        let _: () = msg_send![layer, addAnimation: &*basic forKey: &*NSString::from_str("pulse")];
+        let _: () = msg_send![layer, addAnimation: &*basic, forKey: &*NSString::from_str("pulse")];
     }
 }
 
@@ -342,7 +344,7 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
         let _: () = msg_send![&ring, setWantsLayer: Bool::YES];
         let _: () = msg_send![view, addSubview: &*ring];
     }
-    let layer: Retained<CALayer> = unsafe { msg_send_id![&ring, layer] };
+    let layer: Retained<CALayer> = unsafe { msg_send![&ring, layer] };
     let duration = period_ms as f64 / 1000.0;
 
     // 环视图自身坐标里的圆心 = (dot/2, dot/2)(环描边内切于 dot×dot bounds)。
@@ -351,10 +353,10 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
     let to_t = scale_about(c, c, MAX_SCALE);
 
     let scale: Retained<CABasicAnimation> = unsafe {
-        msg_send_id![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("transform")]
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("transform")]
     };
     let opacity: Retained<CABasicAnimation> = unsafe {
-        msg_send_id![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")]
+        msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")]
     };
     unsafe {
         let from_v: Retained<NSValue> = NSValue::valueWithCATransform3D(from_t);
@@ -363,15 +365,16 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
         let _: () = msg_send![&scale, setToValue: &*to_v];
         let _: () = msg_send![&scale, setDuration: duration];
         let _: () = msg_send![&scale, setRepeatCount: f32::INFINITY];
-        let _: () = msg_send![&layer, addAnimation: &*scale forKey: &*NSString::from_str("rippleScale")];
+        let _: () =
+            msg_send![&layer, addAnimation: &*scale, forKey: &*NSString::from_str("rippleScale")];
 
-        let from2: Retained<NSNumber> = msg_send_id![class!(NSNumber), numberWithDouble: 0.85f64];
-        let to2: Retained<NSNumber> = msg_send_id![class!(NSNumber), numberWithDouble: 0.0f64];
+        let from2: Retained<NSNumber> = msg_send![class!(NSNumber), numberWithDouble: 0.85f64];
+        let to2: Retained<NSNumber> = msg_send![class!(NSNumber), numberWithDouble: 0.0f64];
         let _: () = msg_send![&opacity, setFromValue: &*from2];
         let _: () = msg_send![&opacity, setToValue: &*to2];
         let _: () = msg_send![&opacity, setDuration: duration];
         let _: () = msg_send![&opacity, setRepeatCount: f32::INFINITY];
-        let _: () = msg_send![&layer, addAnimation: &*opacity forKey: &*NSString::from_str("rippleOpacity")];
+        let _: () = msg_send![&layer, addAnimation: &*opacity, forKey: &*NSString::from_str("rippleOpacity")];
     }
 
     view.ivars().borrow_mut().ring = Some(ring);
@@ -384,17 +387,29 @@ const MAX_SCALE: CGFloat = 2.6;
 /// 不依赖 layer 的 anchorPoint,故对 layer-backed NSView 也稳定有效。
 fn scale_about(cx: CGFloat, cy: CGFloat, s: CGFloat) -> CATransform3D {
     CATransform3D {
-        m11: s, m12: 0.0, m13: 0.0, m14: 0.0,
-        m21: 0.0, m22: s, m23: 0.0, m24: 0.0,
-        m31: 0.0, m32: 0.0, m33: 1.0, m34: 0.0,
-        m41: cx * (1.0 - s), m42: cy * (1.0 - s), m43: 0.0, m44: 1.0,
+        m11: s,
+        m12: 0.0,
+        m13: 0.0,
+        m14: 0.0,
+        m21: 0.0,
+        m22: s,
+        m23: 0.0,
+        m24: 0.0,
+        m31: 0.0,
+        m32: 0.0,
+        m33: 1.0,
+        m34: 0.0,
+        m41: cx * (1.0 - s),
+        m42: cy * (1.0 - s),
+        m43: 0.0,
+        m44: 1.0,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::scale_about;
-    use objc2_foundation::CGFloat;
+    use objc2_core_foundation::CGFloat;
     use objc2_quartz_core::CATransform3D;
 
     /// 把 2D 仿射 CATransform3D 作用到点 (x,y)(只用 m11/m21/m41 与 m12/m22/m42)。
@@ -429,6 +444,10 @@ mod tests {
         let (c, r, s) = (20.0, 15.0, 2.0);
         let (x, y) = apply2d(&scale_about(c, c, s), c + r, c);
         let dist = ((x - c).powi(2) + (y - c).powi(2)).sqrt();
-        assert!((dist - s * r).abs() < 1e-9, "dist={dist} expected={}", s * r);
+        assert!(
+            (dist - s * r).abs() < 1e-9,
+            "dist={dist} expected={}",
+            s * r
+        );
     }
 }

@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
-dirs       = "5"
+dirs       = "6"
 libc       = "0.2"
 # Phase 2/3 再按需开启:
 # notify   = "6"                                            # push:hook 事件 / 文件监听

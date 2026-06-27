@@ -4,14 +4,15 @@
 
 use agent_light_core::Snapshot;
 use objc2::rc::{Allocated, Retained};
-use objc2::runtime::{Bool, NSObject};
-use objc2::{class, declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass};
 use objc2::runtime::Sel;
+use objc2::runtime::{Bool, NSObject};
+use objc2::{ClassType, DefinedClass, MainThreadOnly, class, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSBezierPath, NSButton, NSColor, NSFont, NSScreen, NSStatusBarButton, NSStatusItem,
-    NSTextField, NSView, NSWindow,
+    NSApplication, NSBezierPath, NSButton, NSColor, NSFont, NSScreen, NSStatusBarButton,
+    NSStatusItem, NSTextField, NSView, NSWindow,
 };
-use objc2_foundation::{CGFloat, NSPoint, NSRect, NSSize, NSString};
+use objc2_core_foundation::CGFloat;
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use crate::app_delegate::AppDelegate;
 use crate::palette::status_emoji;
@@ -21,26 +22,19 @@ pub const PANEL_H: CGFloat = 220.0;
 
 // 无边框 popover 用的窗口子类:默认 borderless 窗口 canBecomeKeyWindow 返回 NO,
 // 里面的按钮就点不动。覆盖成 YES。
-declare_class!(
+define_class!(
+    #[unsafe(super(NSWindow))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "KeyPanel"]
     pub struct KeyPanel;
 
-    unsafe impl ClassType for KeyPanel {
-        type Super = NSWindow;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "KeyPanel";
-    }
-
-    impl DeclaredClass for KeyPanel {
-        type Ivars = ();
-    }
-
     #[allow(non_snake_case)]
-    unsafe impl KeyPanel {
-        #[method(canBecomeKeyWindow)]
+    impl KeyPanel {
+        #[unsafe(method(canBecomeKeyWindow))]
         fn can_become_key(&self) -> Bool {
             Bool::YES
         }
-        #[method(canBecomeMainWindow)]
+        #[unsafe(method(canBecomeMainWindow))]
         fn can_become_main(&self) -> Bool {
             Bool::NO
         }
@@ -49,39 +43,32 @@ declare_class!(
 
 // 圆角卡片背景:自绘 NSBezierPath 圆角矩形填充 windowBackgroundColor(适配深/浅色),
 // 绕开 CALayer CGColor 依赖。窗口设透明底,由它画出圆角 + 阴影跟随圆角 → OneDrive 风格。
-declare_class!(
+define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "CardView"]
     pub struct CardView;
 
-    unsafe impl ClassType for CardView {
-        type Super = NSView;
-        type Mutability = mutability::MainThreadOnly;
-        const NAME: &'static str = "CardView";
-    }
-
-    impl DeclaredClass for CardView {
-        type Ivars = ();
-    }
-
     #[allow(non_snake_case)]
-    unsafe impl CardView {
-        #[method(drawRect:)]
+    impl CardView {
+        #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             let bounds: NSRect = unsafe { msg_send![self, bounds] };
             let r: CGFloat = 12.0;
-            let path: Retained<NSBezierPath> = unsafe {
-                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, r, r)
-            };
-            let bg: Retained<NSColor> = unsafe { msg_send_id![class!(NSColor), windowBackgroundColor] };
+            let path: Retained<NSBezierPath> =
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, r, r);
+            let bg: Retained<NSColor> =
+                unsafe { msg_send![class!(NSColor), windowBackgroundColor] };
             let _: () = unsafe { msg_send![&bg, set] };
-            unsafe { path.fill() };
+            path.fill();
         }
     }
 );
 
 impl CardView {
     fn new(frame: NSRect) -> Retained<Self> {
-        let alloc: Allocated<Self> = unsafe { msg_send_id![Self::class(), alloc] };
-        unsafe { msg_send_id![alloc, initWithFrame: frame] }
+        let alloc: Allocated<Self> = unsafe { msg_send![Self::class(), alloc] };
+        unsafe { msg_send![alloc, initWithFrame: frame] }
     }
 }
 
@@ -114,11 +101,11 @@ fn dropdown_origin(
 /// 读菜单栏 Signal Icon 的屏幕坐标(button bounds → window → screen)。
 fn icon_screen_frame(item: &NSStatusItem) -> Option<NSRect> {
     unsafe {
-        let button: Retained<NSStatusBarButton> = msg_send_id![item, button];
+        let button: Retained<NSStatusBarButton> = msg_send![item, button];
         let bounds: NSRect = msg_send![&button, bounds];
         let in_win: NSRect =
             msg_send![&button, convertRect: bounds, toView: std::ptr::null_mut::<NSView>()];
-        let win: Retained<NSWindow> = msg_send_id![&button, window];
+        let win: Retained<NSWindow> = msg_send![&button, window];
         let in_screen: NSRect = msg_send![&win, convertRectToScreen: in_win];
         Some(in_screen)
     }
@@ -126,20 +113,30 @@ fn icon_screen_frame(item: &NSStatusItem) -> Option<NSRect> {
 
 /// 给定 Signal Icon + 面板尺寸,算出面板应出现的屏幕坐标(图标左下方)。读不到图标则兜底右上。
 pub fn dropdown_position_for(item: &NSStatusItem, panel_w: CGFloat, panel_h: CGFloat) -> NSPoint {
-    let screen: Retained<NSScreen> = unsafe { msg_send_id![class!(NSScreen), mainScreen] };
+    let screen: Retained<NSScreen> = unsafe { msg_send![class!(NSScreen), mainScreen] };
     let vis: NSRect = unsafe { msg_send![&screen, visibleFrame] };
     let vis_min_x = vis.origin.x;
     let vis_max_x = vis.origin.x + vis.size.width;
     match icon_screen_frame(item) {
-        Some(icon) => dropdown_origin(icon.origin.x, icon.origin.y, panel_w, panel_h, vis_min_x, vis_max_x),
-        None => NSPoint::new(vis_max_x - panel_w - 12.0, vis.origin.y + vis.size.height - panel_h - 8.0),
+        Some(icon) => dropdown_origin(
+            icon.origin.x,
+            icon.origin.y,
+            panel_w,
+            panel_h,
+            vis_min_x,
+            vis_max_x,
+        ),
+        None => NSPoint::new(
+            vis_max_x - panel_w - 12.0,
+            vis.origin.y + vis.size.height - panel_h - 8.0,
+        ),
     }
 }
 
 /// 构建面板(每次显示都新建,定位在 `pos`;隐藏即丢弃 → 不占常驻内存,且每次拿最新位置/锁定态)。
 pub fn build(delegate: &AppDelegate, pos: Option<NSPoint>) -> Popover {
     let fallback = {
-        let screen: Retained<NSScreen> = unsafe { msg_send_id![class!(NSScreen), mainScreen] };
+        let screen: Retained<NSScreen> = unsafe { msg_send![class!(NSScreen), mainScreen] };
         let vis: NSRect = unsafe { msg_send![&screen, visibleFrame] };
         NSPoint::new(
             vis.origin.x + vis.size.width - PANEL_W - 12.0,
@@ -149,9 +146,9 @@ pub fn build(delegate: &AppDelegate, pos: Option<NSPoint>) -> Popover {
     let origin = pos.unwrap_or(fallback);
     let frame = NSRect::new(origin, NSSize::new(PANEL_W, PANEL_H));
 
-    let alloc: Allocated<KeyPanel> = unsafe { msg_send_id![KeyPanel::class(), alloc] };
+    let alloc: Allocated<KeyPanel> = unsafe { msg_send![KeyPanel::class(), alloc] };
     let window: Retained<KeyPanel> = unsafe {
-        msg_send_id![
+        msg_send![
             alloc,
             initWithContentRect: frame,
             styleMask: 0u64, // borderless:不可拖动、不可改大小
@@ -177,13 +174,16 @@ pub fn build(delegate: &AppDelegate, pos: Option<NSPoint>) -> Popover {
     unsafe {
         let _: () = msg_send![&window, setContentView: &*card];
     }
-    let content: Retained<NSView> = unsafe { msg_send_id![&window, contentView] };
+    let content: Retained<NSView> = unsafe { msg_send![&window, contentView] };
     let locked = *delegate.ivars().click_through.borrow(); // 锁定 = 不可拖动 = click_through
 
     // 标题
     add_label(
         &content,
-        NSRect::new(NSPoint::new(16.0, PANEL_H - 28.0), NSSize::new(PANEL_W - 32.0, 18.0)),
+        NSRect::new(
+            NSPoint::new(16.0, PANEL_H - 28.0),
+            NSSize::new(PANEL_W - 32.0, 18.0),
+        ),
         "Asig",
         true,
     );
@@ -212,7 +212,10 @@ pub fn build(delegate: &AppDelegate, pos: Option<NSPoint>) -> Popover {
 
     let _ = add_button(
         &content,
-        NSRect::new(NSPoint::new(PANEL_W - 16.0 - 84.0, PANEL_H - 64.0), NSSize::new(84.0, 30.0)),
+        NSRect::new(
+            NSPoint::new(PANEL_W - 16.0 - 84.0, PANEL_H - 64.0),
+            NSSize::new(84.0, 30.0),
+        ),
         "退出",
         delegate,
         sel!(quit:),
@@ -220,11 +223,11 @@ pub fn build(delegate: &AppDelegate, pos: Option<NSPoint>) -> Popover {
 
     // 会话列表
     let label: Retained<NSTextField> = unsafe {
-        msg_send_id![class!(NSTextField), labelWithString: &*NSString::from_str("(无会话)")]
+        msg_send![class!(NSTextField), labelWithString: &*NSString::from_str("(无会话)")]
     };
     unsafe {
         let _: () = msg_send![&label, setFrame: NSRect::new(NSPoint::new(16.0, 16.0), NSSize::new(PANEL_W - 32.0, PANEL_H - 96.0))];
-        let font: Retained<NSFont> = msg_send_id![class!(NSFont), systemFontOfSize: 12.0];
+        let font: Retained<NSFont> = msg_send![class!(NSFont), systemFontOfSize: 12.0];
         let _: () = msg_send![&label, setFont: &*font];
         let _: () = msg_send![&content, addSubview: &*label];
     }
@@ -234,10 +237,10 @@ pub fn build(delegate: &AppDelegate, pos: Option<NSPoint>) -> Popover {
 
 fn add_label(content: &Retained<NSView>, frame: NSRect, text: &str, bold: bool) {
     let label: Retained<NSTextField> =
-        unsafe { msg_send_id![class!(NSTextField), labelWithString: &*NSString::from_str(text)] };
+        unsafe { msg_send![class!(NSTextField), labelWithString: &*NSString::from_str(text)] };
     unsafe {
         if bold {
-            let font: Retained<NSFont> = msg_send_id![class!(NSFont), boldSystemFontOfSize: 14.0];
+            let font: Retained<NSFont> = msg_send![class!(NSFont), boldSystemFontOfSize: 14.0];
             let _: () = msg_send![&label, setFont: &*font];
         }
         let _: () = msg_send![&label, setFrame: frame];
@@ -254,7 +257,7 @@ fn add_button(
     delegate: &AppDelegate,
     action: Sel,
 ) -> Retained<NSButton> {
-    let btn: Retained<NSButton> = unsafe { msg_send_id![class!(NSButton), new] };
+    let btn: Retained<NSButton> = unsafe { msg_send![class!(NSButton), new] };
     unsafe {
         let _: () = msg_send![&btn, setFrame: frame];
         let _: () = msg_send![&btn, setTitle: &*NSString::from_str(title)];
@@ -272,7 +275,7 @@ pub fn is_visible(p: &Popover) -> bool {
 pub fn show(p: &Popover) {
     unsafe {
         // 状态栏点击不会激活 app;不激活的话浮动窗会因 hidesOnDeactivate 立刻消失。
-        let app: Retained<NSApplication> = msg_send_id![class!(NSApplication), sharedApplication];
+        let app: Retained<NSApplication> = msg_send![class!(NSApplication), sharedApplication];
         let _: () = msg_send![&app, activateIgnoringOtherApps: Bool::YES];
         let _: () = msg_send![&p.window, makeKeyAndOrderFront: std::ptr::null_mut::<NSObject>()];
     }
@@ -290,7 +293,12 @@ pub fn update_label(p: &Popover, snap: &Snapshot) {
         snap.sessions
             .iter()
             .map(|s| {
-                format!("{} {:?} · {}", status_emoji(s.status), s.kind, s.project.as_deref().unwrap_or("-"))
+                format!(
+                    "{} {:?} · {}",
+                    status_emoji(s.status),
+                    s.kind,
+                    s.project.as_deref().unwrap_or("-")
+                )
             })
             .collect::<Vec<_>>()
             .join("\n")

@@ -1,11 +1,11 @@
 //! 用户可配置的设置(灯大小 + 各状态样式)。serde 持久化,UI 无关、可移植。
 //!
 //! 默认值 = status.rs 里 `AgentStatus::light()` 的硬编码映射(5 个真实状态)
-//! + Done-Notification 的内置默认(深绿快速呼吸)。一旦写入配置文件,app 层就
+//! 以及 Done-Notification 的内置默认(深绿快速呼吸)。一旦写入配置文件,app 层就
 //! 改读 `Settings::light(&snap)`,不再用硬编码。
 
-use crate::status::{AgentStatus, Color, LightAnim};
 use crate::Snapshot;
+use crate::status::{AgentStatus, Color, LightAnim};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -35,9 +35,21 @@ impl StateStyle {
     /// 反向:从内核硬编码的 `LightAnim` 构造(用于派生 5 个真实状态的默认样式)。
     fn from_light(la: LightAnim) -> Self {
         match la {
-            LightAnim::Steady { color } => Self { color, anim: Anim::Steady, period_ms: 0 },
-            LightAnim::Pulse { color, period_ms } => Self { color, anim: Anim::Pulse, period_ms },
-            LightAnim::Ripple { color, period_ms } => Self { color, anim: Anim::Ripple, period_ms },
+            LightAnim::Steady { color } => Self {
+                color,
+                anim: Anim::Steady,
+                period_ms: 0,
+            },
+            LightAnim::Pulse { color, period_ms } => Self {
+                color,
+                anim: Anim::Pulse,
+                period_ms,
+            },
+            LightAnim::Ripple { color, period_ms } => Self {
+                color,
+                anim: Anim::Ripple,
+                period_ms,
+            },
         }
     }
 
@@ -45,8 +57,14 @@ impl StateStyle {
     fn to_light(self) -> LightAnim {
         match self.anim {
             Anim::Steady => LightAnim::Steady { color: self.color },
-            Anim::Pulse => LightAnim::Pulse { color: self.color, period_ms: self.period_ms.max(200) },
-            Anim::Ripple => LightAnim::Ripple { color: self.color, period_ms: self.period_ms.max(400) },
+            Anim::Pulse => LightAnim::Pulse {
+                color: self.color,
+                period_ms: self.period_ms.max(200),
+            },
+            Anim::Ripple => LightAnim::Ripple {
+                color: self.color,
+                period_ms: self.period_ms.max(400),
+            },
         }
     }
 }
@@ -67,8 +85,14 @@ pub enum StyleKey {
 
 impl StyleKey {
     /// Settings Panel 里的固定顺序(与下拉 tag 编码一致;app_delegate 解码也用它)。
-    pub const ALL: [Self; 6] =
-        [Self::Done, Self::Working, Self::NeedsDeci, Self::Error, Self::Offline, Self::DoneNotif];
+    pub const ALL: [Self; 6] = [
+        Self::Done,
+        Self::Working,
+        Self::NeedsDeci,
+        Self::Error,
+        Self::Offline,
+        Self::DoneNotif,
+    ];
 
     /// 对应的真实状态;Done-Notification 返回 None。
     pub fn status(self) -> Option<AgentStatus> {
@@ -83,10 +107,14 @@ impl StyleKey {
     }
 
     /// 内置默认样式。5 个真实状态派生自 `AgentStatus::light()`(单一事实源);
-    /// Done-Notification 默认 = 深绿快速呼吸(与 `Snapshot::light()` 一致)。
+    /// Done-Notification 默认 = 深绿快速呼吸(内置于 `StyleKey::default_style`)。
     pub fn default_style(self) -> StateStyle {
         match self {
-            Self::DoneNotif => StateStyle { color: Color::DarkGreen, anim: Anim::Pulse, period_ms: 450 },
+            Self::DoneNotif => StateStyle {
+                color: Color::DarkGreen,
+                anim: Anim::Pulse,
+                period_ms: 450,
+            },
             other => StateStyle::from_light(other.status().unwrap().light()),
         }
     }
@@ -128,15 +156,25 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        let styles = StyleKey::ALL.iter().map(|&k| (k, k.default_style())).collect();
-        Self { dot_size: 16, styles, light_pos: None }
+        let styles = StyleKey::ALL
+            .iter()
+            .map(|&k| (k, k.default_style()))
+            .collect();
+        Self {
+            dot_size: 16,
+            styles,
+            light_pos: None,
+        }
     }
 }
 
 impl Settings {
     /// 某个键对应的样式。配置缺失时回退到内置默认。
     pub fn style_for(&self, key: StyleKey) -> StateStyle {
-        self.styles.get(&key).copied().unwrap_or_else(|| key.default_style())
+        self.styles
+            .get(&key)
+            .copied()
+            .unwrap_or_else(|| key.default_style())
     }
 
     /// 某个真实状态对应的灯效。
@@ -185,14 +223,31 @@ mod tests {
     #[test]
     fn default_matches_builtin_light() {
         let s = Settings::default();
-        assert!(matches!(s.light_for(AgentStatus::Done), LightAnim::Ripple { color: Color::Green, .. }));
-        assert!(matches!(s.light_for(AgentStatus::Working), LightAnim::Pulse { color: Color::Yellow, .. }));
-        assert!(matches!(s.light_for(AgentStatus::Offline), LightAnim::Steady { color: Color::Purple }));
+        assert!(matches!(
+            s.light_for(AgentStatus::Done),
+            LightAnim::Ripple {
+                color: Color::Green,
+                ..
+            }
+        ));
+        assert!(matches!(
+            s.light_for(AgentStatus::Working),
+            LightAnim::Pulse {
+                color: Color::Yellow,
+                ..
+            }
+        ));
+        assert!(matches!(
+            s.light_for(AgentStatus::Offline),
+            LightAnim::Steady {
+                color: Color::Purple
+            }
+        ));
     }
 
     #[test]
     fn done_notif_default_is_dark_green_fast_pulse() {
-        // Done-Notification 默认 = 深绿、快速呼吸(与 Snapshot::light() / DEV.md 一致)
+        // Done-Notification 默认 = 深绿、快速呼吸(与 DEV.md 一致)
         let st = StyleKey::DoneNotif.default_style();
         assert_eq!(st.color, Color::DarkGreen);
         assert_eq!(st.anim, Anim::Pulse);
@@ -203,8 +258,18 @@ mod tests {
     fn override_changes_style() {
         let mut s = Settings::default();
         // 把 Done 改成红色常亮
-        s.styles.insert(StyleKey::Done, StateStyle { color: Color::Red, anim: Anim::Steady, period_ms: 0 });
-        assert!(matches!(s.light_for(AgentStatus::Done), LightAnim::Steady { color: Color::Red }));
+        s.styles.insert(
+            StyleKey::Done,
+            StateStyle {
+                color: Color::Red,
+                anim: Anim::Steady,
+                period_ms: 0,
+            },
+        );
+        assert!(matches!(
+            s.light_for(AgentStatus::Done),
+            LightAnim::Steady { color: Color::Red }
+        ));
     }
 
     #[test]
@@ -213,17 +278,37 @@ mod tests {
         let mut s = Settings::default();
         s.styles.insert(
             StyleKey::DoneNotif,
-            StateStyle { color: Color::Green, anim: Anim::Ripple, period_ms: 1200 },
+            StateStyle {
+                color: Color::Green,
+                anim: Anim::Ripple,
+                period_ms: 1200,
+            },
         );
-        let snap = Snapshot { sessions: vec![], global: AgentStatus::Done, done_notif: true };
-        assert!(matches!(s.light(&snap), LightAnim::Ripple { color: Color::Green, period_ms: 1200 }));
+        let snap = Snapshot {
+            sessions: vec![],
+            global: AgentStatus::Done,
+            done_notif: true,
+        };
+        assert!(matches!(
+            s.light(&snap),
+            LightAnim::Ripple {
+                color: Color::Green,
+                period_ms: 1200
+            }
+        ));
     }
 
     #[test]
     fn missing_state_falls_back() {
         let mut s = Settings::default();
         s.styles.remove(&StyleKey::Error);
-        assert!(matches!(s.light_for(AgentStatus::Error), LightAnim::Pulse { color: Color::Red, .. }));
+        assert!(matches!(
+            s.light_for(AgentStatus::Error),
+            LightAnim::Pulse {
+                color: Color::Red,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -242,16 +327,35 @@ mod tests {
         let old = r#"{"dot_size":20,"styles":{"done":{"color":"green","anim":"ripple","period_ms":1600},"working":{"color":"yellow","anim":"pulse","period_ms":1800}}}"#;
         let s: Settings = serde_json::from_str(old).unwrap();
         assert_eq!(s.dot_size, 20);
-        assert!(matches!(s.light_for(AgentStatus::Done), LightAnim::Ripple { .. }));
+        assert!(matches!(
+            s.light_for(AgentStatus::Done),
+            LightAnim::Ripple { .. }
+        ));
         // done_notif 缺失 → 默认深绿呼吸
-        assert!(matches!(s.style_for(StyleKey::DoneNotif), StateStyle { color: Color::DarkGreen, anim: Anim::Pulse, .. }));
+        assert!(matches!(
+            s.style_for(StyleKey::DoneNotif),
+            StateStyle {
+                color: Color::DarkGreen,
+                anim: Anim::Pulse,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn period_clamped_to_minimum() {
         let mut s = Settings::default();
-        s.styles.insert(StyleKey::Working, StateStyle { color: Color::Yellow, anim: Anim::Pulse, period_ms: 1 });
-        assert!(matches!(s.light_for(AgentStatus::Working), LightAnim::Pulse { period_ms, .. } if period_ms >= 200));
+        s.styles.insert(
+            StyleKey::Working,
+            StateStyle {
+                color: Color::Yellow,
+                anim: Anim::Pulse,
+                period_ms: 1,
+            },
+        );
+        assert!(
+            matches!(s.light_for(AgentStatus::Working), LightAnim::Pulse { period_ms, .. } if period_ms >= 200)
+        );
     }
 
     #[test]
@@ -262,11 +366,24 @@ mod tests {
             "error":{"color":"red","anim":"blink","period_ms":350},
             "needs_deci":{"color":"amber","anim":"blink","period_ms":1000}}}"#;
         let s: Settings = serde_json::from_str(old).unwrap();
-        assert!(matches!(s.light_for(AgentStatus::Error), LightAnim::Pulse { color: Color::Red, period_ms: 350 }));
-        assert!(matches!(s.light_for(AgentStatus::NeedsDeci), LightAnim::Pulse { color: Color::Amber, period_ms: 1000 }));
+        assert!(matches!(
+            s.light_for(AgentStatus::Error),
+            LightAnim::Pulse {
+                color: Color::Red,
+                period_ms: 350
+            }
+        ));
+        assert!(matches!(
+            s.light_for(AgentStatus::NeedsDeci),
+            LightAnim::Pulse {
+                color: Color::Amber,
+                period_ms: 1000
+            }
+        ));
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn light_position_optional_and_default() {
         // 无 light_pos 的旧配置 → None(启动用默认左上角)。
         let old = r#"{"dot_size":16,"styles":{}}"#;
@@ -276,9 +393,20 @@ mod tests {
         assert_eq!(Settings::default().light_pos, None);
         // 带 light_pos 能往返。
         let mut s = Settings::default();
-        s.light_pos = Some(LightPosition { x: 100.0, y: 200.0, screen_id: 7 });
+        s.light_pos = Some(LightPosition {
+            x: 100.0,
+            y: 200.0,
+            screen_id: 7,
+        });
         let text = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&text).unwrap();
-        assert_eq!(back.light_pos, Some(LightPosition { x: 100.0, y: 200.0, screen_id: 7 }));
+        assert_eq!(
+            back.light_pos,
+            Some(LightPosition {
+                x: 100.0,
+                y: 200.0,
+                screen_id: 7
+            })
+        );
     }
 }

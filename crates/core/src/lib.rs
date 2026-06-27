@@ -12,7 +12,7 @@ pub mod status;
 
 pub use config::{Anim, LightPosition, Settings, StateStyle, StyleKey};
 pub use source::{AgentKind, AgentSession, AgentSource};
-pub use status::{transition, AgentStatus, Color, LightAnim};
+pub use status::{AgentStatus, Color, LightAnim, transition};
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -116,12 +116,18 @@ impl Monitor {
             }
         }
         let done_notif = match *self.done_since.borrow() {
-            Some(t) => global == AgentStatus::Done && now.duration_since(t) < Duration::from_secs(30),
+            Some(t) => {
+                global == AgentStatus::Done && now.duration_since(t) < Duration::from_secs(30)
+            }
             None => false,
         };
         *self.prev_global.borrow_mut() = global;
 
-        Snapshot { sessions, global, done_notif }
+        Snapshot {
+            sessions,
+            global,
+            done_notif,
+        }
     }
 
     /// 推荐轮询间隔。DEV.md Design:默认 3s。

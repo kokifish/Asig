@@ -1,0 +1,2 @@
+# clippy 配置:告诉 clippy 最低支持版本,避免建议高于 MSRV 的 API。
+msrv = "1.85"

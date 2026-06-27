@@ -1,0 +1,4 @@
+# 固定到 stable 通道(随最新发布版),并带上 fmt/clippy 供本地与 CI 用。
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

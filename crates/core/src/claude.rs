@@ -93,8 +93,12 @@ impl AgentSource for ClaudeLikeSource {
         };
         let mut files = Vec::new();
         for e in entries.flatten() {
-            let Ok(text) = std::fs::read_to_string(e.path()) else { continue };
-            let Ok(f): Result<SessionFile, _> = serde_json::from_str(&text) else { continue };
+            let Ok(text) = std::fs::read_to_string(e.path()) else {
+                continue;
+            };
+            let Ok(f): Result<SessionFile, _> = serde_json::from_str(&text) else {
+                continue;
+            };
             files.push(ParsedFile::from(&f));
         }
         let mut seen = self.seen.lock().unwrap();
@@ -117,7 +121,9 @@ fn discover_from(
     let mut out = Vec::new();
     for f in files {
         let prev = seen.get(&f.pid).copied();
-        let Some(st) = classify(f, prev, is_alive(f.pid)) else { continue };
+        let Some(st) = classify(f, prev, is_alive(f.pid)) else {
+            continue;
+        };
         seen.insert(f.pid, st);
         live.insert(f.pid);
         out.push(AgentSession {
@@ -148,10 +154,7 @@ fn classify(f: &ParsedFile, prev: Option<AgentStatus>, alive: bool) -> Option<Ag
             _ => AgentStatus::Working, // 未知默认视为工作中
         })
     } else {
-        match prev {
-            Some(_) => Some(AgentStatus::Offline),
-            None => None,
-        }
+        prev.map(|_| AgentStatus::Offline)
     }
 }
 
@@ -160,26 +163,52 @@ mod tests {
     use super::*;
 
     fn pf(pid: u32, status: Option<&str>) -> ParsedFile {
-        ParsedFile { pid, session_id: None, cwd: None, status: status.map(str::to_string) }
+        ParsedFile {
+            pid,
+            session_id: None,
+            cwd: None,
+            status: status.map(str::to_string),
+        }
     }
 
     // ---- classify:纯函数 ----
 
     #[test]
     fn classify_alive_maps_status() {
-        assert_eq!(classify(&pf(1, Some("busy")), None, true), Some(AgentStatus::Working));
-        assert_eq!(classify(&pf(1, Some("idle")), None, true), Some(AgentStatus::Done));
-        assert_eq!(classify(&pf(1, None), None, true), Some(AgentStatus::Working));
-        assert_eq!(classify(&pf(1, Some("wat")), None, true), Some(AgentStatus::Working));
+        assert_eq!(
+            classify(&pf(1, Some("busy")), None, true),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            classify(&pf(1, Some("idle")), None, true),
+            Some(AgentStatus::Done)
+        );
+        assert_eq!(
+            classify(&pf(1, None), None, true),
+            Some(AgentStatus::Working)
+        );
+        assert_eq!(
+            classify(&pf(1, Some("wat")), None, true),
+            Some(AgentStatus::Working)
+        );
     }
 
     #[test]
     fn classify_dead_seen_before_is_offline() {
         // 曾见过(活的)→ 现在死了 = 失联
-        assert_eq!(classify(&pf(1, Some("busy")), Some(AgentStatus::Working), false), Some(AgentStatus::Offline));
-        assert_eq!(classify(&pf(1, Some("idle")), Some(AgentStatus::Done), false), Some(AgentStatus::Offline));
+        assert_eq!(
+            classify(&pf(1, Some("busy")), Some(AgentStatus::Working), false),
+            Some(AgentStatus::Offline)
+        );
+        assert_eq!(
+            classify(&pf(1, Some("idle")), Some(AgentStatus::Done), false),
+            Some(AgentStatus::Offline)
+        );
         // 上一轮就已经是 Offline,文件还残留 → 继续 Offline
-        assert_eq!(classify(&pf(1, Some("busy")), Some(AgentStatus::Offline), false), Some(AgentStatus::Offline));
+        assert_eq!(
+            classify(&pf(1, Some("busy")), Some(AgentStatus::Offline), false),
+            Some(AgentStatus::Offline)
+        );
     }
 
     #[test]
@@ -193,7 +222,12 @@ mod tests {
     #[test]
     fn discover_healthy_working() {
         let mut seen = HashMap::new();
-        let out = discover_from(&[pf(100, Some("busy"))], &mut seen, |_| true, AgentKind::Claude);
+        let out = discover_from(
+            &[pf(100, Some("busy"))],
+            &mut seen,
+            |_| true,
+            AgentKind::Claude,
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].status, AgentStatus::Working);
         assert_eq!(seen.get(&100), Some(&AgentStatus::Working));
@@ -203,7 +237,12 @@ mod tests {
     fn discover_dead_seen_before_becomes_offline() {
         // 上一轮见过 100 在 Working;本轮 pid 死了 → Offline
         let mut seen = HashMap::from([(100, AgentStatus::Working)]);
-        let out = discover_from(&[pf(100, Some("busy"))], &mut seen, |_| false, AgentKind::Claude);
+        let out = discover_from(
+            &[pf(100, Some("busy"))],
+            &mut seen,
+            |_| false,
+            AgentKind::Claude,
+        );
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].status, AgentStatus::Offline);
         assert_eq!(seen.get(&100), Some(&AgentStatus::Offline));
@@ -213,7 +252,12 @@ mod tests {
     fn discover_ancient_leftover_is_ignored() {
         // 从没见过的死 pid 文件 → 不报,seen 也不记
         let mut seen = HashMap::new();
-        let out = discover_from(&[pf(999, Some("busy"))], &mut seen, |_| false, AgentKind::Claude);
+        let out = discover_from(
+            &[pf(999, Some("busy"))],
+            &mut seen,
+            |_| false,
+            AgentKind::Claude,
+        );
         assert!(out.is_empty());
         assert!(seen.is_empty());
     }
@@ -222,7 +266,12 @@ mod tests {
     fn discover_offline_recovers_to_working() {
         // 曾 Offline;进程复活且 busy → Working(sticky 机由上层解锁,这里只看 source 报 Working)
         let mut seen = HashMap::from([(300, AgentStatus::Offline)]);
-        let out = discover_from(&[pf(300, Some("busy"))], &mut seen, |_| true, AgentKind::Claude);
+        let out = discover_from(
+            &[pf(300, Some("busy"))],
+            &mut seen,
+            |_| true,
+            AgentKind::Claude,
+        );
         assert_eq!(out[0].status, AgentStatus::Working);
         assert_eq!(seen.get(&300), Some(&AgentStatus::Working));
     }
@@ -231,7 +280,12 @@ mod tests {
     fn discover_prunes_vanished_pids() {
         // 上轮见过 100、777;本轮只剩 100 的文件 → 777 被裁掉(干净退出)
         let mut seen = HashMap::from([(100, AgentStatus::Working), (777, AgentStatus::Done)]);
-        let _ = discover_from(&[pf(100, Some("busy"))], &mut seen, |_| true, AgentKind::Claude);
+        let _ = discover_from(
+            &[pf(100, Some("busy"))],
+            &mut seen,
+            |_| true,
+            AgentKind::Claude,
+        );
         assert_eq!(seen.len(), 1);
         assert!(seen.contains_key(&100));
         assert!(!seen.contains_key(&777));

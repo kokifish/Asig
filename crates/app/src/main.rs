@@ -12,13 +12,13 @@ use std::cell::RefCell;
 use app_delegate::{AppDelegate, AppIvars};
 use objc2::rc::Retained;
 use objc2::runtime::{Bool, NSObject, Sel};
-use objc2::{class, msg_send, msg_send_id, sel};
+use objc2::{class, msg_send, sel};
 use objc2_app_kit::NSApplication;
 use objc2_foundation::NSTimer;
 
 fn main() {
     let app: Retained<NSApplication> =
-        unsafe { msg_send_id![class!(NSApplication), sharedApplication] };
+        unsafe { msg_send![class!(NSApplication), sharedApplication] };
 
     // 启动即加载用户设置(灯大小 + 各状态样式)。
     let settings = agent_light_core::Settings::load();
@@ -39,7 +39,7 @@ fn main() {
     });
     // popover / 设置窗改为首次点击时懒创建(省常驻内存,压到 <60MB 预算内)。
 
-    tray::build(&delegate);         // 状态栏 Signal Icon(点击弹 Drop-down)
+    tray::build(&delegate); // 状态栏 Signal Icon(点击弹 Drop-down)
     tray::schedule_tick(&delegate); // NSTimer 每 3s 轮询内核
 
     // 开发/测试钩子:绕过「合成点击无法触发菜单栏 NSStatusItem」的 macOS 限制——
@@ -47,7 +47,7 @@ fn main() {
     // 生产运行不设这两个环境变量。
     unsafe {
         let open_after = |sel_name: Sel| {
-            let timer: Retained<NSTimer> = msg_send_id![
+            let timer: Retained<NSTimer> = msg_send![
                 class!(NSTimer),
                 scheduledTimerWithTimeInterval: 0.5f64,
                 target: &**delegate,

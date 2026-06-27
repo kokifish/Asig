@@ -10,7 +10,7 @@ pub enum AgentStatus {
     Working,   // 🟡 在跑
     NeedsDeci, // 🟠 待决策(要权限 / 要输入)
     #[default]
-    Done,      // 🟢 完成 / 空闲 / 初始默认态
+    Done, // 🟢 完成 / 空闲 / 初始默认态
     Error,     // 🔴 报错且无法自动恢复
     Offline,   // 🟣 不可观测 / 卡住 / 进程没了 / 未知
 }
@@ -32,11 +32,25 @@ impl AgentStatus {
     /// 快闪 / 慢闪 / 呼吸 都是 `Pulse`(只是周期不同),无独立的明灭(Blink)动效。
     pub fn light(self) -> LightAnim {
         match self {
-            Self::Done => LightAnim::Ripple { color: Color::Green, period_ms: 1600 }, // 波纹
-            Self::Working => LightAnim::Pulse { color: Color::Yellow, period_ms: 1800 }, // 呼吸-慢速
-            Self::NeedsDeci => LightAnim::Pulse { color: Color::Amber, period_ms: 1000 }, // 慢闪(中速呼吸)
-            Self::Error => LightAnim::Pulse { color: Color::Red, period_ms: 350 }, // 快闪(快速呼吸)
-            Self::Offline => LightAnim::Steady { color: Color::Purple },           // 常亮
+            Self::Done => LightAnim::Ripple {
+                color: Color::Green,
+                period_ms: 1600,
+            }, // 波纹
+            Self::Working => LightAnim::Pulse {
+                color: Color::Yellow,
+                period_ms: 1800,
+            }, // 呼吸-慢速
+            Self::NeedsDeci => LightAnim::Pulse {
+                color: Color::Amber,
+                period_ms: 1000,
+            }, // 慢闪(中速呼吸)
+            Self::Error => LightAnim::Pulse {
+                color: Color::Red,
+                period_ms: 350,
+            }, // 快闪(快速呼吸)
+            Self::Offline => LightAnim::Steady {
+                color: Color::Purple,
+            }, // 常亮
         }
     }
 }
@@ -95,37 +109,94 @@ mod tests {
     fn light_mapping_matches_dev_doc() {
         // Done=波纹绿 / Working=慢呼吸黄 / NeedsDeci=慢闪琥珀 / Error=快闪红 / Offline=常亮紫
         // 快闪·慢闪·呼吸 都是 Pulse(周期不同),无独立 Blink 动效。
-        assert!(matches!(AgentStatus::Done.light(), LightAnim::Ripple { color: Color::Green, .. }));
-        assert!(matches!(AgentStatus::Working.light(), LightAnim::Pulse { color: Color::Yellow, .. }));
-        assert!(matches!(AgentStatus::NeedsDeci.light(), LightAnim::Pulse { color: Color::Amber, .. }));
-        assert!(matches!(AgentStatus::Error.light(), LightAnim::Pulse { color: Color::Red, .. }));
-        assert!(matches!(AgentStatus::Offline.light(), LightAnim::Steady { color: Color::Purple }));
+        assert!(matches!(
+            AgentStatus::Done.light(),
+            LightAnim::Ripple {
+                color: Color::Green,
+                ..
+            }
+        ));
+        assert!(matches!(
+            AgentStatus::Working.light(),
+            LightAnim::Pulse {
+                color: Color::Yellow,
+                ..
+            }
+        ));
+        assert!(matches!(
+            AgentStatus::NeedsDeci.light(),
+            LightAnim::Pulse {
+                color: Color::Amber,
+                ..
+            }
+        ));
+        assert!(matches!(
+            AgentStatus::Error.light(),
+            LightAnim::Pulse {
+                color: Color::Red,
+                ..
+            }
+        ));
+        assert!(matches!(
+            AgentStatus::Offline.light(),
+            LightAnim::Steady {
+                color: Color::Purple
+            }
+        ));
         // 快闪(Error)周期 < 慢闪(NeedsDeci)周期 < 呼吸(Working)
         let err = matches!(AgentStatus::Error.light(), LightAnim::Pulse { period_ms, .. } if period_ms < 600);
         let nd = matches!(AgentStatus::NeedsDeci.light(), LightAnim::Pulse { period_ms: p, .. } if (600..1500).contains(&p));
         assert!(err && nd);
-        assert!(matches!(AgentStatus::Working.light(), LightAnim::Pulse { period_ms, .. } if period_ms >= 1500));
+        assert!(
+            matches!(AgentStatus::Working.light(), LightAnim::Pulse { period_ms, .. } if period_ms >= 1500)
+        );
     }
 
     #[test]
     fn transition_free_from_baseline() {
         // Done / Working 接受任意新观测
-        assert_eq!(transition(AgentStatus::Done, AgentStatus::Error), AgentStatus::Error);
-        assert_eq!(transition(AgentStatus::Working, AgentStatus::NeedsDeci), AgentStatus::NeedsDeci);
-        assert_eq!(transition(AgentStatus::Done, AgentStatus::Working), AgentStatus::Working);
+        assert_eq!(
+            transition(AgentStatus::Done, AgentStatus::Error),
+            AgentStatus::Error
+        );
+        assert_eq!(
+            transition(AgentStatus::Working, AgentStatus::NeedsDeci),
+            AgentStatus::NeedsDeci
+        );
+        assert_eq!(
+            transition(AgentStatus::Done, AgentStatus::Working),
+            AgentStatus::Working
+        );
     }
 
     #[test]
     fn transition_sticky_unlocks_only_on_working_or_done() {
         // 锁定态:仅 Working/Done 可解锁
-        assert_eq!(transition(AgentStatus::Error, AgentStatus::Working), AgentStatus::Working);
-        assert_eq!(transition(AgentStatus::Offline, AgentStatus::Done), AgentStatus::Done);
+        assert_eq!(
+            transition(AgentStatus::Error, AgentStatus::Working),
+            AgentStatus::Working
+        );
+        assert_eq!(
+            transition(AgentStatus::Offline, AgentStatus::Done),
+            AgentStatus::Done
+        );
         // 其余原始观测一律保持(不抖动、不互相覆盖、不超时清)
-        assert_eq!(transition(AgentStatus::Error, AgentStatus::Offline), AgentStatus::Error);
-        assert_eq!(transition(AgentStatus::Offline, AgentStatus::NeedsDeci), AgentStatus::Offline);
-        assert_eq!(transition(AgentStatus::NeedsDeci, AgentStatus::Error), AgentStatus::NeedsDeci);
+        assert_eq!(
+            transition(AgentStatus::Error, AgentStatus::Offline),
+            AgentStatus::Error
+        );
+        assert_eq!(
+            transition(AgentStatus::Offline, AgentStatus::NeedsDeci),
+            AgentStatus::Offline
+        );
+        assert_eq!(
+            transition(AgentStatus::NeedsDeci, AgentStatus::Error),
+            AgentStatus::NeedsDeci
+        );
         // 同为锁定态之间也不互相覆盖
-        assert_eq!(transition(AgentStatus::Error, AgentStatus::NeedsDeci), AgentStatus::Error);
+        assert_eq!(
+            transition(AgentStatus::Error, AgentStatus::NeedsDeci),
+            AgentStatus::Error
+        );
     }
 }
-

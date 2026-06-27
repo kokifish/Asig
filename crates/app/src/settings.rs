@@ -4,9 +4,12 @@
 
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
-use objc2::{class, msg_send, msg_send_id, sel, DeclaredClass};
-use objc2_app_kit::{NSApplication, NSButton, NSPopUpButton, NSSlider, NSTextField, NSView, NSWindow};
-use objc2_foundation::{CGFloat, NSPoint, NSRect, NSSize, NSString};
+use objc2::{DefinedClass, class, msg_send, sel};
+use objc2_app_kit::{
+    NSApplication, NSButton, NSPopUpButton, NSSlider, NSTextField, NSView, NSWindow,
+};
+use objc2_core_foundation::CGFloat;
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use agent_light_core::{Anim, Color, StyleKey};
 
@@ -17,8 +20,14 @@ const W: CGFloat = 440.0;
 const H: CGFloat = 540.0;
 
 pub const ANIM_ORDER: [Anim; 3] = [Anim::Steady, Anim::Pulse, Anim::Ripple];
-pub const COLOR_ORDER: [Color; 6] =
-    [Color::Green, Color::DarkGreen, Color::Yellow, Color::Amber, Color::Red, Color::Purple];
+pub const COLOR_ORDER: [Color; 6] = [
+    Color::Green,
+    Color::DarkGreen,
+    Color::Yellow,
+    Color::Amber,
+    Color::Red,
+    Color::Purple,
+];
 
 fn state_name(k: StyleKey) -> &'static str {
     match k {
@@ -41,18 +50,24 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
             .map(|&k| {
                 let style = s.style_for(k); // 含缺省回退
                 (
-                    ANIM_ORDER.iter().position(|a| *a == style.anim).unwrap_or(0),
-                    COLOR_ORDER.iter().position(|c| *c == style.color).unwrap_or(0),
+                    ANIM_ORDER
+                        .iter()
+                        .position(|a| *a == style.anim)
+                        .unwrap_or(0),
+                    COLOR_ORDER
+                        .iter()
+                        .position(|c| *c == style.color)
+                        .unwrap_or(0),
                 )
             })
             .collect();
         (dot, rows)
     };
     let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(W, H));
-    let alloc: Allocated<NSWindow> = unsafe { msg_send_id![class!(NSWindow), alloc] };
+    let alloc: Allocated<NSWindow> = unsafe { msg_send![class!(NSWindow), alloc] };
     // titled(2) | closable(4) | miniaturizable(1) = 7;可缩放感更自然
     let window: Retained<NSWindow> = unsafe {
-        msg_send_id![
+        msg_send![
             alloc,
             initWithContentRect: frame,
             styleMask: 7u64,
@@ -65,13 +80,17 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         let _: () = msg_send![&window, setReleasedWhenClosed: Bool::NO];
     }
 
-    let content: Retained<NSView> = unsafe { msg_send_id![&window, contentView] };
+    let content: Retained<NSView> = unsafe { msg_send![&window, contentView] };
 
     // —— 浮窗大小 ——
-    add_label(&content, NSRect::new(NSPoint::new(20.0, 496.0), NSSize::new(160.0, 20.0)), "浮窗大小");
-    let alloc: Allocated<NSSlider> = unsafe { msg_send_id![class!(NSSlider), alloc] };
+    add_label(
+        &content,
+        NSRect::new(NSPoint::new(20.0, 496.0), NSSize::new(160.0, 20.0)),
+        "浮窗大小",
+    );
+    let alloc: Allocated<NSSlider> = unsafe { msg_send![class!(NSSlider), alloc] };
     let slider: Retained<NSSlider> = unsafe {
-        msg_send_id![alloc, initWithFrame: NSRect::new(NSPoint::new(20.0, 468.0), NSSize::new(400.0, 22.0))]
+        msg_send![alloc, initWithFrame: NSRect::new(NSPoint::new(20.0, 468.0), NSSize::new(400.0, 22.0))]
     };
     unsafe {
         let _: () = msg_send![&slider, setMinValue: 8.0f64];
@@ -84,7 +103,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     }
 
     // —— 浮窗点击穿透(与 Drop-down「锁定」同步同一开关 toggleClickThrough:) ——
-    let cb_click: Retained<NSButton> = unsafe { msg_send_id![class!(NSButton), new] };
+    let cb_click: Retained<NSButton> = unsafe { msg_send![class!(NSButton), new] };
     let click_on = *delegate.ivars().click_through.borrow();
     unsafe {
         let _: () = msg_send![&cb_click, setButtonType: 3u64]; // NSSwitchButton 圆角勾选
@@ -97,14 +116,30 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     }
 
     // —— 各状态样式 ——
-    add_label(&content, NSRect::new(NSPoint::new(20.0, 424.0), NSSize::new(200.0, 20.0)), "各状态样式");
-    add_label(&content, NSRect::new(NSPoint::new(150.0, 400.0), NSSize::new(100.0, 16.0)), "动画");
-    add_label(&content, NSRect::new(NSPoint::new(290.0, 400.0), NSSize::new(100.0, 16.0)), "颜色");
+    add_label(
+        &content,
+        NSRect::new(NSPoint::new(20.0, 424.0), NSSize::new(200.0, 20.0)),
+        "各状态样式",
+    );
+    add_label(
+        &content,
+        NSRect::new(NSPoint::new(150.0, 400.0), NSSize::new(100.0, 16.0)),
+        "动画",
+    );
+    add_label(
+        &content,
+        NSRect::new(NSPoint::new(290.0, 400.0), NSSize::new(100.0, 16.0)),
+        "颜色",
+    );
 
-    let anim_items: Vec<Retained<NSString>> =
-        ANIM_ORDER.iter().map(|a| NSString::from_str(anim_name(*a))).collect();
-    let color_items: Vec<Retained<NSString>> =
-        COLOR_ORDER.iter().map(|c| NSString::from_str(color_name(*c))).collect();
+    let anim_items: Vec<Retained<NSString>> = ANIM_ORDER
+        .iter()
+        .map(|a| NSString::from_str(anim_name(*a)))
+        .collect();
+    let color_items: Vec<Retained<NSString>> = COLOR_ORDER
+        .iter()
+        .map(|c| NSString::from_str(color_name(*c)))
+        .collect();
 
     for (i, (anim_sel, color_sel)) in rows.iter().enumerate() {
         let y = 224.0 + (5 - i) as CGFloat * 30.0; // 6 行自上而下:Done 在顶,Done-Notif 在底
@@ -137,7 +172,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
 /// 一个只读文本标签。
 fn add_label(content: &Retained<NSView>, frame: NSRect, text: &str) {
     let label: Retained<NSTextField> =
-        unsafe { msg_send_id![class!(NSTextField), labelWithString: &*NSString::from_str(text)] };
+        unsafe { msg_send![class!(NSTextField), labelWithString: &*NSString::from_str(text)] };
     unsafe {
         let _: () = msg_send![&label, setFrame: frame];
         let _: () = msg_send![&**content, addSubview: &*label];
@@ -153,9 +188,9 @@ fn add_style_popup(
     tag: i64,
     delegate: &AppDelegate,
 ) {
-    let alloc: Allocated<NSPopUpButton> = unsafe { msg_send_id![class!(NSPopUpButton), alloc] };
+    let alloc: Allocated<NSPopUpButton> = unsafe { msg_send![class!(NSPopUpButton), alloc] };
     let pop: Retained<NSPopUpButton> =
-        unsafe { msg_send_id![alloc, initWithFrame: frame, pullsDown: Bool::NO] };
+        unsafe { msg_send![alloc, initWithFrame: frame, pullsDown: Bool::NO] };
     for it in items {
         unsafe {
             let _: () = msg_send![&pop, addItemWithTitle: &**it];
@@ -172,7 +207,7 @@ fn add_style_popup(
 
 pub fn show(window: &NSWindow) {
     unsafe {
-        let app: Retained<NSApplication> = msg_send_id![class!(NSApplication), sharedApplication];
+        let app: Retained<NSApplication> = msg_send![class!(NSApplication), sharedApplication];
         let _: () = msg_send![&app, activateIgnoringOtherApps: Bool::YES];
         let _: () = msg_send![window, center];
         let _: () = msg_send![window, makeKeyAndOrderFront: std::ptr::null_mut::<NSObject>()];

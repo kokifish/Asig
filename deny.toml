@@ -1,0 +1,38 @@
+# cargo-deny 配置:许可证白名单 + 漏洞/禁用/重复版本/来源检查。
+# 跑:`cargo deny check`(CI 里联网拉 RustSec 库跑全量)。
+# 本地无网时:`cargo deny check licenses bans sources`(跳过需联网的 advisories)。
+# 安装:`cargo install cargo-deny`。
+# 注:cargo-deny 的 advisories 检查与 cargo-audit 同源(都是 RustSec 库),已覆盖其职责。
+
+[advisories]
+# 任何已知漏洞判失败;新漏洞出现时升版,或在此 ignore 并写明理由。
+ignore = []
+
+[licenses]
+# 只放行宽松许可证(MIT/Apache 系、BSD、ISC、Unicode、Zlib 等)。
+# MPL-2.0 是文件级弱 copyleft:二进制分发、不修改其源文件即可(option-ext 经 dirs 引入)。
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "Zlib",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Unlicense",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn" # 同 crate 多版本只警告(不强求单一)
+wildcards = "warn"         # 版本写 `*` 的警告
+
+[sources]
+unknown-registry = "deny" # 只允许 crates.io
+unknown-git = "deny"      # 禁止 git 源
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

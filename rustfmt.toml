@@ -1,0 +1,3 @@
+# rustfmt 配置:基本沿用默认(4 空格、100 列),只显式钉 edition。
+edition = "2024"
+max_width = 100

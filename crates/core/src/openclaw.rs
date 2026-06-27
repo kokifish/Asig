@@ -16,7 +16,9 @@ pub struct OpenClawSource {
 
 impl OpenClawSource {
     pub fn new() -> Option<Self> {
-        Some(Self { root: dirs::home_dir()?.join(".openclaw") })
+        Some(Self {
+            root: dirs::home_dir()?.join(".openclaw"),
+        })
     }
 }
 
