@@ -29,12 +29,13 @@ impl AgentStatus {
 
     /// 该状态对应的默认灯效(颜色 + 动画)。UI 层据此驱动 CoreAnimation。
     /// 默认动效见 DEV.md「Color and State Priority」表。
+    /// 快闪 / 慢闪 / 呼吸 都是 `Pulse`(只是周期不同),无独立的明灭(Blink)动效。
     pub fn light(self) -> LightAnim {
         match self {
             Self::Done => LightAnim::Ripple { color: Color::Green, period_ms: 1600 }, // 波纹
             Self::Working => LightAnim::Pulse { color: Color::Yellow, period_ms: 1800 }, // 呼吸-慢速
-            Self::NeedsDeci => LightAnim::Blink { color: Color::Amber, period_ms: 1000 }, // 慢闪
-            Self::Error => LightAnim::Blink { color: Color::Red, period_ms: 350 }, // 快闪
+            Self::NeedsDeci => LightAnim::Pulse { color: Color::Amber, period_ms: 1000 }, // 慢闪(中速呼吸)
+            Self::Error => LightAnim::Pulse { color: Color::Red, period_ms: 350 }, // 快闪(快速呼吸)
             Self::Offline => LightAnim::Steady { color: Color::Purple },           // 常亮
         }
     }
@@ -52,11 +53,11 @@ pub enum Color {
 }
 
 /// 灯效规格(平台无关)。app 层翻译成 CoreAnimation。
+/// 共 3 种:Steady 常亮 / Pulse 呼吸(快闪·慢闪·呼吸只是周期不同)/ Ripple 波纹。
 #[derive(Debug, Clone, Copy)]
 pub enum LightAnim {
     Steady { color: Color },                 // 常亮
-    Pulse { color: Color, period_ms: u32 },  // 呼吸:透明度在 from~1 间渐变
-    Blink { color: Color, period_ms: u32 },  // 明灭:透明度 0↔1
+    Pulse { color: Color, period_ms: u32 },  // 呼吸:透明度在 0.2~1 间渐变(周期越短越「闪」)
     Ripple { color: Color, period_ms: u32 }, // 波纹:环从中心扩散并淡出
 }
 
@@ -93,15 +94,17 @@ mod tests {
     #[test]
     fn light_mapping_matches_dev_doc() {
         // Done=波纹绿 / Working=慢呼吸黄 / NeedsDeci=慢闪琥珀 / Error=快闪红 / Offline=常亮紫
+        // 快闪·慢闪·呼吸 都是 Pulse(周期不同),无独立 Blink 动效。
         assert!(matches!(AgentStatus::Done.light(), LightAnim::Ripple { color: Color::Green, .. }));
         assert!(matches!(AgentStatus::Working.light(), LightAnim::Pulse { color: Color::Yellow, .. }));
-        assert!(matches!(AgentStatus::NeedsDeci.light(), LightAnim::Blink { color: Color::Amber, .. }));
-        assert!(matches!(AgentStatus::Error.light(), LightAnim::Blink { color: Color::Red, .. }));
+        assert!(matches!(AgentStatus::NeedsDeci.light(), LightAnim::Pulse { color: Color::Amber, .. }));
+        assert!(matches!(AgentStatus::Error.light(), LightAnim::Pulse { color: Color::Red, .. }));
         assert!(matches!(AgentStatus::Offline.light(), LightAnim::Steady { color: Color::Purple }));
-        // 快闪(Error)周期 < 慢闪(NeedsDeci)周期
-        let err = matches!(AgentStatus::Error.light(), LightAnim::Blink { period_ms, .. } if period_ms < 600);
-        let nd = matches!(AgentStatus::NeedsDeci.light(), LightAnim::Blink { period_ms: p, .. } if p >= 800);
+        // 快闪(Error)周期 < 慢闪(NeedsDeci)周期 < 呼吸(Working)
+        let err = matches!(AgentStatus::Error.light(), LightAnim::Pulse { period_ms, .. } if period_ms < 600);
+        let nd = matches!(AgentStatus::NeedsDeci.light(), LightAnim::Pulse { period_ms: p, .. } if (600..1500).contains(&p));
         assert!(err && nd);
+        assert!(matches!(AgentStatus::Working.light(), LightAnim::Pulse { period_ms, .. } if period_ms >= 1500));
     }
 
     #[test]

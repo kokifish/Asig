@@ -16,7 +16,7 @@ use crate::palette::{anim_name, color_name};
 const W: CGFloat = 440.0;
 const H: CGFloat = 540.0;
 
-pub const ANIM_ORDER: [Anim; 4] = [Anim::Steady, Anim::Pulse, Anim::Blink, Anim::Ripple];
+pub const ANIM_ORDER: [Anim; 3] = [Anim::Steady, Anim::Pulse, Anim::Ripple];
 pub const COLOR_ORDER: [Color; 6] =
     [Color::Green, Color::DarkGreen, Color::Yellow, Color::Amber, Color::Red, Color::Purple];
 

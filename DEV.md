@@ -47,7 +47,7 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 - **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 Done-Notification，用深绿色表示，默认动效为快速呼吸
 - **聚合规则**：同一个Agent多个会话同时存在时，全局灯取**优先级最高**的那一个（`AgentStatus::priority()`，数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
 - **Sticky 锁定态**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
-- **灯效种类**：`Steady`（常亮）/ `Pulse`（呼吸）/ `Blink`（明灭）/ `Ripple`（波纹），共 4 种（详见 [Light Animations](#light-animations)）。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
+- **灯效种类**：`Steady`（常亮）/ `Pulse`（呼吸）/ `Ripple`（波纹），共 3 种（详见 [Light Animations](#light-animations)）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**，无独立的明灭（Blink）动效。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
 - **颜色枚举**：颜色与状态一一对应，定义在内核、平台无关；app 层翻译成具体 RGB
 
 ### Light Animations
@@ -56,22 +56,21 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 
 **全部交 CoreAnimation 在 render server 上驱动 GPU 插值，app 进程 ~0% CPU。**
 
-| 动效 | 英文 | 视觉 | 动到的 layer 属性 | 周期语义 |
+| 动效 | 英文 | 视觉 | 涉及的属性 |
 |---|---|---|---|---|
-| 常亮 | Steady | 不变，纯色常亮 | 无 | 无周期，period_ms 置 0 |
-| 呼吸 | Pulse | 透明度 ~0.3↔1 缓慢往复 | `opacity` | 完整循环（含来回） |
-| 明灭 | Blink | 透明度 0↔1 往复 | `opacity` | 完整循环（含来回） |
-| 波纹 | Ripple | 一个环从中心扩散并淡出 | `transform.scale` + `opacity`（独立 RingView） | 单程一次扩散 |
+| 常亮 | Steady | 不变，纯色常亮 | 无周期，period_ms 置 0 |
+| 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
+| 波纹 | Ripple | 一圈环以圆点为圆心对称扩散并淡出 | `transform.scale` + `opacity`（独立 `RingView`，锚点设为中心），单程一次扩散 |
 
-- 默认周期：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（慢呼吸）/ `Done`=1600（波纹）。「快闪/慢闪」是**同一 Blink 的不同周期**，不是两种动效。
+- 默认周期：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=1600（波纹）/ `Done-Notification`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（DarkGreen，450ms）覆盖全局态。
 - 可配置：Settings 里每状态独立改 动效 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
-- 载体：Signal Light 浮窗——圆点本体做 Steady/Pulse/Blink，波纹用独立 `RingView` 子视图叠加扩散；Signal Icon（菜单栏）无动效，只显示静态色块/emoji，不可设动效。
+- 载体：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用独立 `RingView` 子视图叠加扩散（锚点对齐圆点圆心，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示静态色块/emoji，不可设动效。
 
 ### Signal Light
 
 - Def: 在桌面上的可以配置动效、大小的叫 Signal Light
-- Default Position: 初始位置在主屏幕的左上角，在macOS窗口的红黄蓝按钮下方
+- Default Position: 初始位置在主屏幕的左上角（红黄绿按钮下方一行）。**位置记忆**：拖动后记住位置，下次启动自动恢复到上次位置（含所在屏幕，按 `CGDirectDisplayID` 匹配）；若该屏已断开则回退主屏左上角。记忆持久化在 `settings.json` 的 `light_pos` 字段。
 
 ### Signal Icon
 

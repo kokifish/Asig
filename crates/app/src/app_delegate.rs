@@ -2,12 +2,12 @@
 
 use std::cell::RefCell;
 
-use agent_light_core::{Monitor, Settings, Snapshot, StyleKey};
+use agent_light_core::{LightPosition, Monitor, Settings, Snapshot, StyleKey};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::NSObject;
 use objc2::{class, declare_class, msg_send, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSStatusItem, NSWindow};
-use objc2_foundation::NSObjectProtocol;
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect};
 
 use crate::overlay::PillView;
 use crate::panel::Popover;
@@ -45,9 +45,10 @@ declare_class!(
 
     #[allow(non_snake_case)]
     unsafe impl AppDelegate {
-        /// NSTimer 每 ~2s:轮询内核 → 状态有变化才渲染(菜单栏灯 + 浮窗 + popover)。
+        /// NSTimer 每 ~3s:轮询内核 → 状态有变化才渲染(菜单栏灯 + 浮窗 + popover)。
         #[method(tick:)]
         fn tick(&self, _timer: *mut NSObject) {
+            self.persist_light_pos();
             let snap = self.ivars().monitor.poll();
             let sig = signature(&snap);
             let same = { let last = self.ivars().last_sig.borrow(); *last == sig };
@@ -184,6 +185,32 @@ impl AppDelegate {
         }
         let snap = self.ivars().monitor.poll();
         self.render(&snap);
+    }
+
+    /// 记住浮窗当前位置(全局 origin + 所在屏 id),供下次启动恢复。tick 每 ~3s 调一次,
+    /// 仅在位置变化时写盘 —— 比 windowDidMove 更省事,且抗强杀(3s 内必落盘)。
+    fn persist_light_pos(&self) {
+        let frame = {
+            let win = self.ivars().overlay_window.borrow();
+            let Some(w) = win.as_ref() else { return };
+            let f: NSRect = unsafe { msg_send![&**w, frame] };
+            f
+        };
+        let center = NSPoint::new(
+            frame.origin.x + frame.size.width / 2.0,
+            frame.origin.y + frame.size.height / 2.0,
+        );
+        let pos = LightPosition {
+            x: frame.origin.x,
+            y: frame.origin.y,
+            screen_id: crate::overlay::screen_id_at(center),
+        };
+        let mut s = self.ivars().settings.borrow_mut();
+        if s.light_pos != Some(pos) {
+            s.light_pos = Some(pos);
+            drop(s);
+            self.ivars().settings.borrow().save();
+        }
     }
 }
 

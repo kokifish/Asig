@@ -39,12 +39,12 @@ pub fn color_name(c: Color) -> &'static str {
 }
 
 /// 动画的中文名(设置面板动画下拉用)。
+/// 快闪 / 慢闪 / 呼吸都是 Pulse(只是周期不同),故下拉里只有 3 个动效。
 pub fn anim_name(a: agent_light_core::Anim) -> &'static str {
     use agent_light_core::Anim;
     match a {
         Anim::Steady => "常亮",
         Anim::Pulse => "呼吸",
-        Anim::Blink => "明灭",
         Anim::Ripple => "波纹",
     }
 }

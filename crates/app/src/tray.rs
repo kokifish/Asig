@@ -33,7 +33,6 @@ pub fn set_light(item: &NSStatusItem, anim: &LightAnim) {
     let color = match anim {
         LightAnim::Steady { color } => *color,
         LightAnim::Pulse { color, .. } => *color,
-        LightAnim::Blink { color, .. } => *color,
         LightAnim::Ripple { color, .. } => *color,
     };
     let button: Retained<NSStatusBarButton> = unsafe { msg_send_id![item, button] };

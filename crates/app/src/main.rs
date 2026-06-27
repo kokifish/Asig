@@ -23,8 +23,8 @@ fn main() {
     // 启动即加载用户设置(灯大小 + 各状态样式)。
     let settings = agent_light_core::Settings::load();
 
-    // Phase 2:置顶透明药丸浮窗(按设置里的圆点大小初始化)。
-    let (overlay_window, overlay_view) = overlay::build(settings.dot_size);
+    // Phase 2:置顶透明药丸浮窗(按设置里的圆点大小 + 上次记忆的位置初始化)。
+    let (overlay_window, overlay_view) = overlay::build(settings.dot_size, settings.light_pos);
     // Phase 2.5:详情 popover + 设置窗口。
     let delegate = AppDelegate::new(AppIvars {
         monitor: agent_light_core::Monitor::default(),

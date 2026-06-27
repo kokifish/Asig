@@ -2,22 +2,23 @@
 //!
 //! 渲染:自绘 NSView(NSBezierPath 圆角 + NSColor 填充)——绕开 CALayer 的 CGColor 依赖。
 //! 灯效(全部交 render server 进程驱动 GPU 插值,本进程 CPU ~0%):
-//!   - Steady 常亮 / Pulse 呼吸 / Blink 明灭:动 layer "opacity";
+//!   - Steady 常亮 / Pulse 呼吸(快闪·慢闪·呼吸只是周期不同):动 layer "opacity";
 //!   - Ripple 波纹:一个自绘环子视图,动其 layer "transform.scale" + "opacity",
 //!     从中心扩散并淡出(环也自绘,故无需 CGColor)。
 //!
 //! 窗口固定大尺寸(120×120,透明 + 默认点击穿透),核心圆点按设置 `dot_size` 居中绘制、
 //! 波纹环在其中扩散。改大小只重绘圆点,**不**改窗口尺寸 —— 避免运行时对窗口发
 //! setFrame 结构体消息(此前 KVO 窗口 setFrame 曾崩)。
+//! 浮窗位置跨启动记忆(见 `build` 的 `saved` 参数 + `app_delegate::persist_light_pos`)。
 
 use std::cell::RefCell;
 
-use agent_light_core::{Color, LightAnim};
+use agent_light_core::{Color, LightAnim, LightPosition};
 use objc2::rc::{Allocated, Retained};
-use objc2::runtime::Bool;
+use objc2::runtime::{Bool, NSObject};
 use objc2::{class, declare_class, msg_send, msg_send_id, mutability, ClassType, DeclaredClass};
-use objc2_app_kit::{NSBezierPath, NSColor, NSView, NSWindow};
-use objc2_foundation::{CGFloat, NSNumber, NSPoint, NSRect, NSSize, NSString};
+use objc2_app_kit::{NSBezierPath, NSColor, NSScreen, NSView, NSWindow};
+use objc2_foundation::{CGFloat, NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString};
 use objc2_quartz_core::{CABasicAnimation, CALayer};
 
 /// 固定窗口尺寸(透明,容得下最大圆点 + 波纹扩散)。
@@ -40,7 +41,6 @@ fn anim_color(a: LightAnim) -> Color {
     match a {
         LightAnim::Steady { color } => color,
         LightAnim::Pulse { color, .. } => color,
-        LightAnim::Blink { color, .. } => color,
         LightAnim::Ripple { color, .. } => color,
     }
 }
@@ -48,6 +48,79 @@ fn anim_color(a: LightAnim) -> Color {
 /// 圆点在窗口内居中的左下角 origin。
 fn dot_origin(dot: CGFloat) -> CGFloat {
     (WIN - dot) / 2.0
+}
+
+// ---- 屏幕几何:用于浮窗位置的记忆 / 恢复(含多屏) ----
+
+/// 当前所有屏幕(screens[0] 是主屏 / 菜单栏所在屏)。
+fn screens() -> Vec<Retained<NSScreen>> {
+    let arr: Retained<NSArray<NSScreen>> = unsafe { msg_send_id![class!(NSScreen), screens] };
+    let n: usize = unsafe { msg_send![&arr, count] };
+    (0..n)
+        .map(|i| unsafe { msg_send_id![&arr, objectAtIndex: i] })
+        .collect()
+}
+
+/// 屏幕的 CGDirectDisplayID(经 deviceDescription[@"NSScreenNumber"]);取不到返回 0。
+fn screen_device_id(screen: &NSScreen) -> u32 {
+    let dict: Retained<NSDictionary<NSString, NSObject>> =
+        unsafe { msg_send_id![screen, deviceDescription] };
+    let num: Retained<NSNumber> =
+        unsafe { msg_send_id![&dict, objectForKey: &*NSString::from_str("NSScreenNumber")] };
+    let v: i64 = unsafe { msg_send![&num, integerValue] };
+    v as u32
+}
+
+fn point_in_rect(r: NSRect, p: NSPoint) -> bool {
+    p.x >= r.origin.x
+        && p.x <= r.origin.x + r.size.width
+        && p.y >= r.origin.y
+        && p.y <= r.origin.y + r.size.height
+}
+
+/// 点所在的屏的 display id;不在任何屏内返回 0(用于存「上次所在屏」)。
+pub fn screen_id_at(pt: NSPoint) -> u32 {
+    for s in screens() {
+        let fr: NSRect = unsafe { msg_send![&s, frame] };
+        if point_in_rect(fr, pt) {
+            return screen_device_id(&s);
+        }
+    }
+    0
+}
+
+/// 按 display id 找屏;id=0 或屏已断开返回 None。
+fn screen_with_id(id: u32) -> Option<Retained<NSScreen>> {
+    if id == 0 {
+        return None;
+    }
+    screens().into_iter().find(|s| screen_device_id(s) == id)
+}
+
+/// 主屏(screens[0])左上角的默认 origin:borderless 浮窗贴可见区(visibleFrame,
+/// 已排除菜单栏 / Dock)左上,留小边距,大致落在窗口红黄绿按钮那一行。
+fn default_origin(win: CGFloat) -> NSPoint {
+    let vf: NSRect = match screens().into_iter().next() {
+        Some(s) => unsafe { msg_send![&s, visibleFrame] },
+        None => {
+            let main: Retained<NSScreen> = unsafe { msg_send_id![class!(NSScreen), mainScreen] };
+            unsafe { msg_send![&main, visibleFrame] }
+        }
+    };
+    const GAP: CGFloat = 8.0;
+    NSPoint::new(vf.origin.x + GAP, vf.origin.y + vf.size.height - win - GAP)
+}
+
+/// 把 saved 位置解析成实际 origin:
+/// - saved 所在屏仍在 → 贴该屏恢复,并夹到其可见区内(防分辨率变化跑出屏外);
+/// - 屏已断开 / saved=None → 主屏左上角默认。
+fn resolve_origin(saved: Option<LightPosition>, win: CGFloat) -> NSPoint {
+    let Some(p) = saved else { return default_origin(win) };
+    let Some(s) = screen_with_id(p.screen_id) else { return default_origin(win) };
+    let vf: NSRect = unsafe { msg_send![&s, visibleFrame] };
+    let max_x = (vf.origin.x + vf.size.width - win).max(vf.origin.x);
+    let max_y = (vf.origin.y + vf.size.height - win).max(vf.origin.y);
+    NSPoint::new(p.x.clamp(vf.origin.x, max_x), p.y.clamp(vf.origin.y, max_y))
 }
 
 // ---- PillView:自绘圆点 + 持有可选的波纹环 ----
@@ -150,8 +223,10 @@ impl RingView {
 }
 
 // ---- 构建浮窗 ----
-pub fn build(dot_size: u32) -> (Retained<NSWindow>, Retained<PillView>) {
-    let frame = NSRect::new(NSPoint::new(220.0, 820.0), NSSize::new(WIN, WIN));
+/// `saved` = 上次记忆的位置(含所在屏 id);None 或该屏已断开 → 主屏左上角默认。
+pub fn build(dot_size: u32, saved: Option<LightPosition>) -> (Retained<NSWindow>, Retained<PillView>) {
+    let origin = resolve_origin(saved, WIN);
+    let frame = NSRect::new(origin, NSSize::new(WIN, WIN));
 
     let alloc: Allocated<NSWindow> = unsafe { msg_send_id![class!(NSWindow), alloc] };
     let window: Retained<NSWindow> = unsafe {
@@ -217,8 +292,7 @@ pub fn set_light(view: &PillView, anim: LightAnim) {
     }
 
     match anim {
-        LightAnim::Blink { period_ms, .. } => add_pulse(&layer, 0.0, period_ms),
-        LightAnim::Pulse { period_ms, .. } => add_pulse(&layer, 0.4, period_ms),
+        LightAnim::Pulse { period_ms, .. } => add_pulse(&layer, period_ms),
         LightAnim::Ripple { color, period_ms } => add_ripple(view, color, period_ms),
         LightAnim::Steady { .. } => {}
     }
@@ -231,12 +305,13 @@ impl PillView {
     }
 }
 
-/// opacity 在 [from, 1.0] 间往复。from=0 → 明灭(Blink);from=0.4 → 呼吸(Pulse)。
-fn add_pulse(layer: &CALayer, from: f64, period_ms: u32) {
+/// 呼吸:opacity 在 [0.2, 1.0] 间往复。周期越短视觉上越「闪」(快闪/慢闪/呼吸)。
+fn add_pulse(layer: &CALayer, period_ms: u32) {
+    const FLOOR: f64 = 0.2;
     let basic: Retained<CABasicAnimation> = unsafe {
         msg_send_id![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")]
     };
-    let from_n: Retained<NSNumber> = unsafe { msg_send_id![class!(NSNumber), numberWithDouble: from] };
+    let from_n: Retained<NSNumber> = unsafe { msg_send_id![class!(NSNumber), numberWithDouble: FLOOR] };
     let to_n: Retained<NSNumber> = unsafe { msg_send_id![class!(NSNumber), numberWithDouble: 1.0f64] };
     // autoreverses 下 duration 是半周期;period_ms 为完整周期。
     let duration = period_ms as f64 / 1000.0 / 2.0;
@@ -262,6 +337,15 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
         let _: () = msg_send![view, addSubview: &*ring];
     }
     let layer: Retained<CALayer> = unsafe { msg_send_id![&ring, layer] };
+    // layer-backed NSView 默认 anchorPoint=(0,0)(左下角),transform.scale 会从左下角
+    // 缩放 —— 视觉上波纹环从圆点的左下角往外扩,圆点显得在环的左下角。把锚点改到
+    // 中心、position 对齐窗口中心(= 圆点圆心),缩放即以圆点为圆心对称扩散。
+    unsafe {
+        let anchor = NSPoint::new(0.5, 0.5);
+        let _: () = msg_send![&layer, setAnchorPoint: anchor];
+        let center = NSPoint::new(WIN / 2.0, WIN / 2.0);
+        let _: () = msg_send![&layer, setPosition: center];
+    }
     let duration = period_ms as f64 / 1000.0;
 
     let scale: Retained<CABasicAnimation> = unsafe {
