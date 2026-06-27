@@ -28,7 +28,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
 - `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
 - `config.rs` — `Settings` / `StyleKey` / `StateStyle` / `LightPosition`：可配置灯效 + 浮窗位置，serde 持久化
-- `lib.rs` — `Monitor`（轮询编排 → `Snapshot`，含 Done-Notification 边沿检测）
+- `lib.rs` — `Monitor`（轮询编排 → `Snapshot`，含 DoneNotif 边沿检测）
 
 **UI 壳 `crates/app`（objc2/AppKit，纯 Rust，无 WebView）：**
 - `main.rs` — 入口：加载设置 → 建浮窗 → 建 `AppDelegate` → 状态栏 + tick 定时器
@@ -64,9 +64,9 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 | 3 | `Offline` | 🟣 紫 | 常亮 | 异常 / 卡住 / 进程没了 / 未知 |
 | 2 | `Working` | 🟡 黄 | 呼吸-慢速 | 正在跑 |
 | 1 | `Done` | 🟢 绿 | 波纹 | 完成 / 空闲 / 初始默认态 |
-| 1 | `Done-Notification` | 深绿 | 快速呼吸 | 其他状态转入Done状态 |
+| 0 | `DoneNotif` | 深绿 | 快速呼吸 | 其他状态转入Done状态 |
 
-- **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 Done-Notification，用深绿色表示，默认动效为快速呼吸
+- **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 DoneNotif (Done-Notification)，用深绿色表示，默认动效为快速呼吸
 - **聚合规则**：同一个Agent多个会话同时存在时，全局灯取**优先级最高**的那一个（`AgentStatus::priority()`，数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
 - **Sticky 锁定态**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
 - **灯效种类**：`Steady`（常亮）/ `Pulse`（呼吸）/ `Ripple`（波纹），共 3 种（详见 [Light Animations](#light-animations)）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**，无独立的明灭（Blink）动效。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
@@ -84,7 +84,7 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 | 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
 | 波纹 | Ripple | 一圈环以圆点为圆心对称扩散并淡出 | `transform`（绕圆心缩放的 `CATransform3D`）+ `opacity`（独立 `RingView`），单程一次扩散 |
 
-- 默认周期：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=1600（波纹）/ `Done-Notification`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
+- 默认周期：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=1600（波纹）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（DarkGreen，450ms）覆盖全局态。
 - 可配置：Settings 里每状态独立改 动效 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
 - 载体：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用独立 `RingView` 子视图叠加扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示静态色块/emoji，不可设动效。
@@ -109,4 +109,5 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
 - Position: 默认在屏幕中央，可以拖动
 - Content: 浮窗大小（滑块）、各状态样式（每状态可独立设 动画/颜色/周期）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）
-
+- Left Side Tabs(in order): Settings, DoneNotif, Done, Working, NeedsDeci, Error, Offline.
+- Left Side Buttons:
