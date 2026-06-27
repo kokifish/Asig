@@ -36,6 +36,11 @@ fn main() {
         click_through: RefCell::new(true),
         settings: RefCell::new(settings),
         last_sig: RefCell::new(String::new()),
+        tick_timer: RefCell::new(None),
+        settings_sidebar: RefCell::new(None),
+        settings_content: RefCell::new(None),
+        settings_panes: RefCell::new(None),
+        settings_selected: RefCell::new(0),
     });
     // popover / 设置窗改为首次点击时懒创建(省常驻内存,压到 <60MB 预算内)。
 

@@ -2,14 +2,14 @@
 
 use std::cell::RefCell;
 
-use agent_light_core::{LightPosition, Monitor, Settings, Snapshot, StyleKey};
+use agent_light_core::{Anim, LightPosition, Monitor, Settings, Snapshot, StyleKey};
 use objc2::rc::{Allocated, Retained};
-use objc2::runtime::NSObject;
+use objc2::runtime::{Bool, NSObject};
 use objc2::{
     ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send,
 };
-use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSStatusItem, NSWindow};
-use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect};
+use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSStatusItem, NSView, NSWindow};
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString, NSTimer};
 
 use crate::overlay::PillView;
 use crate::panel::Popover;
@@ -30,6 +30,16 @@ pub struct AppIvars {
     pub settings: RefCell<Settings>,
     /// 上一轮的状态签名;相同则跳过渲染(省 CPU)。
     pub last_sig: RefCell<String>,
+    /// tick 定时器引用;轮询间隔改动时作废旧 timer 重排。
+    pub tick_timer: RefCell<Option<Retained<NSTimer>>>,
+    /// 设置窗侧栏(切换 tab 时改前缀用)。
+    pub settings_sidebar: RefCell<Option<Retained<NSView>>>,
+    /// 设置窗右侧内容区(viewWithTag 找控件用)。
+    pub settings_content: RefCell<Option<Retained<NSView>>>,
+    /// 设置窗 8 个 pane(按 pane id 0..7 排列:常规/DoneNotif/.../Offline/关于)。切 tab 用。
+    pub settings_panes: RefCell<Option<Vec<Retained<NSView>>>>,
+    /// 设置窗当前选中的 tab(pane id)。
+    pub settings_selected: RefCell<i64>,
 }
 
 define_class!(
@@ -127,27 +137,101 @@ define_class!(
             self.settings_changed();
         }
 
-        /// 设置面板「样式」下拉 action。tag = key_idx*2 + field(0=动画,1=颜色)。
-        /// key_idx 索引 `StyleKey::ALL`(5 状态 + Done-Notification)。
+        /// 状态 pane 的「颜色 / 动画」下拉 action。tag 编码 (state, field)(见 settings.rs)。
         #[unsafe(method(changeStyle:))]
         fn change_style(&self, sender: *mut NSObject) {
             let tag: i64 = unsafe { msg_send![sender, tag] };
             let idx: i64 = unsafe { msg_send![sender, indexOfSelectedItem] };
-            let key_idx = (tag / 2) as usize;
-            let field = tag % 2;
-            let Some(key) = StyleKey::ALL.get(key_idx).copied() else {
+            let Some((key, field)) = crate::settings::parse_control_tag(tag) else {
                 return;
             };
-            let mut settings = self.ivars().settings.borrow_mut();
-            let st = settings.styles.entry(key).or_insert(key.default_style());
-            match field {
-                0 => st.anim = crate::settings::ANIM_ORDER[idx as usize],
-                1 => st.color = crate::settings::COLOR_ORDER[idx as usize],
-                _ => {}
+            let new_anim = {
+                let mut s = self.ivars().settings.borrow_mut();
+                let st = s.styles.entry(key).or_insert(key.default_style());
+                match field {
+                    crate::settings::F_COLOR => {
+                        st.color = crate::settings::COLOR_ORDER[idx as usize];
+                    }
+                    crate::settings::F_ANIM => {
+                        st.anim = crate::settings::ANIM_ORDER[idx as usize];
+                        if st.anim != Anim::Steady && st.period_ms == 0 {
+                            st.period_ms = 1000; // 离开常亮时给个默认周期
+                        }
+                    }
+                    _ => {}
+                }
+                st.anim
+            };
+            // 动画变了 → 同步速度滑块启用态 + 标签(常亮则禁用并显示「—」)
+            if field == crate::settings::F_ANIM {
+                self.sync_speed_controls(tag, key, new_anim);
             }
-            drop(settings);
             self.settings_changed();
         }
+
+        /// 侧栏 tab / 关于图标点击:切换右侧 pane。tag = pane id(0=常规 … 7=关于)。
+        #[unsafe(method(switchSettingsTab:))]
+        fn switch_settings_tab(&self, sender: *mut NSObject) {
+            let new: i64 = unsafe { msg_send![sender, tag] };
+            let old = *self.ivars().settings_selected.borrow();
+            if old == new || !(0..8).contains(&new) {
+                return;
+            }
+            let panes = self.ivars().settings_panes.borrow();
+            if let Some(v) = panes.as_ref() {
+                if let Some(p) = v.get(old as usize) {
+                    let _: () = unsafe { msg_send![p, setHidden: Bool::YES] };
+                }
+                if let Some(p) = v.get(new as usize) {
+                    let _: () = unsafe { msg_send![p, setHidden: Bool::NO] };
+                }
+            }
+            *self.ivars().settings_selected.borrow_mut() = new;
+            crate::settings::update_tab_prefixes(self, new);
+        }
+
+        /// 常规页「轮询间隔」下拉 action。改完即时重排 tick 定时器。
+        #[unsafe(method(changePollInterval:))]
+        fn change_poll_interval(&self, sender: *mut NSObject) {
+            let idx: i64 = unsafe { msg_send![sender, indexOfSelectedItem] };
+            let Some(&ms) = crate::settings::POLL_PRESETS_MS.get(idx as usize) else {
+                return;
+            };
+            self.ivars().settings.borrow_mut().poll_interval_ms = ms;
+            self.settings_changed();
+            crate::tray::reschedule(self, ms as f64 / 1000.0);
+        }
+
+        /// 状态 pane「速度」滑块 action(Hz)。tag 编码 (state, F_SPEED);实时刷新标签。
+        #[unsafe(method(changeSpeed:))]
+        fn change_speed(&self, sender: *mut NSObject) {
+            let tag: i64 = unsafe { msg_send![sender, tag] };
+            let Some((key, _)) = crate::settings::parse_control_tag(tag) else {
+                return;
+            };
+            let hz: f64 = unsafe { msg_send![sender, doubleValue] };
+            let period_ms = (1000.0 / hz).round().max(1.0) as u32;
+            {
+                let mut s = self.ivars().settings.borrow_mut();
+                s.styles.entry(key).or_insert(key.default_style()).period_ms = period_ms;
+            }
+            if let Some(content) = self.ivars().settings_content.borrow().as_ref().cloned() {
+                let label_tag = (tag / 100) * 100 + crate::settings::F_SPEED_LABEL;
+                if let Some(lbl) = crate::settings::view_with_tag(&content, label_tag) {
+                    unsafe {
+                        let _: () = msg_send![
+                            &lbl,
+                            setStringValue: &*NSString::from_str(&format!("{:.1} Hz", hz))
+                        ];
+                    }
+                }
+            }
+            self.settings_changed();
+        }
+
+        /// 占位 action(禁用的「开机启动」等无操作控件的兜底,实际不会触发)。
+        #[unsafe(method(noop:))]
+        fn noop(&self, _sender: *mut NSObject) {}
     }
 
     unsafe impl NSObjectProtocol for AppDelegate {}
@@ -161,6 +245,41 @@ impl AppDelegate {
         let on = *self.ivars().click_through.borrow();
         if let Some(w) = self.ivars().overlay_window.borrow().as_ref() {
             crate::overlay::set_click_through(w, on);
+        }
+    }
+
+    /// 动画切换后,按 tag 找到该状态的速度滑块 + 标签:常亮→禁用并显示「—」,否则启用。
+    fn sync_speed_controls(&self, control_tag: i64, key: StyleKey, anim: Anim) {
+        let Some(content) = self.ivars().settings_content.borrow().as_ref().cloned() else {
+            return;
+        };
+        let base = (control_tag / 100) * 100;
+        let steady = anim == Anim::Steady;
+        if let Some(slider) =
+            crate::settings::view_with_tag(&content, base + crate::settings::F_SPEED)
+        {
+            unsafe {
+                let _: () = msg_send![&slider, setEnabled: Bool::new(!steady)];
+            }
+        }
+        if let Some(lbl) =
+            crate::settings::view_with_tag(&content, base + crate::settings::F_SPEED_LABEL)
+        {
+            let text = if steady {
+                "—".to_string()
+            } else {
+                let p = self
+                    .ivars()
+                    .settings
+                    .borrow()
+                    .style_for(key)
+                    .period_ms
+                    .max(1);
+                format!("{:.1} Hz", 1000.0 / p as f64)
+            };
+            unsafe {
+                let _: () = msg_send![&lbl, setStringValue: &*NSString::from_str(&text)];
+            }
         }
     }
 }

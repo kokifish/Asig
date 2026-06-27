@@ -152,6 +152,13 @@ pub struct Settings {
     /// Signal Light 浮窗位置(跨启动记忆)。缺省(None)→ 主屏左上角默认位。
     #[serde(default)]
     pub light_pos: Option<LightPosition>,
+    /// 轮询间隔(ms)。DEV.md 默认 3s。app 层据此重排 tick 定时器。
+    #[serde(default = "default_poll_interval_ms")]
+    pub poll_interval_ms: u32,
+}
+
+fn default_poll_interval_ms() -> u32 {
+    3000
 }
 
 impl Default for Settings {
@@ -164,6 +171,7 @@ impl Default for Settings {
             dot_size: 16,
             styles,
             light_pos: None,
+            poll_interval_ms: default_poll_interval_ms(),
         }
     }
 }
@@ -317,6 +325,7 @@ mod tests {
         let text = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&text).unwrap();
         assert_eq!(back.dot_size, 16);
+        assert_eq!(back.poll_interval_ms, 3000);
         assert!(back.styles.contains_key(&StyleKey::Done));
         assert!(back.styles.contains_key(&StyleKey::DoneNotif)); // 新增键也序列化
     }
@@ -327,6 +336,7 @@ mod tests {
         let old = r#"{"dot_size":20,"styles":{"done":{"color":"green","anim":"ripple","period_ms":1600},"working":{"color":"yellow","anim":"pulse","period_ms":1800}}}"#;
         let s: Settings = serde_json::from_str(old).unwrap();
         assert_eq!(s.dot_size, 20);
+        assert_eq!(s.poll_interval_ms, 3000); // 旧配置无该字段 → 默认 3s
         assert!(matches!(
             s.light_for(AgentStatus::Done),
             LightAnim::Ripple { .. }

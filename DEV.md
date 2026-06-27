@@ -23,7 +23,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 
 **内核 `crates/core`：**
 - `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
-- `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）；读 session 文件 + pid 存活判定，做可靠的 Offline 检测
+- `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）；读 session 文件 + pid 存活判定做 Offline 检测；busy 时读 transcript 尾部 `stop_reason`（`end_turn`→NeedsDeci / `tool_use`→Working）做可靠的待决策检测
 - `openclaw.rs` — `OpenClawSource`：SQLite 状态库（Phase 3 补全，当前占位）
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
 - `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
@@ -33,11 +33,11 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 **UI 壳 `crates/app`（objc2/AppKit，纯 Rust，无 WebView）：**
 - `main.rs` — 入口：加载设置 → 建浮窗 → 建 `AppDelegate` → 状态栏 + tick 定时器
 - `app_delegate.rs` — `AppDelegate`（declare_class）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽
-- `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + emoji；点击弹 Drop-down）+ tick 定时器
+- `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
 - `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
-- `settings.rs` — Settings Panel：浮窗大小 / 点击穿透 / 各状态样式（6 行）
-- `palette.rs` — 颜色→NSColor/emoji、动效中文名映射
+- `settings.rs` — Settings Panel：左侧栏导航（常规 + 各状态 tab + 底部图标行）+ 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)
+- `palette.rs` — 颜色→NSColor/中文名、动效中文名、状态 emoji(下拉面板用)映射
 
 ## Build and Run
 
@@ -64,7 +64,7 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 | 3 | `Offline` | 🟣 紫 | 常亮 | 异常 / 卡住 / 进程没了 / 未知 |
 | 2 | `Working` | 🟡 黄 | 呼吸-慢速 | 正在跑 |
 | 1 | `Done` | 🟢 绿 | 波纹 | 完成 / 空闲 / 初始默认态 |
-| 0 | `DoneNotif` | 深绿 | 快速呼吸 | 其他状态转入Done状态 |
+| 0 | `DoneNotif` | 💚 深绿 | 快速呼吸 | 其他状态转入Done状态 |
 
 - **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 DoneNotif (Done-Notification)，用深绿色表示，默认动效为快速呼吸
 - **聚合规则**：同一个Agent多个会话同时存在时，全局灯取**优先级最高**的那一个（`AgentStatus::priority()`，数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
@@ -82,12 +82,13 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 |---|---|---|---|---|
 | 常亮 | Steady | 不变，纯色常亮 | 无周期，period_ms 置 0 |
 | 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
-| 波纹 | Ripple | 一圈环以圆点为圆心对称扩散并淡出 | `transform`（绕圆心缩放的 `CATransform3D`）+ `opacity`（独立 `RingView`），单程一次扩散 |
+| 波纹 | Ripple | 两圈环以圆点为圆心、错相(半周期)对称扩散并淡出 | `transform`（绕圆心缩放的 `CATransform3D`）+ `opacity`（2 个错相 `RingView`），单程一次扩散 |
 
 - 默认周期：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=1600（波纹）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（DarkGreen，450ms）覆盖全局态。
 - 可配置：Settings 里每状态独立改 动效 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
-- 载体：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用独立 `RingView` 子视图叠加扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示静态色块/emoji，不可设动效。
+- 载体：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用两个错相 `RingView` 子视图扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示自绘彩色圆点（`tray::circle_image`，`setTemplate:NO` 保留真彩），不可设动效。
+- 速度（周期）以 **Hz** 呈现给用户（`period_ms = 1000 / Hz`）；常亮（Steady）无周期、速度不可设。
 
 ### Signal Light
 
@@ -108,6 +109,11 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
 - Position: 默认在屏幕中央，可以拖动
-- Content: 浮窗大小（滑块）、各状态样式（每状态可独立设 动画/颜色/周期）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）
-- Left Side Tabs(in order): Settings, DoneNotif, Done, Working, NeedsDeci, Error, Offline.
-- Left Side Buttons:
+- 导航: 左侧栏（顶部 tab 列表 + 底部图标行）+ 右侧 pane 切换。点 tab / 「关于」图标切换右侧 pane。
+- Content:
+  - 常规 pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、开机启动（占位，待实现）。
+  - 各状态 pane(每状态一个): 颜色 / 动画 / 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。
+  - 关于 pane: 版本号 + GitHub 链接（纯展示）。
+  - 各状态可独立改 动画 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
+- Left Side Tabs(in order): 常规(General), DoneNotif, Done, Working, NeedsDeci, Error, Offline.
+- Left Side Buttons(底部图标行, 左→右): 关于(About, 打开「关于」pane)、访问官网、调试、捐赠、退出Asig。除「关于」外均为占位禁用按钮(留待实现)。

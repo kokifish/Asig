@@ -1,20 +1,8 @@
 //! 灯的「颜色」映射。
-//! Phase-1 MVP:菜单栏灯用 emoji(零图片资源,确定能编译/运行)。
-//! Phase-2:浮窗用 NSColor + CoreAnimation(见 overlay.rs)。
+//! 菜单栏灯用自绘彩色圆点(tray.rs::circle_image,NSImage);浮窗用 NSColor + CoreAnimation(见 overlay.rs)。
+//! 下拉面板的会话列表用 emoji(palette::status_emoji)。
 
 use agent_light_core::{AgentStatus, Color};
-
-/// 按颜色取 emoji(菜单栏灯用)。深绿无现成圆点 emoji,用心形 💚 近似(Done Notification)。
-pub fn color_emoji(c: Color) -> &'static str {
-    match c {
-        Color::Green => "🟢",
-        Color::DarkGreen => "💚",
-        Color::Yellow => "🟡",
-        Color::Amber => "🟠",
-        Color::Red => "🔴",
-        Color::Purple => "🟣",
-    }
-}
 
 pub fn status_emoji(s: AgentStatus) -> &'static str {
     match s {

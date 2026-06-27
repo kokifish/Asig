@@ -3,8 +3,8 @@
 //! 渲染:自绘 NSView(NSBezierPath 圆角 + NSColor 填充)——绕开 CALayer 的 CGColor 依赖。
 //! 灯效(全部交 render server 进程驱动 GPU 插值,本进程 CPU ~0%):
 //!   - Steady 常亮 / Pulse 呼吸(快闪·慢闪·呼吸只是周期不同):动 layer "opacity";
-//!   - Ripple 波纹:一个自绘环子视图,动其 layer "transform"(绕圆心缩放的 CATransform3D)+ "opacity",
-//!     从中心扩散并淡出(环也自绘,故无需 CGColor)。
+//!   - Ripple 波纹:两个自绘环子视图错相扩散,动其 layer "transform"(绕圆心缩放的
+//!     CATransform3D)+ "opacity",从中心扩散并淡出(环也自绘,故无需 CGColor)。
 //!
 //! 窗口固定大尺寸(120×120,透明 + 默认点击穿透),核心圆点按设置 `dot_size` 居中绘制、
 //! 波纹环在其中扩散。改大小只重绘圆点,**不**改窗口尺寸 —— 避免运行时对窗口发
@@ -133,7 +133,8 @@ fn resolve_origin(saved: Option<LightPosition>, win: CGFloat) -> NSPoint {
 // ---- PillView:自绘圆点 + 持有可选的波纹环 ----
 pub struct PillState {
     pub color: Retained<NSColor>,
-    pub ring: Option<Retained<RingView>>,
+    /// 波纹环(2 个,错相扩散)。无波纹时为空。
+    pub rings: Vec<Retained<RingView>>,
     pub dot: CGFloat,
 }
 
@@ -172,7 +173,7 @@ impl PillView {
         let allocated: Allocated<Self> = unsafe { msg_send![Self::class(), alloc] };
         let partial = allocated.set_ivars(RefCell::new(PillState {
             color,
-            ring: None,
+            rings: Vec::new(),
             dot,
         }));
         unsafe { msg_send![super(partial), initWithFrame: frame] }
@@ -270,7 +271,7 @@ pub fn set_size(view: &PillView, dot_size: u32) {
     {
         let mut st = view.ivars().borrow_mut();
         st.dot = dot_size as CGFloat;
-        if let Some(ring) = st.ring.take() {
+        for ring in st.rings.drain(..) {
             let _: () = unsafe { msg_send![&*ring, removeFromSuperview] };
         }
     }
@@ -287,7 +288,7 @@ pub fn set_light(view: &PillView, anim: LightAnim) {
     let _: () = unsafe { msg_send![&layer, setOpacity: 1.0f32] };
     {
         let mut st = view.ivars().borrow_mut();
-        if let Some(ring) = st.ring.take() {
+        for ring in st.rings.drain(..) {
             let _: () = unsafe { msg_send![&*ring, removeFromSuperview] };
         }
     }
@@ -327,8 +328,12 @@ fn add_pulse(layer: &CALayer, period_ms: u32) {
     }
 }
 
-/// 波纹:一个自绘环子视图,缩放从 1.0 扩到 MAX_SCALE、opacity 从 0.85 淡到 0,
-/// 单向循环(末尾近乎透明,故回弹不可见,视觉上即连续扩散的环)。
+/// 波纹环数量。两环错相半个周期 → 视觉上连续扩散。
+const RIPPLE_RINGS: usize = 2;
+
+/// 波纹:N 个自绘环子视图错相扩散。每个环缩放从 1.0 扩到 MAX_SCALE、opacity 从 0.85 淡到 0,
+/// 单向循环(末尾近乎透明,故回弹不可见,视觉上即连续扩散)。多环用 timeOffset 错开相位,
+/// 环以更密节奏接连出现。
 ///
 /// 居中关键:layer-backed NSView 的 anchorPoint/position 由 AppKit 托管、运行时改会被
 /// 重置(故早先「改 anchorPoint 到中心」无效,环仍从左下角缩放、圆心偏离圆点)。这里
@@ -339,12 +344,6 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
     let dot = view.ivars().borrow().dot;
     let o = dot_origin(dot);
     let ring_frame = NSRect::new(NSPoint::new(o, o), NSSize::new(dot, dot));
-    let ring = RingView::new(nscolor(color), ring_frame);
-    unsafe {
-        let _: () = msg_send![&ring, setWantsLayer: Bool::YES];
-        let _: () = msg_send![view, addSubview: &*ring];
-    }
-    let layer: Retained<CALayer> = unsafe { msg_send![&ring, layer] };
     let duration = period_ms as f64 / 1000.0;
 
     // 环视图自身坐标里的圆心 = (dot/2, dot/2)(环描边内切于 dot×dot bounds)。
@@ -352,6 +351,30 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
     let from_t = scale_about(c, c, 1.0);
     let to_t = scale_about(c, c, MAX_SCALE);
 
+    let mut rings = Vec::with_capacity(RIPPLE_RINGS);
+    for i in 0..RIPPLE_RINGS {
+        let ring = RingView::new(nscolor(color), ring_frame);
+        unsafe {
+            let _: () = msg_send![&ring, setWantsLayer: Bool::YES];
+            let _: () = msg_send![view, addSubview: &*ring];
+        }
+        let layer: Retained<CALayer> = unsafe { msg_send![&ring, layer] };
+        // 第 i 环偏移 i/N 个周期 → 多环均匀错相。
+        let phase = i as f64 * duration / RIPPLE_RINGS as f64;
+        ripple_anims(&layer, from_t, to_t, duration, phase);
+        rings.push(ring);
+    }
+    view.ivars().borrow_mut().rings = rings;
+}
+
+/// 给一个环的 layer 装上 scale + opacity 动画(均单向无限循环;`phase` 用作 timeOffset 错相)。
+fn ripple_anims(
+    layer: &CALayer,
+    from_t: CATransform3D,
+    to_t: CATransform3D,
+    duration: f64,
+    phase: f64,
+) {
     let scale: Retained<CABasicAnimation> = unsafe {
         msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("transform")]
     };
@@ -364,20 +387,20 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
         let _: () = msg_send![&scale, setFromValue: &*from_v];
         let _: () = msg_send![&scale, setToValue: &*to_v];
         let _: () = msg_send![&scale, setDuration: duration];
+        let _: () = msg_send![&scale, setTimeOffset: phase];
         let _: () = msg_send![&scale, setRepeatCount: f32::INFINITY];
         let _: () =
-            msg_send![&layer, addAnimation: &*scale, forKey: &*NSString::from_str("rippleScale")];
+            msg_send![layer, addAnimation: &*scale, forKey: &*NSString::from_str("rippleScale")];
 
         let from2: Retained<NSNumber> = msg_send![class!(NSNumber), numberWithDouble: 0.85f64];
         let to2: Retained<NSNumber> = msg_send![class!(NSNumber), numberWithDouble: 0.0f64];
         let _: () = msg_send![&opacity, setFromValue: &*from2];
         let _: () = msg_send![&opacity, setToValue: &*to2];
         let _: () = msg_send![&opacity, setDuration: duration];
+        let _: () = msg_send![&opacity, setTimeOffset: phase];
         let _: () = msg_send![&opacity, setRepeatCount: f32::INFINITY];
-        let _: () = msg_send![&layer, addAnimation: &*opacity, forKey: &*NSString::from_str("rippleOpacity")];
+        let _: () = msg_send![layer, addAnimation: &*opacity, forKey: &*NSString::from_str("rippleOpacity")];
     }
-
-    view.ivars().borrow_mut().ring = Some(ring);
 }
 
 /// 波纹环最大缩放倍数(扩到 2.6× 圆点直径,仍在 120px 窗口内不裁切)。
