@@ -50,4 +50,5 @@ objc2-quartz-core = { version = "0.2", features = [
     "CAAnimation", # 含 CABasicAnimation
     "CAMediaTiming",
     "CAMediaTimingFunction",
+    "CATransform3D", # 波纹「绕圆心缩放」变换动画(绕开 layer-backed 视图 anchorPoint 被重置的问题)
 ] }

@@ -8,7 +8,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 
 ## Principals
 
-- 结构清晰，高内聚低耦合
+- 结构清晰，逻辑简单，高内聚低耦合，提高代码复用率，降低总代码量和行数
 - 不过度设计，避免不必要的薄封装
 
 ## Tech Overview
@@ -60,12 +60,12 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 |---|---|---|---|---|
 | 常亮 | Steady | 不变，纯色常亮 | 无周期，period_ms 置 0 |
 | 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
-| 波纹 | Ripple | 一圈环以圆点为圆心对称扩散并淡出 | `transform.scale` + `opacity`（独立 `RingView`，锚点设为中心），单程一次扩散 |
+| 波纹 | Ripple | 一圈环以圆点为圆心对称扩散并淡出 | `transform`（绕圆心缩放的 `CATransform3D`）+ `opacity`（独立 `RingView`），单程一次扩散 |
 
 - 默认周期：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=1600（波纹）/ `Done-Notification`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（DarkGreen，450ms）覆盖全局态。
 - 可配置：Settings 里每状态独立改 动效 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
-- 载体：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用独立 `RingView` 子视图叠加扩散（锚点对齐圆点圆心，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示静态色块/emoji，不可设动效。
+- 载体：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用独立 `RingView` 子视图叠加扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示静态色块/emoji，不可设动效。
 
 ### Signal Light
 

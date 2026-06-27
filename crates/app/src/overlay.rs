@@ -18,8 +18,8 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
 use objc2::{class, declare_class, msg_send, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{NSBezierPath, NSColor, NSScreen, NSView, NSWindow};
-use objc2_foundation::{CGFloat, NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString};
-use objc2_quartz_core::{CABasicAnimation, CALayer};
+use objc2_foundation::{CGFloat, NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue};
+use objc2_quartz_core::{CABasicAnimation, CALayer, CATransform3D, NSValueCATransform3DAdditions};
 
 /// 固定窗口尺寸(透明,容得下最大圆点 + 波纹扩散)。
 const WIN: CGFloat = 120.0;
@@ -325,8 +325,14 @@ fn add_pulse(layer: &CALayer, period_ms: u32) {
     }
 }
 
-/// 波纹:一个自绘环子视图,transform.scale 从 1.0 扩到 2.6、opacity 从 0.85 淡到 0,
+/// 波纹:一个自绘环子视图,缩放从 1.0 扩到 MAX_SCALE、opacity 从 0.85 淡到 0,
 /// 单向循环(末尾近乎透明,故回弹不可见,视觉上即连续扩散的环)。
+///
+/// 居中关键:layer-backed NSView 的 anchorPoint/position 由 AppKit 托管、运行时改会被
+/// 重置(故早先「改 anchorPoint 到中心」无效,环仍从左下角缩放、圆心偏离圆点)。这里
+/// 不动锚点,改用一个「绕环自身圆心缩放」的 CATransform3D 作动画
+/// (translate(+c)·scale·translate(-c)),无论 anchorPoint 在哪,环都在缩放时圆心始终
+/// 对齐圆点圆心,对称向外扩散。
 fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
     let dot = view.ivars().borrow().dot;
     let o = dot_origin(dot);
@@ -337,28 +343,24 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
         let _: () = msg_send![view, addSubview: &*ring];
     }
     let layer: Retained<CALayer> = unsafe { msg_send_id![&ring, layer] };
-    // layer-backed NSView 默认 anchorPoint=(0,0)(左下角),transform.scale 会从左下角
-    // 缩放 —— 视觉上波纹环从圆点的左下角往外扩,圆点显得在环的左下角。把锚点改到
-    // 中心、position 对齐窗口中心(= 圆点圆心),缩放即以圆点为圆心对称扩散。
-    unsafe {
-        let anchor = NSPoint::new(0.5, 0.5);
-        let _: () = msg_send![&layer, setAnchorPoint: anchor];
-        let center = NSPoint::new(WIN / 2.0, WIN / 2.0);
-        let _: () = msg_send![&layer, setPosition: center];
-    }
     let duration = period_ms as f64 / 1000.0;
 
+    // 环视图自身坐标里的圆心 = (dot/2, dot/2)(环描边内切于 dot×dot bounds)。
+    let c = dot / 2.0;
+    let from_t = scale_about(c, c, 1.0);
+    let to_t = scale_about(c, c, MAX_SCALE);
+
     let scale: Retained<CABasicAnimation> = unsafe {
-        msg_send_id![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("transform.scale")]
+        msg_send_id![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("transform")]
     };
     let opacity: Retained<CABasicAnimation> = unsafe {
         msg_send_id![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")]
     };
     unsafe {
-        let from1: Retained<NSNumber> = msg_send_id![class!(NSNumber), numberWithDouble: 1.0f64];
-        let to1: Retained<NSNumber> = msg_send_id![class!(NSNumber), numberWithDouble: 2.6f64];
-        let _: () = msg_send![&scale, setFromValue: &*from1];
-        let _: () = msg_send![&scale, setToValue: &*to1];
+        let from_v: Retained<NSValue> = NSValue::valueWithCATransform3D(from_t);
+        let to_v: Retained<NSValue> = NSValue::valueWithCATransform3D(to_t);
+        let _: () = msg_send![&scale, setFromValue: &*from_v];
+        let _: () = msg_send![&scale, setToValue: &*to_v];
         let _: () = msg_send![&scale, setDuration: duration];
         let _: () = msg_send![&scale, setRepeatCount: f32::INFINITY];
         let _: () = msg_send![&layer, addAnimation: &*scale forKey: &*NSString::from_str("rippleScale")];
@@ -373,4 +375,18 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
     }
 
     view.ivars().borrow_mut().ring = Some(ring);
+}
+
+/// 波纹环最大缩放倍数(扩到 2.6× 圆点直径,仍在 120px 窗口内不裁切)。
+const MAX_SCALE: CGFloat = 2.6;
+
+/// 构造「绕点 (cx, cy) 缩放 s 倍」的 2D 仿射 CATransform3D(s=1 即单位矩阵)。
+/// 不依赖 layer 的 anchorPoint,故对 layer-backed NSView 也稳定有效。
+fn scale_about(cx: CGFloat, cy: CGFloat, s: CGFloat) -> CATransform3D {
+    CATransform3D {
+        m11: s, m12: 0.0, m13: 0.0, m14: 0.0,
+        m21: 0.0, m22: s, m23: 0.0, m24: 0.0,
+        m31: 0.0, m32: 0.0, m33: 1.0, m34: 0.0,
+        m41: cx * (1.0 - s), m42: cy * (1.0 - s), m43: 0.0, m44: 1.0,
+    }
 }
