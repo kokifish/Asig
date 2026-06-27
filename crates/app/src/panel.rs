@@ -6,6 +6,7 @@ use agent_light_core::Snapshot;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
 use objc2::{class, declare_class, msg_send, msg_send_id, mutability, sel, ClassType, DeclaredClass};
+use objc2::runtime::Sel;
 use objc2_app_kit::{
     NSApplication, NSBezierPath, NSButton, NSColor, NSFont, NSScreen, NSStatusBarButton, NSStatusItem,
     NSTextField, NSView, NSWindow,
@@ -188,35 +189,34 @@ pub fn build(delegate: &AppDelegate, pos: Option<NSPoint>) -> Popover {
     );
 
     // —— 顶部三按钮(左→右):设置 / 锁定 / 退出 ——
-    let btn_settings: Retained<NSButton> = unsafe { msg_send_id![class!(NSButton), new] };
-    unsafe {
-        let _: () = msg_send![&btn_settings, setFrame: NSRect::new(NSPoint::new(16.0, PANEL_H - 64.0), NSSize::new(84.0, 30.0))];
-        let _: () = msg_send![&btn_settings, setTitle: &*NSString::from_str("设置")];
-        let _: () = msg_send![&btn_settings, setTarget: delegate];
-        let _: () = msg_send![&btn_settings, setAction: sel!(openSettings:)];
-        let _: () = msg_send![&content, addSubview: &*btn_settings];
-    }
+    let _ = add_button(
+        &content,
+        NSRect::new(NSPoint::new(16.0, PANEL_H - 64.0), NSSize::new(84.0, 30.0)),
+        "设置",
+        delegate,
+        sel!(openSettings:),
+    );
 
     // 锁定:勾选=Signal Light 不可拖动(click_through)。复用 toggleClickThrough:。
-    let btn_lock: Retained<NSButton> = unsafe { msg_send_id![class!(NSButton), new] };
+    let btn_lock = add_button(
+        &content,
+        NSRect::new(NSPoint::new(110.0, PANEL_H - 64.0), NSSize::new(74.0, 30.0)),
+        "锁定",
+        delegate,
+        sel!(toggleClickThrough:),
+    );
     unsafe {
         let _: () = msg_send![&btn_lock, setButtonType: 3u64]; // NSSwitchButton = 圆角勾选
-        let _: () = msg_send![&btn_lock, setTitle: &*NSString::from_str("锁定")];
         let _: () = msg_send![&btn_lock, setState: if locked { 1i64 } else { 0 }];
-        let _: () = msg_send![&btn_lock, setTarget: delegate];
-        let _: () = msg_send![&btn_lock, setAction: sel!(toggleClickThrough:)];
-        let _: () = msg_send![&btn_lock, setFrame: NSRect::new(NSPoint::new(110.0, PANEL_H - 64.0), NSSize::new(74.0, 30.0))];
-        let _: () = msg_send![&content, addSubview: &*btn_lock];
     }
 
-    let btn_quit: Retained<NSButton> = unsafe { msg_send_id![class!(NSButton), new] };
-    unsafe {
-        let _: () = msg_send![&btn_quit, setFrame: NSRect::new(NSPoint::new(PANEL_W - 16.0 - 84.0, PANEL_H - 64.0), NSSize::new(84.0, 30.0))];
-        let _: () = msg_send![&btn_quit, setTitle: &*NSString::from_str("退出")];
-        let _: () = msg_send![&btn_quit, setTarget: delegate];
-        let _: () = msg_send![&btn_quit, setAction: sel!(quit:)];
-        let _: () = msg_send![&content, addSubview: &*btn_quit];
-    }
+    let _ = add_button(
+        &content,
+        NSRect::new(NSPoint::new(PANEL_W - 16.0 - 84.0, PANEL_H - 64.0), NSSize::new(84.0, 30.0)),
+        "退出",
+        delegate,
+        sel!(quit:),
+    );
 
     // 会话列表
     let label: Retained<NSTextField> = unsafe {
@@ -243,6 +243,26 @@ fn add_label(content: &Retained<NSView>, frame: NSRect, text: &str, bold: bool) 
         let _: () = msg_send![&label, setFrame: frame];
         let _: () = msg_send![&**content, addSubview: &*label];
     }
+}
+
+/// 建一个普通按钮:frame / title / target / action 一次配齐并加到 content;返回它供进一步
+/// 定制(如「锁定」再设 buttonType + state)。消除三按钮的重复样板。
+fn add_button(
+    content: &Retained<NSView>,
+    frame: NSRect,
+    title: &str,
+    delegate: &AppDelegate,
+    action: Sel,
+) -> Retained<NSButton> {
+    let btn: Retained<NSButton> = unsafe { msg_send_id![class!(NSButton), new] };
+    unsafe {
+        let _: () = msg_send![&btn, setFrame: frame];
+        let _: () = msg_send![&btn, setTitle: &*NSString::from_str(title)];
+        let _: () = msg_send![&btn, setTarget: delegate];
+        let _: () = msg_send![&btn, setAction: action];
+        let _: () = msg_send![&**content, addSubview: &*btn];
+    }
+    btn
 }
 
 pub fn is_visible(p: &Popover) -> bool {

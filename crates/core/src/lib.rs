@@ -18,25 +18,15 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-/// 一次轮询的快照。
+/// 一次轮询的快照。灯效由 app 层的 `Settings::light(&snap)` 决定(done_notif 优先),
+/// 内核不内嵌渲染策略。
 pub struct Snapshot {
     pub sessions: Vec<AgentSession>,
     /// 全局灯态(多会话聚合)。
     pub global: AgentStatus,
-    /// 刚转入 Done 的 30 秒内为 true —— UI 据此显示 Done Notification
-    /// (深绿、快速呼吸);过期或离开 Done 后回退到 `global` 的默认灯效。
+    /// 刚转入 Done 的 30 秒内为 true —— app 层据此用 Done-Notification 灯效覆盖
+    /// `global` 的默认灯效;过期或离开 Done 后回退 `global`。
     pub done_notif: bool,
-}
-
-impl Snapshot {
-    /// 实际应渲染的灯效:Done Notification 优先于 `global` 的默认灯效。
-    pub fn light(&self) -> LightAnim {
-        if self.done_notif {
-            LightAnim::Pulse { color: Color::DarkGreen, period_ms: 450 }
-        } else {
-            self.global.light()
-        }
-    }
 }
 
 /// 监控引擎:持有一组 source + 每会话的锁定状态(sticky 状态机)。

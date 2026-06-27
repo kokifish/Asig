@@ -390,3 +390,45 @@ fn scale_about(cx: CGFloat, cy: CGFloat, s: CGFloat) -> CATransform3D {
         m41: cx * (1.0 - s), m42: cy * (1.0 - s), m43: 0.0, m44: 1.0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::scale_about;
+    use objc2_foundation::CGFloat;
+    use objc2_quartz_core::CATransform3D;
+
+    /// 把 2D 仿射 CATransform3D 作用到点 (x,y)(只用 m11/m21/m41 与 m12/m22/m42)。
+    fn apply2d(t: &CATransform3D, x: CGFloat, y: CGFloat) -> (CGFloat, CGFloat) {
+        (t.m11 * x + t.m21 * y + t.m41, t.m12 * x + t.m22 * y + t.m42)
+    }
+
+    #[test]
+    fn scale_about_is_identity_at_one() {
+        let t = scale_about(20.0, 20.0, 1.0);
+        assert!((t.m11 - 1.0).abs() < 1e-9 && (t.m22 - 1.0).abs() < 1e-9);
+        assert!(t.m41.abs() < 1e-9 && t.m42.abs() < 1e-9); // 无平移
+        assert!((t.m33 - 1.0).abs() < 1e-9 && (t.m44 - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scale_about_fixes_center_point() {
+        // 波纹居中的几何不变量:无论缩放多少倍,圆心 (c,c) 经变换后仍在原位 ——
+        // 这正是「环以圆点为圆心对称扩散」、不因 anchorPoint 偏移的数学保证。
+        for &c in &[10.0_f64, 20.0, 40.0] {
+            for &s in &[1.3, 1.77, 2.0, 2.6] {
+                let (x, y) = apply2d(&scale_about(c, c, s), c, c);
+                assert!((x - c).abs() < 1e-9, "c={c} s={s}: x={x} != {c}");
+                assert!((y - c).abs() < 1e-9, "c={c} s={s}: y={y} != {c}");
+            }
+        }
+    }
+
+    #[test]
+    fn scale_about_scales_radius_about_center() {
+        // 距圆心 r 的点,缩放后距圆心 s*r(环半径随 s 线性扩大,圆心不动)。
+        let (c, r, s) = (20.0, 15.0, 2.0);
+        let (x, y) = apply2d(&scale_about(c, c, s), c + r, c);
+        let dist = ((x - c).powi(2) + (y - c).powi(2)).sqrt();
+        assert!((dist - s * r).abs() < 1e-9, "dist={dist} expected={}", s * r);
+    }
+}

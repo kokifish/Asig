@@ -17,6 +17,28 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - **UI 壳**: objc2 / AppKit 纯 Rust，无 WebView — 常驻灯 <60MB，CoreAnimation 交 render server，CPU ~0%
 - **跨平台**: 暂只 macOS，留口子（内核可移植，UI 壳按平台另写）
 
+### Code Map
+
+文件级架构（一句话/文件）。分层：内核 `crates/core`（可移植，零 AppKit）→ UI 壳 `crates/app`（objc2/AppKit），壳只调 `Monitor::poll()` 拿 `Snapshot` 驱动灯。
+
+**内核 `crates/core`：**
+- `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
+- `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）；读 session 文件 + pid 存活判定，做可靠的 Offline 检测
+- `openclaw.rs` — `OpenClawSource`：SQLite 状态库（Phase 3 补全，当前占位）
+- `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
+- `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
+- `config.rs` — `Settings` / `StyleKey` / `StateStyle` / `LightPosition`：可配置灯效 + 浮窗位置，serde 持久化
+- `lib.rs` — `Monitor`（轮询编排 → `Snapshot`，含 Done-Notification 边沿检测）
+
+**UI 壳 `crates/app`（objc2/AppKit，纯 Rust，无 WebView）：**
+- `main.rs` — 入口：加载设置 → 建浮窗 → 建 `AppDelegate` → 状态栏 + tick 定时器
+- `app_delegate.rs` — `AppDelegate`（declare_class）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽
+- `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + emoji；点击弹 Drop-down）+ tick 定时器
+- `overlay.rs` — Signal Light 浮窗：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
+- `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
+- `settings.rs` — Settings Panel：浮窗大小 / 点击穿透 / 各状态样式（6 行）
+- `palette.rs` — 颜色→NSColor/emoji、动效中文名映射
+
 ## Build and Run
 
 ```bash
