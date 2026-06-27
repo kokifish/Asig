@@ -33,6 +33,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSButton",
     "NSControl",
     "NSView",
+    "NSImage", # 菜单栏自绘圆点 + 底栏 SF Symbol 单色图标
     # Phase 2 浮窗:
     "NSWindow",
     "NSColor",

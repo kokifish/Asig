@@ -8,6 +8,7 @@ mod settings;
 mod tray;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use app_delegate::{AppDelegate, AppIvars};
 use objc2::rc::Retained;
@@ -41,6 +42,7 @@ fn main() {
         settings_content: RefCell::new(None),
         settings_panes: RefCell::new(None),
         settings_selected: RefCell::new(0),
+        state_controls: RefCell::new(HashMap::new()),
     });
     // popover / 设置窗改为首次点击时懒创建(省常驻内存,压到 <60MB 预算内)。
 

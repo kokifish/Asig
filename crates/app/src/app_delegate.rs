@@ -10,6 +10,7 @@ use objc2::{
 };
 use objc2_app_kit::{NSApplication, NSApplicationDelegate, NSStatusItem, NSView, NSWindow};
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString, NSTimer};
+use std::collections::HashMap;
 
 use crate::overlay::PillView;
 use crate::panel::Popover;
@@ -40,6 +41,8 @@ pub struct AppIvars {
     pub settings_panes: RefCell<Option<Vec<Retained<NSView>>>>,
     /// 设置窗当前选中的 tab(pane id)。
     pub settings_selected: RefCell<i64>,
+    /// 各状态 pane 的控件(色块/radio/速度),按 StyleKey 索引;reset / 选择变更时刷新。
+    pub state_controls: RefCell<HashMap<StyleKey, crate::settings::StateControls>>,
 }
 
 define_class!(
@@ -137,35 +140,85 @@ define_class!(
             self.settings_changed();
         }
 
-        /// 状态 pane 的「颜色 / 动画」下拉 action。tag 编码 (state, field)(见 settings.rs)。
-        #[unsafe(method(changeStyle:))]
-        fn change_style(&self, sender: *mut NSObject) {
+        /// 状态 pane「Color」色块单选 action。tag = base + COLOR_OFF + i。
+        #[unsafe(method(changeColor:))]
+        fn change_color(&self, sender: *mut NSObject) {
             let tag: i64 = unsafe { msg_send![sender, tag] };
-            let idx: i64 = unsafe { msg_send![sender, indexOfSelectedItem] };
-            let Some((key, field)) = crate::settings::parse_control_tag(tag) else {
+            let Some((key, sub)) = crate::settings::parse_control_tag(tag) else {
                 return;
             };
-            let new_anim = {
+            let i = (sub - crate::settings::COLOR_OFF) as usize;
+            if i >= crate::settings::COLOR_ORDER.len() {
+                return;
+            }
+            {
+                let mut s = self.ivars().settings.borrow_mut();
+                s.styles.entry(key).or_insert(key.default_style()).color =
+                    crate::settings::COLOR_ORDER[i];
+            }
+            self.refresh_state(key);
+            self.settings_changed();
+        }
+
+        /// 状态 pane「Animation」单选 action。tag = base + ANIM_OFF + i。
+        #[unsafe(method(changeAnim:))]
+        fn change_anim(&self, sender: *mut NSObject) {
+            let tag: i64 = unsafe { msg_send![sender, tag] };
+            let Some((key, sub)) = crate::settings::parse_control_tag(tag) else {
+                return;
+            };
+            let i = (sub - crate::settings::ANIM_OFF) as usize;
+            if i >= crate::settings::ANIM_ORDER.len() {
+                return;
+            }
+            {
                 let mut s = self.ivars().settings.borrow_mut();
                 let st = s.styles.entry(key).or_insert(key.default_style());
-                match field {
-                    crate::settings::F_COLOR => {
-                        st.color = crate::settings::COLOR_ORDER[idx as usize];
-                    }
-                    crate::settings::F_ANIM => {
-                        st.anim = crate::settings::ANIM_ORDER[idx as usize];
-                        if st.anim != Anim::Steady && st.period_ms == 0 {
-                            st.period_ms = 1000; // 离开常亮时给个默认周期
-                        }
-                    }
-                    _ => {}
+                st.anim = crate::settings::ANIM_ORDER[i];
+                if st.anim != Anim::Steady && st.period_ms == 0 {
+                    st.period_ms = 1000; // 离开常亮时给个默认周期
                 }
-                st.anim
-            };
-            // 动画变了 → 同步速度滑块启用态 + 标签(常亮则禁用并显示「—」)
-            if field == crate::settings::F_ANIM {
-                self.sync_speed_controls(tag, key, new_anim);
             }
+            self.refresh_state(key);
+            self.settings_changed();
+        }
+
+        /// 状态 pane「Speed」滑块 action(Hz)。tag = base + SPEED_OFF。
+        #[unsafe(method(changeSpeed:))]
+        fn change_speed(&self, sender: *mut NSObject) {
+            let tag: i64 = unsafe { msg_send![sender, tag] };
+            let Some((key, _)) = crate::settings::parse_control_tag(tag) else {
+                return;
+            };
+            let hz: f64 = unsafe { msg_send![sender, doubleValue] };
+            let period_ms = (1000.0 / hz).round().max(1.0) as u32;
+            {
+                let mut s = self.ivars().settings.borrow_mut();
+                s.styles.entry(key).or_insert(key.default_style()).period_ms = period_ms;
+            }
+            if let Some(c) = self.ivars().state_controls.borrow().get(&key) {
+                unsafe {
+                    let _: () = msg_send![
+                        &c.speed_label,
+                        setStringValue: &*NSString::from_str(&format!("{:.1} Hz", hz))
+                    ];
+                }
+            }
+            self.settings_changed();
+        }
+
+        /// 状态 pane「Reset」action:恢复该状态默认样式并刷新控件。
+        #[unsafe(method(resetStateStyle:))]
+        fn reset_state(&self, sender: *mut NSObject) {
+            let tag: i64 = unsafe { msg_send![sender, tag] };
+            let Some((key, _)) = crate::settings::parse_control_tag(tag) else {
+                return;
+            };
+            {
+                let mut s = self.ivars().settings.borrow_mut();
+                s.styles.insert(key, key.default_style());
+            }
+            self.refresh_state(key);
             self.settings_changed();
         }
 
@@ -202,33 +255,6 @@ define_class!(
             crate::tray::reschedule(self, ms as f64 / 1000.0);
         }
 
-        /// 状态 pane「速度」滑块 action(Hz)。tag 编码 (state, F_SPEED);实时刷新标签。
-        #[unsafe(method(changeSpeed:))]
-        fn change_speed(&self, sender: *mut NSObject) {
-            let tag: i64 = unsafe { msg_send![sender, tag] };
-            let Some((key, _)) = crate::settings::parse_control_tag(tag) else {
-                return;
-            };
-            let hz: f64 = unsafe { msg_send![sender, doubleValue] };
-            let period_ms = (1000.0 / hz).round().max(1.0) as u32;
-            {
-                let mut s = self.ivars().settings.borrow_mut();
-                s.styles.entry(key).or_insert(key.default_style()).period_ms = period_ms;
-            }
-            if let Some(content) = self.ivars().settings_content.borrow().as_ref().cloned() {
-                let label_tag = (tag / 100) * 100 + crate::settings::F_SPEED_LABEL;
-                if let Some(lbl) = crate::settings::view_with_tag(&content, label_tag) {
-                    unsafe {
-                        let _: () = msg_send![
-                            &lbl,
-                            setStringValue: &*NSString::from_str(&format!("{:.1} Hz", hz))
-                        ];
-                    }
-                }
-            }
-            self.settings_changed();
-        }
-
         /// 占位 action(禁用的「开机启动」等无操作控件的兜底,实际不会触发)。
         #[unsafe(method(noop:))]
         fn noop(&self, _sender: *mut NSObject) {}
@@ -248,38 +274,11 @@ impl AppDelegate {
         }
     }
 
-    /// 动画切换后,按 tag 找到该状态的速度滑块 + 标签:常亮→禁用并显示「—」,否则启用。
-    fn sync_speed_controls(&self, control_tag: i64, key: StyleKey, anim: Anim) {
-        let Some(content) = self.ivars().settings_content.borrow().as_ref().cloned() else {
-            return;
-        };
-        let base = (control_tag / 100) * 100;
-        let steady = anim == Anim::Steady;
-        if let Some(slider) =
-            crate::settings::view_with_tag(&content, base + crate::settings::F_SPEED)
-        {
-            unsafe {
-                let _: () = msg_send![&slider, setEnabled: Bool::new(!steady)];
-            }
-        }
-        if let Some(lbl) =
-            crate::settings::view_with_tag(&content, base + crate::settings::F_SPEED_LABEL)
-        {
-            let text = if steady {
-                "—".to_string()
-            } else {
-                let p = self
-                    .ivars()
-                    .settings
-                    .borrow()
-                    .style_for(key)
-                    .period_ms
-                    .max(1);
-                format!("{:.1} Hz", 1000.0 / p as f64)
-            };
-            unsafe {
-                let _: () = msg_send![&lbl, setStringValue: &*NSString::from_str(&text)];
-            }
+    /// 用某状态当前 settings 刷新其 pane 控件(色块选中环 / radio / 速度滑块+标签)。
+    fn refresh_state(&self, key: StyleKey) {
+        let style = self.ivars().settings.borrow().style_for(key);
+        if let Some(c) = self.ivars().state_controls.borrow().get(&key) {
+            crate::settings::refresh_state_controls(c, style);
         }
     }
 }

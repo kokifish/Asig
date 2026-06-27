@@ -17,7 +17,7 @@ use agent_light_core::{Color, LightAnim, LightPosition};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
 use objc2::{ClassType, DefinedClass, MainThreadOnly, class, define_class, msg_send};
-use objc2_app_kit::{NSBezierPath, NSColor, NSScreen, NSView, NSWindow};
+use objc2_app_kit::{NSBezierPath, NSColor, NSImage, NSScreen, NSView, NSWindow};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{
     NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue,
@@ -38,6 +38,44 @@ pub fn nscolor(c: Color) -> Retained<NSColor> {
         Color::Purple => (0.62, 0.36, 0.90),    // Offline
     };
     NSColor::colorWithCalibratedRed_green_blue_alpha(r, g, b, 1.0)
+}
+
+/// 画一个 `c` 色的实心圆 NSImage(菜单栏图标 / 设置页色块用)。`selected` 时描一圈
+/// `controlAccentColor` 外环表示选中。`setTemplate:NO` 保留真彩(否则菜单栏/按钮按
+/// 模板渲染成单色)。
+pub fn swatch_image(c: Color, diameter: CGFloat, selected: bool) -> Retained<NSImage> {
+    let alloc: Allocated<NSImage> = unsafe { msg_send![class!(NSImage), alloc] };
+    let img: Retained<NSImage> =
+        unsafe { msg_send![alloc, initWithSize: NSSize::new(diameter, diameter)] };
+    unsafe {
+        let _: () = msg_send![&img, setTemplate: Bool::NO];
+        let _: () = msg_send![&img, lockFocus];
+        // 实心填充圆
+        let inset: CGFloat = if selected { 3.0 } else { 2.0 };
+        let d = diameter - inset * 2.0;
+        let fill_rect = NSRect::new(NSPoint::new(inset, inset), NSSize::new(d, d));
+        let fill_path: Retained<NSBezierPath> =
+            msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: fill_rect];
+        let fill = nscolor(c);
+        let _: () = msg_send![&fill, set];
+        fill_path.fill();
+        // 选中:外环
+        if selected {
+            let lw: CGFloat = 2.0;
+            let ring_rect = NSRect::new(
+                NSPoint::new(lw / 2.0, lw / 2.0),
+                NSSize::new(diameter - lw, diameter - lw),
+            );
+            let ring: Retained<NSBezierPath> =
+                msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: ring_rect];
+            let accent: Retained<NSColor> = msg_send![class!(NSColor), controlAccentColor];
+            let _: () = msg_send![&ring, setLineWidth: lw];
+            let _: () = msg_send![&accent, set];
+            let _: () = msg_send![&ring, stroke];
+        }
+        let _: () = msg_send![&img, unlockFocus];
+    }
+    img
 }
 
 fn anim_color(a: LightAnim) -> Color {

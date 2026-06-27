@@ -47,7 +47,7 @@ cargo build --release -p agent-light     # 发布版
 cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 ```
 
-性能预算: 运行内存 < 60MB，CPU 平均 < 1%
+Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 ## Design
 
@@ -67,10 +67,10 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 | 0 | `DoneNotif` | 💚 深绿 | 快速呼吸 | 其他状态转入Done状态 |
 
 - **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 DoneNotif (Done-Notification)，用深绿色表示，默认动效为快速呼吸
-- **聚合规则**：同一个Agent多个会话同时存在时，全局灯取**优先级最高**的那一个（`AgentStatus::priority()`，数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
-- **Sticky 锁定态**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
-- **灯效种类**：`Steady`（常亮）/ `Pulse`（呼吸）/ `Ripple`（波纹），共 3 种（详见 [Light Animations](#light-animations)）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**，无独立的明灭（Blink）动效。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
-- **颜色枚举**：颜色与状态一一对应，定义在内核、平台无关；app 层翻译成具体 RGB
+- **Aggregation**：同一个Agent多个会话同时存在时，全局灯取**优先级最高**的那一个（`AgentStatus::priority()`，数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
+- **Sticky state**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
+- **Animation types**：`Steady`（常亮）/ `Pulse`（呼吸）/ `Ripple`（波纹），共 3 种（详见 [Light Animations](#light-animations)）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**，无独立的明灭（Blink）动效。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
+- **Color enum**：颜色与状态一一对应，定义在内核、平台无关；app 层翻译成具体 RGB
 
 ### Light Animations
 
@@ -84,16 +84,16 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 | 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
 | 波纹 | Ripple | 两圈环以圆点为圆心、错相(半周期)对称扩散并淡出 | `transform`（绕圆心缩放的 `CATransform3D`）+ `opacity`（2 个错相 `RingView`），单程一次扩散 |
 
-- 默认周期：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=1600（波纹）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
+- Default period：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=1600（波纹）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（DarkGreen，450ms）覆盖全局态。
-- 可配置：Settings 里每状态独立改 动效 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
-- 载体：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用两个错相 `RingView` 子视图扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示自绘彩色圆点（`tray::circle_image`，`setTemplate:NO` 保留真彩），不可设动效。
+- Configurable：Settings 里每状态独立改 动效 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
+- Carrier：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用两个错相 `RingView` 子视图扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示自绘彩色圆点（`overlay::swatch_image`，`setTemplate:NO` 保留真彩），不可设动效。
 - 速度（周期）以 **Hz** 呈现给用户（`period_ms = 1000 / Hz`）；常亮（Steady）无周期、速度不可设。
 
 ### Signal Light
 
 - Def: 在桌面上的可以配置动效、大小的叫 Signal Light
-- Default Position: 初始位置在主屏幕的左上角（红黄绿按钮下方一行）。**位置记忆**：拖动后记住位置，下次启动自动恢复到上次位置（含所在屏幕，按 `CGDirectDisplayID` 匹配）；若该屏已断开则回退主屏左上角。记忆持久化在 `settings.json` 的 `light_pos` 字段。
+- Default Position: 初始位置在主屏幕的左上角（红黄绿按钮下方一行）。**Position memory**：拖动后记住位置，下次启动自动恢复到上次位置（含所在屏幕，按 `CGDirectDisplayID` 匹配）；若该屏已断开则回退主屏左上角。记忆持久化在 `settings.json` 的 `light_pos` 字段。
 
 ### Signal Icon
 
@@ -109,14 +109,16 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
 - Position: 默认在屏幕中央，可以拖动
-- 导航: 左侧栏（顶部 tab 列表 + 底部图标行）+ 右侧 pane 切换。点 tab / 「关于」图标切换右侧 pane。
+- Navigation: 左侧栏（顶部 tab 列表 + 底部图标行）+ 右侧 pane 切换。点 tab / 「关于」图标切换右侧 pane。
 - Content:
-  - 常规 pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、开机启动（占位，待实现）。
-  - 各状态 pane(每状态一个): 颜色 / 动画 / 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。
-  - 关于 pane: 版本号 + GitHub 链接（纯展示）。
+  - General pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、开机启动（占位，待实现）。详见 General Settings Card。
+  - State pane(每状态一个): 颜色（横向单选色块）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
+  - About pane: 版本号 + GitHub 链接（纯展示）。
   - 各状态可独立改 动画 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
-- Left Side Tabs(in order): 常规(General), DoneNotif, Done, Working, NeedsDeci, Error, Offline. Left aligned
-- Left Side Buttons(底部图标行, 左→右): 关于(About, 打开「关于」pane)、访问官网、调试、捐赠、退出Asig。除「关于」外均为占位禁用按钮(留待实现)。
+- Left Side Tabs(in order): General, DoneNotif, Done, Working, NeedsDeci, Error, Offline. Left aligned。状态 tab = 当前色圆点 + 英文简称；其余黑白风（macOS 默认暗色）。
+  - Color: 除状态色圆点外，其余均黑白风 / macOS 默认暗色，不用彩色。
+- Left Side Buttons: 关于(About)、访问官网、调试、捐赠、退出Asig（左→右）。除「关于」外均为占位禁用按钮(留待实现)。
+  - Color: 均黑白风 / macOS 默认暗色（单色 SF Symbol 图标），不用彩色。
 
 #### General Settings Card
 
