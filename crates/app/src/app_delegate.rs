@@ -91,15 +91,34 @@ define_class!(
                 *self.ivars().popover.borrow_mut() = None;
                 return;
             }
-            let pos = self.ivars().status_item.borrow().as_ref().map(|item| {
-                crate::panel::dropdown_position_for(
-                    item,
-                    crate::panel::PANEL_W,
-                    crate::panel::PANEL_H,
-                )
-            });
-            let p = crate::panel::build(self, pos);
-            crate::panel::show(&p);
+            let mtm = MainThreadMarker::new().expect("togglePopover 须主线程");
+            let button = self
+                .ivars()
+                .status_item
+                .borrow()
+                .as_ref()
+                .and_then(|item| item.button(mtm));
+            // 右键 → 状态栏菜单;左键 → 下拉 popover
+            let app: Retained<NSApplication> =
+                unsafe { msg_send![class!(NSApplication), sharedApplication] };
+            let is_right = unsafe {
+                app.currentEvent()
+                    .map(|ev| -> bool {
+                        let et: i64 = msg_send![&ev, type];
+                        et == 3
+                    })
+                    .unwrap_or(false)
+            };
+            if is_right {
+                if let Some(button) = button {
+                    crate::tray::show_status_menu(self, &button, mtm);
+                }
+                return;
+            }
+            let p = crate::panel::build(self);
+            if let Some(button) = button {
+                crate::panel::show(&p, &button);
+            }
             *self.ivars().popover.borrow_mut() = Some(p);
             let snap = self.ivars().monitor.poll();
             self.render(&snap);

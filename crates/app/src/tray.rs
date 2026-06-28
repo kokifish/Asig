@@ -1,12 +1,12 @@
 //! 菜单栏灯:NSStatusItem + 自绘彩色圆点按钮。点击按钮弹 popover(见 panel.rs)。
-//! 菜单栏无「深绿圆」emoji,故按钮图标用自绘 NSImage 圆点(overlay::swatch_image)——
-//! 所有状态统一为「仅颜色不同」的圆(Done 绿 / DoneNotif 深绿 / Working 黄 …)。
+//! 菜单栏无「浅蓝圆」emoji,故按钮图标用自绘 NSImage 圆点(overlay::swatch_image)——
+//! 所有状态统一为「仅颜色不同」的圆(Done 绿 / DoneNotif 浅蓝 / Working 黄 …)。
 
 use agent_light_core::{AgentStatus, Color, LightAnim};
 use objc2::rc::Retained;
-use objc2::{DefinedClass, MainThreadMarker, msg_send, sel};
-use objc2_app_kit::{NSStatusBar, NSStatusItem};
-use objc2_foundation::NSTimer;
+use objc2::{DefinedClass, MainThreadMarker, class, msg_send, sel};
+use objc2_app_kit::{NSMenu, NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem};
+use objc2_foundation::{NSPoint, NSString, NSTimer};
 
 use crate::app_delegate::AppDelegate;
 use crate::overlay::swatch_image;
@@ -64,4 +64,33 @@ pub fn reschedule(delegate: &AppDelegate, interval: f64) {
         )
     };
     *delegate.ivars().tick_timer.borrow_mut() = Some(timer);
+}
+
+/// 状态栏右键菜单:设置… / (分隔) / 退出 Asig。锚在状态栏按钮下方弹出。
+pub fn show_status_menu(delegate: &AppDelegate, button: &NSStatusBarButton, mtm: MainThreadMarker) {
+    let menu: Retained<NSMenu> = NSMenu::new(mtm);
+    unsafe {
+        let s: Retained<NSMenuItem> = msg_send![
+            &menu,
+            addItemWithTitle: &*NSString::from_str("设置…"),
+            action: Some(sel!(openSettings:)),
+            keyEquivalent: &*NSString::from_str("")
+        ];
+        let _: () = msg_send![&s, setTarget: delegate];
+        let sep: Retained<NSMenuItem> = msg_send![class!(NSMenuItem), separatorItem];
+        let _: () = msg_send![&menu, addItem: &*sep];
+        let q: Retained<NSMenuItem> = msg_send![
+            &menu,
+            addItemWithTitle: &*NSString::from_str("退出 Asig"),
+            action: Some(sel!(quit:)),
+            keyEquivalent: &*NSString::from_str("")
+        ];
+        let _: () = msg_send![&q, setTarget: delegate];
+        let _: bool = msg_send![
+            &menu,
+            popUpMenuPositioningItem: std::ptr::null::<NSMenuItem>(),
+            atLocation: NSPoint::new(0.0, 0.0),
+            inView: button
+        ];
+    }
 }

@@ -8,10 +8,11 @@ use std::collections::HashMap;
 
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, Sel};
-use objc2::{DefinedClass, class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSButton, NSFont, NSImage, NSPopUpButton, NSSlider, NSTextField, NSView,
-    NSWindow,
+    NSApplication, NSBox, NSButton, NSColor, NSFont, NSImage, NSPopUpButton, NSSlider,
+    NSSplitViewController, NSSplitViewItem, NSSwitch, NSTextField, NSView, NSViewController,
+    NSVisualEffectView, NSWindow,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -24,8 +25,11 @@ use crate::overlay::swatch_image;
 const W: CGFloat = 680.0;
 const H: CGFloat = 460.0;
 const SIDEBAR_W: CGFloat = 170.0;
-const CONTENT_X: CGFloat = SIDEBAR_W;
 const CONTENT_W: CGFloat = W - SIDEBAR_W;
+/// 标题栏高度。窗口用 fullSizeContentView + 透明标题栏(侧栏毛玻璃渗透到顶),故 sidebar/
+/// content 两个 pane 都铺满整窗高度、顶部延展到标题栏下。但 pane 内的「内容」(tab / 标题 / 卡片)
+/// 必须从标题栏下方开始,否则会被压在标题栏下/与红黄绿重叠。所有「距顶」锚点都扣除本值。
+const TOP_INSET: CGFloat = 28.0;
 
 /// 关于页显示的仓库链接(占位,改成真实仓库)。
 const GITHUB_URL: &str = "https://github.com/koki/Asig";
@@ -33,7 +37,7 @@ const GITHUB_URL: &str = "https://github.com/koki/Asig";
 pub const ANIM_ORDER: [Anim; 3] = [Anim::Steady, Anim::Pulse, Anim::Ripple];
 pub const COLOR_ORDER: [Color; 6] = [
     Color::Green,
-    Color::DarkGreen,
+    Color::LightBlue,
     Color::Yellow,
     Color::Amber,
     Color::Red,
@@ -68,6 +72,53 @@ pub const LANG_ZH_TAG: i64 = 502;
 pub const SPEED_MIN: f64 = 0.2;
 pub const SPEED_MAX: f64 = 5.0;
 const SWATCH_D: CGFloat = 24.0;
+
+// 居中列布局(stats.app 风):内容居中成一列,分组圆角卡片,行 = 左标签 + 右控件。
+const COL_W: CGFloat = 380.0;
+const ROW_H: CGFloat = 32.0;
+
+/// 卡片 frame:顶部 `top`、`rows` 行高。
+fn card_frame(x0: CGFloat, top: CGFloat, rows: usize) -> NSRect {
+    let h = rows as CGFloat * ROW_H + 16.0;
+    NSRect::new(NSPoint::new(x0, top - h), NSSize::new(COL_W, h))
+}
+
+/// 第 i 行(0=最上)的标签/控件基线 y。
+fn row_y(top: CGFloat, i: usize) -> CGFloat {
+    top - 14.0 - i as CGFloat * ROW_H
+}
+
+/// 分组圆角卡片背景(NSBox custom:细边 + 圆角 + 浅填充),置于行后面。
+fn add_card(pane: &Retained<NSView>, frame: NSRect) {
+    let b: Retained<NSBox> = unsafe { msg_send![class!(NSBox), new] };
+    unsafe {
+        let _: () = msg_send![&b, setBoxType: 4u64]; // NSBoxCustom
+        let _: () = msg_send![&b, setCornerRadius: 10.0f64];
+        let _: () = msg_send![&b, setBorderWidth: 1.0f64];
+        let border: Retained<NSColor> = msg_send![class!(NSColor), separatorColor];
+        let _: () = msg_send![&b, setBorderColor: &*border];
+        let fill: Retained<NSColor> = msg_send![class!(NSColor), controlBackgroundColor];
+        let _: () = msg_send![&b, setFillColor: &*fill];
+        let _: () = msg_send![&b, setTitle: &*NSString::from_str("")];
+        let _: () = msg_send![&b, setFrame: frame];
+        let _: () = msg_send![&**pane, addSubview: &*b];
+    }
+}
+
+/// NSVisualEffectView 容器(material 原生材质:12=windowBackground / 18=contentBackground /
+/// 7=sidebar)。blending=withinWindow、state=active。
+fn effect_view(frame: NSRect, material: i64) -> Retained<NSVisualEffectView> {
+    let alloc: Allocated<NSVisualEffectView> =
+        unsafe { msg_send![class!(NSVisualEffectView), alloc] };
+    let v: Retained<NSVisualEffectView> = unsafe { msg_send![alloc, initWithFrame: frame] };
+    unsafe {
+        let _: () = msg_send![&v, setMaterial: material];
+        let _: () = msg_send![&v, setBlendingMode: 1i64]; // withinWindow
+        let _: () = msg_send![&v, setState: 1i64]; // active
+        let _: () = msg_send![&v, setWantsLayer: Bool::YES];
+    }
+    v
+}
 
 /// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
 pub struct StateControls {
@@ -198,16 +249,18 @@ fn sf_symbol(name: &str) -> Retained<NSImage> {
 }
 
 pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
+    let mtm = MainThreadMarker::new().expect("settings build 须在主线程");
     let lang = delegate.ivars().settings.borrow().lang;
     let st = strings_for(lang);
 
+    // 窗口:titled(1)|closable(2)|miniaturizable(4)|resizable(8)|fullSizeContentView(32768)
     let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(W, H));
     let alloc: Allocated<NSWindow> = unsafe { msg_send![class!(NSWindow), alloc] };
     let window: Retained<NSWindow> = unsafe {
         msg_send![
             alloc,
             initWithContentRect: frame,
-            styleMask: 7u64,
+            styleMask: 32783u64,
             backing: 2u64,
             defer: Bool::NO,
         ]
@@ -215,22 +268,37 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     unsafe {
         let _: () = msg_send![&window, setTitle: &*NSString::from_str("Asig")];
         let _: () = msg_send![&window, setReleasedWhenClosed: Bool::NO];
+        let _: () = msg_send![&window, setOpaque: Bool::NO]; // 透明底,让 vibrancy 能模糊桌面
+        let clear: Retained<NSColor> = msg_send![class!(NSColor), clearColor];
+        let _: () = msg_send![&window, setBackgroundColor: &*clear];
+        let _: () = msg_send![&window, setTitlebarAppearsTransparent: Bool::YES]; // 内容贯穿标题栏
+        let _: () = msg_send![&window, setTitleVisibility: 1i64]; // hidden
+        let _: () = msg_send![&window, setMovable: true];
+        let _: () = msg_send![&window, setMinSize: NSSize::new(W, H)];
     }
-    let content: Retained<NSView> = unsafe { msg_send![&window, contentView] };
 
+    // 侧栏视图(透明;sidebarWithViewController 会套原生 sidebar 材质/vibrancy)。
     let sidebar = new_view(NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(SIDEBAR_W, H),
     ));
     build_sidebar(&sidebar, delegate, &st);
-    unsafe {
-        let _: () = msg_send![&content, addSubview: &*sidebar];
-    }
 
+    // 右区:普通 NSView 容器 + windowBackground 材质铺底;其上卡片(controlBackgroundColor)更亮。
     let content_area = new_view(NSRect::new(
-        NSPoint::new(CONTENT_X, 0.0),
+        NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
+    {
+        let bg = effect_view(
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(CONTENT_W, H)),
+            12, // windowBackground
+        );
+        unsafe {
+            let _: () = msg_send![&bg, setAutoresizingMask: 18u64]; // width+height sizable
+            let _: () = msg_send![&content_area, addSubview: &*bg]; // 铺底,pane 在其上
+        }
+    }
     // 8 pane:General + 6 状态(各带 StateControls)+ About。按 pane id(=索引)排。
     let mut panes: Vec<Retained<NSView>> = Vec::with_capacity(8);
     let mut controls_map: HashMap<StyleKey, StateControls> = HashMap::new();
@@ -247,8 +315,31 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
             let _: () = msg_send![&content_area, addSubview: &**pane];
         }
     }
+
+    // 方案 A:包成 NSViewController → NSSplitViewController(sidebarWithViewController 给原生侧栏)。
+    let sidebar_vc = NSViewController::new(mtm);
+    let content_vc = NSViewController::new(mtm);
     unsafe {
-        let _: () = msg_send![&content, addSubview: &*content_area];
+        let _: () = msg_send![&sidebar_vc, setView: &*sidebar];
+        let _: () = msg_send![&content_vc, setView: &*content_area];
+    }
+    let sidebar_item = NSSplitViewItem::sidebarWithViewController(&sidebar_vc);
+    let item_alloc: Allocated<NSSplitViewItem> =
+        unsafe { msg_send![class!(NSSplitViewItem), alloc] };
+    let content_item = NSSplitViewItem::init(item_alloc);
+    unsafe {
+        let _: () = msg_send![&content_item, setViewController: &*content_vc];
+        for it in [&sidebar_item, &content_item] {
+            let _: () = msg_send![&**it, setCanCollapse: false];
+        }
+        let _: () = msg_send![&sidebar_item, setMinimumThickness: SIDEBAR_W];
+        let _: () = msg_send![&content_item, setMinimumThickness: CONTENT_W];
+    }
+    let svc = NSSplitViewController::new(mtm);
+    svc.addSplitViewItem(&sidebar_item);
+    svc.addSplitViewItem(&content_item);
+    unsafe {
+        let _: () = msg_send![&window, setContentViewController: Some(&*svc)];
     }
 
     *delegate.ivars().settings_sidebar.borrow_mut() = Some(sidebar);
@@ -258,6 +349,27 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     *delegate.ivars().state_controls.borrow_mut() = controls_map;
     update_tab_prefixes(delegate, TAB_GENERAL);
 
+    // ASIG_TAB(dev):直接打开指定 pane(1..7),便于逐页截图;默认 0(常规)。
+    if let Some(n) = std::env::var("ASIG_TAB").ok().and_then(|s| s.parse::<i64>().ok()) {
+        if (1..8).contains(&n) {
+            {
+                let panes_ref = delegate.ivars().settings_panes.borrow();
+                if let Some(v) = panes_ref.as_ref() {
+                    unsafe {
+                        if let Some(p0) = v.get(0) {
+                            let _: () = msg_send![p0, setHidden: Bool::YES];
+                        }
+                        if let Some(pn) = v.get(n as usize) {
+                            let _: () = msg_send![pn, setHidden: Bool::NO];
+                        }
+                    }
+                }
+            }
+            *delegate.ivars().settings_selected.borrow_mut() = n;
+            update_tab_prefixes(delegate, n);
+        }
+    }
+
     window
 }
 
@@ -266,14 +378,17 @@ fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &String
     let tab_w = SIDEBAR_W - 16.0;
     add_tab_button(
         sidebar,
-        NSRect::new(NSPoint::new(8.0, H - 44.0), NSSize::new(tab_w, 28.0)),
+        NSRect::new(
+            NSPoint::new(8.0, H - 52.0 - TOP_INSET),
+            NSSize::new(tab_w, 28.0),
+        ),
         st.general,
         None,
         TAB_GENERAL,
         delegate,
     );
     for (i, (tag, key)) in STATE_KEYS.iter().enumerate() {
-        let y = H - 44.0 - (i as CGFloat + 1.0) * 32.0;
+        let y = H - 52.0 - TOP_INSET - (i as CGFloat + 1.0) * 32.0;
         let color = delegate.ivars().settings.borrow().style_for(*key).color;
         let img = swatch_image(color, 14.0, false);
         add_tab_button(
@@ -351,61 +466,64 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
-    let pad = 24.0;
-    let mut y = H - 44.0;
+    let x0 = (CONTENT_W - COL_W) / 2.0;
+    let lx = x0 + 16.0; // 标签 x
+    let cx = x0 + 140.0; // 控件 x
+    let cw = COL_W - 140.0 - 16.0; // 控件区宽
+    let mut y = H - 48.0 - TOP_INSET;
 
+    // 标题(居中)
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, y), NSSize::new(200.0, 20.0)),
+        NSRect::new(NSPoint::new(0.0, y), NSSize::new(CONTENT_W, 24.0)),
         st.general,
-        false,
+        true,
         true,
     );
-    y -= 38.0;
+    y -= 32.0;
 
+    // —— Card:常规设置(4 行)——
+    add_card(&pane, card_frame(x0, y, 4));
     // Light size
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, y), NSSize::new(160.0, 20.0)),
+        NSRect::new(NSPoint::new(lx, row_y(y, 0)), NSSize::new(120.0, 20.0)),
         st.light_size,
         false,
         false,
     );
-    y -= 30.0;
     let dot = delegate.ivars().settings.borrow().dot_size as f64;
     add_slider(
         &pane,
-        NSRect::new(
-            NSPoint::new(pad, y),
-            NSSize::new(CONTENT_W - pad * 2.0, 22.0),
-        ),
+        NSRect::new(NSPoint::new(cx, row_y(y, 0) - 2.0), NSSize::new(cw, 22.0)),
         8.0,
         40.0,
         dot,
         sel!(changeSize:),
         delegate,
     );
-    y -= 36.0;
-
-    // Click-through
-    let click_on = *delegate.ivars().click_through.borrow();
-    add_checkbox(
+    // Click-through(标签 + 开关)
+    add_text(
+        &pane,
+        NSRect::new(NSPoint::new(lx, row_y(y, 1)), NSSize::new(120.0, 20.0)),
+        st.click_through,
+        false,
+        false,
+    );
+    add_switch(
         &pane,
         NSRect::new(
-            NSPoint::new(pad, y),
-            NSSize::new(CONTENT_W - pad * 2.0, 22.0),
+            NSPoint::new(cx + cw - 40.0, row_y(y, 1) - 1.0),
+            NSSize::new(40.0, 22.0),
         ),
-        st.click_through,
-        click_on,
+        *delegate.ivars().click_through.borrow(),
         sel!(toggleClickThrough:),
         delegate,
     );
-    y -= 32.0;
-
-    // Poll interval(标签 + 下拉,一行)
+    // Poll interval
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, y + 2.0), NSSize::new(120.0, 20.0)),
+        NSRect::new(NSPoint::new(lx, row_y(y, 2)), NSSize::new(120.0, 20.0)),
         st.poll_interval,
         false,
         false,
@@ -413,23 +531,30 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     let poll_ms = delegate.ivars().settings.borrow().poll_interval_ms;
     add_popup(
         &pane,
-        NSRect::new(NSPoint::new(pad + 130.0, y - 2.0), NSSize::new(120.0, 26.0)),
+        NSRect::new(
+            NSPoint::new(cx, row_y(y, 2) - 4.0),
+            NSSize::new(120.0, 26.0),
+        ),
         &st.poll_opts,
         poll_preset_index(poll_ms),
         sel!(changePollInterval:),
         delegate,
         0,
     );
-    y -= 34.0;
-
-    // Launch at login(占位禁用)
-    let launch = add_checkbox(
+    // Launch at login(标签 + 开关,占位禁用)
+    add_text(
+        &pane,
+        NSRect::new(NSPoint::new(lx, row_y(y, 3)), NSSize::new(120.0, 20.0)),
+        st.launch_login,
+        false,
+        false,
+    );
+    let launch = add_switch(
         &pane,
         NSRect::new(
-            NSPoint::new(pad, y),
-            NSSize::new(CONTENT_W - pad * 2.0, 22.0),
+            NSPoint::new(cx + cw - 40.0, row_y(y, 3) - 1.0),
+            NSSize::new(40.0, 22.0),
         ),
-        st.launch_login,
         false,
         sel!(noop:),
         delegate,
@@ -437,12 +562,13 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     unsafe {
         let _: () = msg_send![&launch, setEnabled: Bool::NO];
     }
-    y -= 34.0;
+    y -= 4.0 * ROW_H + 16.0 + 20.0;
 
-    // Language(标签 + English/中文 单选,一行)
+    // —— Card:语言(1 行)——
+    add_card(&pane, card_frame(x0, y, 1));
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, y + 2.0), NSSize::new(80.0, 20.0)),
+        NSRect::new(NSPoint::new(lx, row_y(y, 0)), NSSize::new(80.0, 20.0)),
         st.language,
         false,
         false,
@@ -450,7 +576,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     let lang = delegate.ivars().settings.borrow().lang;
     add_radio_button(
         &pane,
-        NSRect::new(NSPoint::new(pad + 90.0, y), NSSize::new(90.0, 22.0)),
+        NSRect::new(NSPoint::new(cx, row_y(y, 0)), NSSize::new(90.0, 22.0)),
         "English",
         LANG_EN_TAG,
         delegate,
@@ -458,13 +584,15 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     );
     add_radio_button(
         &pane,
-        NSRect::new(NSPoint::new(pad + 180.0, y), NSSize::new(90.0, 22.0)),
+        NSRect::new(
+            NSPoint::new(cx + 100.0, row_y(y, 0)),
+            NSSize::new(90.0, 22.0),
+        ),
         "中文",
         LANG_ZH_TAG,
         delegate,
         sel!(changeLanguage:),
     );
-    // 初始选中
     let want_tag = if lang == Lang::En {
         LANG_EN_TAG
     } else {
@@ -477,12 +605,15 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
             }
         }
     }
-    y -= 38.0;
+    y -= 1.0 * ROW_H + 16.0 + 24.0;
 
-    // Reset(全部,确认对话框)
+    // Reset(全部,居中)
     let _ = add_plain_button(
         &pane,
-        NSRect::new(NSPoint::new(pad, y), NSSize::new(120.0, 28.0)),
+        NSRect::new(
+            NSPoint::new((CONTENT_W - 120.0) / 2.0, y),
+            NSSize::new(120.0, 28.0),
+        ),
         st.reset,
         0,
         sel!(resetAll:),
@@ -502,21 +633,25 @@ fn build_state_pane(
         NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
-    let pad = 24.0;
+    let x0 = (CONTENT_W - COL_W) / 2.0;
+    let lx = x0 + 16.0;
+    let cx = x0 + 140.0;
+    let cw = COL_W - 140.0 - 16.0;
     let base = tab_of_key(key) * 1000;
+    let mut y = H - 48.0 - TOP_INSET;
 
-    // 标题 + 右上角 Reset
+    // 标题(居中)+ 右上角 Reset
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, H - 48.0), NSSize::new(200.0, 22.0)),
+        NSRect::new(NSPoint::new(0.0, y), NSSize::new(CONTENT_W, 24.0)),
         name,
-        false,
+        true,
         true,
     );
     let _ = add_plain_button(
         &pane,
         NSRect::new(
-            NSPoint::new(CONTENT_W - pad - 70.0, H - 48.0),
+            NSPoint::new(CONTENT_W - x0 - 70.0, y),
             NSSize::new(70.0, 24.0),
         ),
         st.reset,
@@ -524,23 +659,25 @@ fn build_state_pane(
         sel!(resetStateStyle:),
         delegate,
     );
+    y -= 32.0;
 
-    // Color:标签 + 横向色块单选,一行
-    let row_c = H - 104.0;
+    // —— Card:状态(3 行)——
+    add_card(&pane, card_frame(x0, y, 3));
+    // Color(标签 + 横向色块)
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, row_c + 4.0), NSSize::new(60.0, 20.0)),
+        NSRect::new(NSPoint::new(lx, row_y(y, 0)), NSSize::new(120.0, 20.0)),
         st.color,
         false,
         false,
     );
     let mut color_btns: Vec<Retained<NSButton>> = Vec::with_capacity(6);
     for (i, &color) in COLOR_ORDER.iter().enumerate() {
-        let x = pad + 70.0 + i as CGFloat * 34.0;
+        let sx = cx + i as CGFloat * 32.0;
         color_btns.push(add_swatch_button(
             &pane,
             NSRect::new(
-                NSPoint::new(x, row_c - 2.0),
+                NSPoint::new(sx, row_y(y, 0) - 4.0),
                 NSSize::new(SWATCH_D, SWATCH_D),
             ),
             color,
@@ -548,12 +685,10 @@ fn build_state_pane(
             delegate,
         ));
     }
-
-    // Animation:标签 + 3 单选,一行
-    let row_a = H - 148.0;
+    // Animation(标签 + 3 单选)
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, row_a + 4.0), NSSize::new(60.0, 20.0)),
+        NSRect::new(NSPoint::new(lx, row_y(y, 1)), NSSize::new(120.0, 20.0)),
         st.animation,
         false,
         false,
@@ -563,8 +698,8 @@ fn build_state_pane(
         anim_btns.push(add_radio_button(
             &pane,
             NSRect::new(
-                NSPoint::new(pad + 70.0 + i as CGFloat * 100.0, row_a),
-                NSSize::new(90.0, 22.0),
+                NSPoint::new(cx + i as CGFloat * 76.0, row_y(y, 1)),
+                NSSize::new(72.0, 22.0),
             ),
             nm,
             base + ANIM_OFF + i as i64,
@@ -572,19 +707,20 @@ fn build_state_pane(
             sel!(changeAnim:),
         ));
     }
-
-    // Speed:标签 + 滑块 + Hz,一行
-    let row_s = H - 192.0;
+    // Speed(标签 + 滑块 + Hz)
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(pad, row_s + 4.0), NSSize::new(60.0, 20.0)),
+        NSRect::new(NSPoint::new(lx, row_y(y, 2)), NSSize::new(120.0, 20.0)),
         st.speed,
         false,
         false,
     );
     let speed = add_slider(
         &pane,
-        NSRect::new(NSPoint::new(pad + 70.0, row_s), NSSize::new(240.0, 22.0)),
+        NSRect::new(
+            NSPoint::new(cx, row_y(y, 2) - 2.0),
+            NSSize::new(cw - 64.0, 22.0),
+        ),
         SPEED_MIN,
         SPEED_MAX,
         1.0,
@@ -595,8 +731,8 @@ fn build_state_pane(
     let speed_label = add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(pad + 70.0 + 250.0, row_s + 4.0),
-            NSSize::new(70.0, 20.0),
+            NSPoint::new(cx + cw - 56.0, row_y(y, 2) + 2.0),
+            NSSize::new(56.0, 20.0),
         ),
         "—",
         false,
@@ -857,25 +993,24 @@ fn add_slider(
     slider
 }
 
-fn add_checkbox(
+/// NSSwitch(现代滑动开关,原生)。用于「点击穿透 / 开机启动」等开关行。
+fn add_switch(
     pane: &Retained<NSView>,
     frame: NSRect,
-    text: &str,
     on: bool,
     action: Sel,
     delegate: &AppDelegate,
-) -> Retained<NSButton> {
-    let btn: Retained<NSButton> = unsafe { msg_send![class!(NSButton), new] };
+) -> Retained<NSSwitch> {
+    let mtm = MainThreadMarker::new().expect("NSSwitch 须主线程");
+    let sw = NSSwitch::new(mtm);
     unsafe {
-        let _: () = msg_send![&btn, setButtonType: 3u64]; // NSSwitchButton
-        let _: () = msg_send![&btn, setTitle: &*NSString::from_str(text)];
-        let _: () = msg_send![&btn, setState: if on { 1i64 } else { 0 }];
-        let _: () = msg_send![&btn, setTarget: delegate];
-        let _: () = msg_send![&btn, setAction: action];
-        let _: () = msg_send![&btn, setFrame: frame];
-        let _: () = msg_send![&**pane, addSubview: &*btn];
+        let _: () = msg_send![&sw, setState: if on { 1i64 } else { 0 }];
+        let _: () = msg_send![&sw, setTarget: delegate];
+        let _: () = msg_send![&sw, setAction: action];
+        let _: () = msg_send![&sw, setFrame: frame];
+        let _: () = msg_send![&**pane, addSubview: &*sw];
     }
-    btn
+    sw
 }
 
 fn add_popup(

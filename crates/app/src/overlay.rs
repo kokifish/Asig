@@ -31,7 +31,7 @@ const WIN: CGFloat = 120.0;
 pub fn nscolor(c: Color) -> Retained<NSColor> {
     let (r, g, b): (CGFloat, CGFloat, CGFloat) = match c {
         Color::Green => (0.20, 0.80, 0.30),     // Done
-        Color::DarkGreen => (0.02, 0.45, 0.20), // Done Notification(深绿)
+        Color::LightBlue => (0.30, 0.64, 0.96), // Done Notification(浅蓝)
         Color::Yellow => (0.95, 0.80, 0.15),    // Working
         Color::Amber => (0.95, 0.55, 0.10),     // NeedsDeci(橙)
         Color::Red => (0.92, 0.22, 0.22),       // Error

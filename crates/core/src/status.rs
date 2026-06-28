@@ -58,12 +58,14 @@ impl AgentStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Color {
-    Green,     // Done
-    DarkGreen, // Done Notification(刚转入 Done 的 30 秒内)
-    Yellow,    // Working
-    Amber,     // NeedsDeci
-    Red,       // Error
-    Purple,    // Offline
+    Green, // Done
+    /// Done Notification(刚转入 Done 的 30 秒内)。浅蓝。旧配置的 "dark_green" 兼容映射。
+    #[serde(alias = "dark_green")]
+    LightBlue,
+    Yellow, // Working
+    Amber,  // NeedsDeci
+    Red,    // Error
+    Purple, // Offline
 }
 
 /// 灯效规格(平台无关)。app 层翻译成 CoreAnimation。

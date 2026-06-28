@@ -1,7 +1,7 @@
 //! 用户可配置的设置(灯大小 + 各状态样式)。serde 持久化,UI 无关、可移植。
 //!
 //! 默认值 = status.rs 里 `AgentStatus::light()` 的硬编码映射(5 个真实状态)
-//! 以及 Done-Notification 的内置默认(深绿快速呼吸)。一旦写入配置文件,app 层就
+//! 以及 Done-Notification 的内置默认(浅蓝快速呼吸)。一旦写入配置文件,app 层就
 //! 改读 `Settings::light(&snap)`,不再用硬编码。
 
 use crate::Snapshot;
@@ -116,11 +116,11 @@ impl StyleKey {
     }
 
     /// 内置默认样式。5 个真实状态派生自 `AgentStatus::light()`(单一事实源);
-    /// Done-Notification 默认 = 深绿快速呼吸(内置于 `StyleKey::default_style`)。
+    /// Done-Notification 默认 = 浅蓝快速呼吸(内置于 `StyleKey::default_style`)。
     pub fn default_style(self) -> StateStyle {
         match self {
             Self::DoneNotif => StateStyle {
-                color: Color::DarkGreen,
+                color: Color::LightBlue,
                 anim: Anim::Pulse,
                 period_ms: 450,
             },
@@ -267,10 +267,10 @@ mod tests {
     }
 
     #[test]
-    fn done_notif_default_is_dark_green_fast_pulse() {
-        // Done-Notification 默认 = 深绿、快速呼吸(与 DEV.md 一致)
+    fn done_notif_default_is_light_blue_fast_pulse() {
+        // Done-Notification 默认 = 浅蓝、快速呼吸(与 DEV.md 一致)
         let st = StyleKey::DoneNotif.default_style();
-        assert_eq!(st.color, Color::DarkGreen);
+        assert_eq!(st.color, Color::LightBlue);
         assert_eq!(st.anim, Anim::Pulse);
         assert_eq!(st.period_ms, 450);
     }
@@ -354,11 +354,11 @@ mod tests {
             s.light_for(AgentStatus::Done),
             LightAnim::Ripple { .. }
         ));
-        // done_notif 缺失 → 默认深绿呼吸
+        // done_notif 缺失 → 默认浅蓝呼吸
         assert!(matches!(
             s.style_for(StyleKey::DoneNotif),
             StateStyle {
-                color: Color::DarkGreen,
+                color: Color::LightBlue,
                 anim: Anim::Pulse,
                 ..
             }

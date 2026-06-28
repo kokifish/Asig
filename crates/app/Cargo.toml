@@ -34,6 +34,12 @@ objc2-app-kit = { version = "0.3", features = [
     "NSControl",
     "NSView",
     "NSImage", # 菜单栏自绘圆点 + 底栏 SF Symbol 单色图标
+    "NSBox",   # 设置页分组圆角卡片(stats.app 风)
+    "NSVisualEffectView", # 设置页材质(sidebar/contentBackground/windowBackground)
+    "NSViewController",   # 方案 A:包 sidebar/content 视图给 NSSplitViewItem
+    "NSSplitViewController",
+    "NSSplitViewItem",
+    "NSSwitch", # 设置页开关(滑动开关,原生)
     # Phase 2 浮窗:
     "NSWindow",
     "NSColor",
