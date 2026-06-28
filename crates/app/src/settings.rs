@@ -10,9 +10,8 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSBox, NSButton, NSColor, NSFont, NSImage, NSPopUpButton, NSSlider,
-    NSSplitViewController, NSSplitViewItem, NSSwitch, NSTextField, NSView, NSViewController,
-    NSWindow,
+    NSApplication, NSBox, NSButton, NSColor, NSFont, NSImage, NSPopUpButton, NSSlider, NSSwitch,
+    NSTextField, NSView, NSWindow,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -26,6 +25,12 @@ const W: CGFloat = 680.0;
 const H: CGFloat = 460.0;
 const SIDEBAR_W: CGFloat = 170.0;
 const CONTENT_W: CGFloat = W - SIDEBAR_W;
+const WINDOW_PAD: CGFloat = 10.0;
+const SECTION_GAP: CGFloat = 10.0;
+const SECTION_RADIUS: CGFloat = 18.0;
+const CONTENT_PAD_X: CGFloat = 26.0;
+const CONTENT_HEADER_H: CGFloat = 26.0;
+const CONTENT_HEADER_GAP: CGFloat = 16.0;
 /// 标题栏高度。窗口用 fullSizeContentView + 透明标题栏(侧栏毛玻璃渗透到顶),故 sidebar/
 /// content 两个 pane 都铺满整窗高度、顶部延展到标题栏下。但 pane 内的「内容」(tab / 标题 / 卡片)
 /// 必须从标题栏下方开始,否则会被压在标题栏下/与红黄绿重叠。所有「距顶」锚点都扣除本值。
@@ -73,8 +78,8 @@ pub const SPEED_MIN: f64 = 0.2;
 pub const SPEED_MAX: f64 = 5.0;
 const SWATCH_D: CGFloat = 24.0;
 
-// 居中列布局(stats.app 风):内容居中成一列,分组圆角卡片,行 = 左标签 + 右控件。
-const COL_W: CGFloat = 380.0;
+// 右区内容布局:标题属于 content panel 的 header;卡片与标题左边缘对齐。
+const COL_W: CGFloat = CONTENT_W - CONTENT_PAD_X * 2.0;
 const ROW_H: CGFloat = 32.0;
 /// 卡片内顶部/底部留白;行间距 = ROW_H。所有行内容垂直居中对齐到 row_center_y。
 const CARD_TOP_PAD: CGFloat = 10.0;
@@ -116,35 +121,66 @@ fn add_card(pane: &Retained<NSView>, frame: NSRect) {
     }
 }
 
-/// NSGlassEffectView 仅 macOS 26+ 存在;运行时按类是否注册判断,旧系统回退 vibrancy。
-fn glass_available() -> bool {
-    objc2::runtime::AnyClass::get(c"NSGlassEffectView").is_some()
+fn with_alpha(color: Retained<NSColor>, alpha: f64) -> Retained<NSColor> {
+    unsafe { msg_send![&*color, colorWithAlphaComponent: alpha] }
 }
 
-/// 右区内容背景:macOS 26 用 NSGlassEffectView(真液态玻璃),旧系统回退 NSVisualEffectView
-/// (material=ContentBackground=18)。铺到 parent 最底层(pane 在其上)。
-fn add_content_background(parent: &Retained<NSView>, frame: NSRect) {
-    let bg: Retained<NSView> = if glass_available() {
-        let alloc: Allocated<NSView> = unsafe { msg_send![class!(NSGlassEffectView), alloc] };
-        let g: Retained<NSView> = unsafe { msg_send![alloc, initWithFrame: frame] };
-        unsafe {
-            let _: () = msg_send![&g, setStyle: 0i64]; // NSGlassEffectViewStyleRegular
-        }
-        g
-    } else {
-        let alloc: Allocated<NSView> = unsafe { msg_send![class!(NSVisualEffectView), alloc] };
-        let v: Retained<NSView> = unsafe { msg_send![alloc, initWithFrame: frame] };
-        unsafe {
-            let _: () = msg_send![&v, setMaterial: 18i64]; // ContentBackground
-            let _: () = msg_send![&v, setBlendingMode: 1i64]; // withinWindow
-            let _: () = msg_send![&v, setState: 1i64]; // active
-        }
-        v
-    };
+/// 侧栏/内容区共处于同一块玻璃基底之上,再叠一层极淡的 squircle surface:
+/// 这样既保留 liquid-glass 的连续性,又让内容层靠标准材质式的 surface / card 分层,
+/// 不会把整块内容直接读成一大坨玻璃,也不会像硬拼接的两块窗。
+fn section_surface(frame: NSRect, fill_alpha: f64, stroke_alpha: f64) -> Retained<NSView> {
+    let b: Retained<NSView> = unsafe { msg_send![class!(NSBox), new] };
     unsafe {
-        let _: () = msg_send![&bg, setAutoresizingMask: 18u64]; // width+height sizable
-        let _: () = msg_send![parent, addSubview: &*bg];
+        let _: () = msg_send![&b, setBoxType: 4u64]; // NSBoxCustom
+        let _: () = msg_send![&b, setCornerRadius: SECTION_RADIUS];
+        let _: () = msg_send![&b, setBorderWidth: 1.0f64];
+        let fill = with_alpha(
+            msg_send![class!(NSColor), windowBackgroundColor],
+            fill_alpha,
+        );
+        let stroke = with_alpha(msg_send![class!(NSColor), separatorColor], stroke_alpha);
+        let _: () = msg_send![&b, setFillColor: &*fill];
+        let _: () = msg_send![&b, setBorderColor: &*stroke];
+        let _: () = msg_send![&b, setTitle: &*NSString::from_str("")];
+        let _: () = msg_send![&b, setFrame: frame];
+        let _: () = msg_send![&b, setWantsLayer: Bool::YES];
+        let layer: Retained<NSObject> = msg_send![&b, layer];
+        let _: () = msg_send![&layer, setCornerCurve: &*NSString::from_str("continuous")];
     }
+    b
+}
+
+/// 内容区 header 下的一条极淡分隔线。
+fn add_header_rule(pane: &Retained<NSView>, x: CGFloat, y: CGFloat, w: CGFloat) {
+    let rule: Retained<NSBox> = unsafe { msg_send![class!(NSBox), new] };
+    unsafe {
+        let _: () = msg_send![&rule, setBoxType: 4u64]; // NSBoxCustom
+        let _: () = msg_send![&rule, setBorderWidth: 0.0f64];
+        let fill = with_alpha(msg_send![class!(NSColor), separatorColor], 0.35);
+        let _: () = msg_send![&rule, setFillColor: &*fill];
+        let _: () = msg_send![&rule, setTitle: &*NSString::from_str("")];
+        let _: () = msg_send![
+            &rule,
+            setFrame: NSRect::new(NSPoint::new(x, y), NSSize::new(w, 1.0))
+        ];
+        let _: () = msg_send![&**pane, addSubview: &*rule];
+    }
+}
+
+/// 一块「玻璃面板」= NSVisualEffectView(`material`)。两块同材质面板左右并列、UI 叠在玻璃之上 →
+/// 视觉一整片连续玻璃(无 divider、无材质落差)。曾试 NSGlassEffectView(真·液态玻璃),但其
+/// contentView 渲染异常、且会盖住/弱化叠在上面的 UI,故回退到稳定的 NSVisualEffectView vibrancy
+/// (macOS 26 下仍是半透明玻璃材质)。用 msg_send 构造并返回 NSView,绕开 Retained 上转。
+fn glass_pane(frame: NSRect, material: i64) -> Retained<NSView> {
+    let alloc: Allocated<NSView> = unsafe { msg_send![class!(NSVisualEffectView), alloc] };
+    let v: Retained<NSView> = unsafe { msg_send![alloc, initWithFrame: frame] };
+    unsafe {
+        let _: () = msg_send![&v, setMaterial: material];
+        let _: () = msg_send![&v, setBlendingMode: 0i64]; // behindWindow — 模糊窗口背后的桌面
+        let _: () = msg_send![&v, setState: 1i64]; // active
+        let _: () = msg_send![&v, setWantsLayer: Bool::YES];
+    }
+    v
 }
 
 /// 侧栏选中药丸 = 实心强调色圆角块(controlAccentColor)。玻璃/vibrancy 材质的选中态在已带玻璃
@@ -203,6 +239,7 @@ pub struct StateControls {
 /// 当前语言的全部界面文案。
 struct Strings {
     general: &'static str,
+    about: &'static str,
     light_size: &'static str,
     click_through: &'static str,
     poll_interval: &'static str,
@@ -237,6 +274,7 @@ fn strings_for(l: Lang) -> Strings {
     match l {
         Lang::Zh => Strings {
             general: "常规",
+            about: "关于",
             light_size: "浮窗大小",
             click_through: "浮窗点击穿透(取消则可拖动)",
             poll_interval: "轮询间隔",
@@ -257,6 +295,7 @@ fn strings_for(l: Lang) -> Strings {
         },
         Lang::En => Strings {
             general: "General",
+            about: "About",
             light_size: "Light size",
             click_through: "Click-through (off = draggable)",
             poll_interval: "Poll interval",
@@ -321,7 +360,6 @@ fn sf_symbol(name: &str) -> Retained<NSImage> {
 }
 
 pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
-    let mtm = MainThreadMarker::new().expect("settings build 须在主线程");
     let lang = delegate.ivars().settings.borrow().lang;
     let st = strings_for(lang);
 
@@ -345,29 +383,23 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         let _: () = msg_send![&window, setBackgroundColor: &*clear];
         let _: () = msg_send![&window, setTitlebarAppearsTransparent: Bool::YES]; // 内容贯穿标题栏
         let _: () = msg_send![&window, setTitleVisibility: 1i64]; // hidden
+        let _: () = msg_send![&window, setTitlebarSeparatorStyle: 1i64]; // none — 玻璃贯穿标题栏,无顶部分隔线
         let _: () = msg_send![&window, setMovable: true];
         let _: () = msg_send![&window, setMinSize: NSSize::new(W, H)];
     }
 
-    // 侧栏视图(透明;sidebarWithViewController 会套原生 sidebar 材质/vibrancy)。
+    // 侧栏视图(透明 UI;背景由下方 sidebar_glass 玻璃面板提供)。
     let sidebar = new_view(NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(SIDEBAR_W, H),
     ));
     build_sidebar(&sidebar, delegate, &st);
 
-    // 右区:普通 NSView 容器 + windowBackground 材质铺底;其上卡片(controlBackgroundColor)更亮。
+    // 右区:透明 NSView,8 pane 叠在其上。origin 在 SIDEBAR_W(叠在 content_glass 上)。
     let content_area = new_view(NSRect::new(
-        NSPoint::new(0.0, 0.0),
+        NSPoint::new(SIDEBAR_W, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
-    {
-        // 右区内容背景:真液态玻璃(macOS 26)/ vibrancy(旧系统)。pane 在其上。
-        add_content_background(
-            &content_area,
-            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(CONTENT_W, H)),
-        );
-    }
     // 8 pane:General + 6 状态(各带 StateControls)+ About。按 pane id(=索引)排。
     let mut panes: Vec<Retained<NSView>> = Vec::with_capacity(8);
     let mut controls_map: HashMap<StyleKey, StateControls> = HashMap::new();
@@ -385,30 +417,43 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         }
     }
 
-    // 方案 A:包成 NSViewController → NSSplitViewController(sidebarWithViewController 给原生侧栏)。
-    let sidebar_vc = NSViewController::new(mtm);
-    let content_vc = NSViewController::new(mtm);
+    // 统一玻璃:一整片 NSVisualEffectView 铺满窗口(侧栏 + 右区共用同一片玻璃)。
+    // 再在其上各叠一层极淡 surface,用层级而不是硬 divider 区分导航和内容,避免接缝感。
+    let host = new_view(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(W, H)));
+    let bg_glass = glass_pane(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(W, H)), 12);
+    let sidebar_surface = section_surface(
+        NSRect::new(
+            NSPoint::new(WINDOW_PAD, WINDOW_PAD),
+            NSSize::new(
+                SIDEBAR_W - WINDOW_PAD - SECTION_GAP / 2.0,
+                H - WINDOW_PAD * 2.0,
+            ),
+        ),
+        0.12,
+        0.22,
+    );
+    let content_surface = section_surface(
+        NSRect::new(
+            NSPoint::new(SIDEBAR_W + SECTION_GAP / 2.0, WINDOW_PAD),
+            NSSize::new(
+                CONTENT_W - WINDOW_PAD - SECTION_GAP / 2.0,
+                H - WINDOW_PAD * 2.0,
+            ),
+        ),
+        0.08,
+        0.18,
+    );
     unsafe {
-        let _: () = msg_send![&sidebar_vc, setView: &*sidebar];
-        let _: () = msg_send![&content_vc, setView: &*content_area];
-    }
-    let sidebar_item = NSSplitViewItem::sidebarWithViewController(&sidebar_vc);
-    let item_alloc: Allocated<NSSplitViewItem> =
-        unsafe { msg_send![class!(NSSplitViewItem), alloc] };
-    let content_item = NSSplitViewItem::init(item_alloc);
-    unsafe {
-        let _: () = msg_send![&content_item, setViewController: &*content_vc];
-        for it in [&sidebar_item, &content_item] {
-            let _: () = msg_send![&**it, setCanCollapse: false];
-        }
-        let _: () = msg_send![&sidebar_item, setMinimumThickness: SIDEBAR_W];
-        let _: () = msg_send![&content_item, setMinimumThickness: CONTENT_W];
-    }
-    let svc = NSSplitViewController::new(mtm);
-    svc.addSplitViewItem(&sidebar_item);
-    svc.addSplitViewItem(&content_item);
-    unsafe {
-        let _: () = msg_send![&window, setContentViewController: Some(&*svc)];
+        let _: () = msg_send![&host, setAutoresizingMask: 18u64]; // 随窗口缩放
+        let _: () = msg_send![&bg_glass, setAutoresizingMask: 18u64];
+        let _: () = msg_send![&host, addSubview: &*bg_glass]; // 玻璃在最底层
+        let _: () = msg_send![&sidebar_surface, setAutoresizingMask: 16u64];
+        let _: () = msg_send![&content_surface, setAutoresizingMask: 18u64];
+        let _: () = msg_send![&host, addSubview: &*sidebar_surface];
+        let _: () = msg_send![&host, addSubview: &*content_surface];
+        let _: () = msg_send![&host, addSubview: &*sidebar]; // UI 叠在玻璃之上
+        let _: () = msg_send![&host, addSubview: &*content_area];
+        let _: () = msg_send![&window, setContentView: &*host];
     }
 
     *delegate.ivars().settings_sidebar.borrow_mut() = Some(sidebar);
@@ -556,21 +601,22 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
-    let x0 = (CONTENT_W - COL_W) / 2.0;
-    let lx = x0 + 16.0; // 标签 x
-    let cx = x0 + 140.0; // 控件 x
-    let cw = COL_W - 140.0 - 16.0; // 控件区宽
-    let mut y = H - 48.0 - TOP_INSET;
+    let x0 = CONTENT_PAD_X;
+    let lx = x0 + 18.0; // 标签 x
+    let cx = x0 + 160.0; // 控件 x
+    let cw = COL_W - 160.0 - 18.0; // 控件区宽
+    let mut y = H - CONTENT_PAD_X - TOP_INSET;
 
-    // 标题(居中)
+    // 标题属于右侧内容 panel 的 header,不再居中漂在卡片列里。
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(0.0, y), NSSize::new(CONTENT_W, 24.0)),
+        NSRect::new(NSPoint::new(x0, y), NSSize::new(COL_W, CONTENT_HEADER_H)),
         st.general,
-        true,
+        false,
         true,
     );
-    y -= 32.0;
+    add_header_rule(&pane, x0, y - CONTENT_HEADER_GAP, COL_W);
+    y -= CONTENT_HEADER_H + CONTENT_HEADER_GAP + 12.0;
 
     // —— Card:常规设置(4 行)——
     add_card(&pane, card_frame(x0, y, 4));
@@ -744,25 +790,25 @@ fn build_state_pane(
         NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
-    let x0 = (CONTENT_W - COL_W) / 2.0;
-    let lx = x0 + 16.0;
-    let cx = x0 + 140.0;
-    let cw = COL_W - 140.0 - 16.0;
+    let x0 = CONTENT_PAD_X;
+    let lx = x0 + 18.0;
+    let cx = x0 + 160.0;
+    let cw = COL_W - 160.0 - 18.0;
     let base = tab_of_key(key) * 1000;
-    let mut y = H - 48.0 - TOP_INSET;
+    let mut y = H - CONTENT_PAD_X - TOP_INSET;
 
-    // 标题(居中)+ 右上角 Reset
+    // 标题属于右侧内容 panel 的 header;Reset 对齐到同一 header 的尾部。
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(0.0, y), NSSize::new(CONTENT_W, 24.0)),
+        NSRect::new(NSPoint::new(x0, y), NSSize::new(COL_W, CONTENT_HEADER_H)),
         name,
-        true,
+        false,
         true,
     );
     let _ = add_plain_button(
         &pane,
         NSRect::new(
-            NSPoint::new(CONTENT_W - x0 - 70.0, y),
+            NSPoint::new(CONTENT_W - CONTENT_PAD_X - 70.0, y + 1.0),
             NSSize::new(70.0, 24.0),
         ),
         st.reset,
@@ -770,7 +816,8 @@ fn build_state_pane(
         sel!(resetStateStyle:),
         delegate,
     );
-    y -= 32.0;
+    add_header_rule(&pane, x0, y - CONTENT_HEADER_GAP, COL_W);
+    y -= CONTENT_HEADER_H + CONTENT_HEADER_GAP + 12.0;
 
     // —— Card:状态(3 行)——
     add_card(&pane, card_frame(x0, y, 3));
@@ -908,23 +955,44 @@ fn build_about_pane(st: &Strings) -> Retained<NSView> {
         NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
+    let x0 = CONTENT_PAD_X;
+    let mut y = H - CONTENT_PAD_X - TOP_INSET;
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(0.0, H - 150.0), NSSize::new(CONTENT_W, 30.0)),
+        NSRect::new(NSPoint::new(x0, y), NSSize::new(COL_W, CONTENT_HEADER_H)),
+        st.about,
+        false,
+        true,
+    );
+    add_header_rule(&pane, x0, y - CONTENT_HEADER_GAP, COL_W);
+    y -= CONTENT_HEADER_H + CONTENT_HEADER_GAP + 12.0;
+    add_card(&pane, card_frame(x0, y, 3));
+    add_text(
+        &pane,
+        NSRect::new(
+            NSPoint::new(x0 + 18.0, row_center_y(y, 0) - 10.0),
+            NSSize::new(COL_W - 36.0, 20.0),
+        ),
         "Asig",
         true,
         true,
     );
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(0.0, H - 190.0), NSSize::new(CONTENT_W, 20.0)),
+        NSRect::new(
+            NSPoint::new(x0 + 18.0, row_center_y(y, 1) - 10.0),
+            NSSize::new(COL_W - 36.0, 20.0),
+        ),
         &format!("{}{}", st.version, env!("CARGO_PKG_VERSION")),
         true,
         false,
     );
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(0.0, H - 220.0), NSSize::new(CONTENT_W, 20.0)),
+        NSRect::new(
+            NSPoint::new(x0 + 18.0, row_center_y(y, 2) - 10.0),
+            NSSize::new(COL_W - 36.0, 20.0),
+        ),
         GITHUB_URL,
         true,
         false,

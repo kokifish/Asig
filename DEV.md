@@ -110,8 +110,9 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
 - Position: 默认在屏幕中央，可以拖动
 - Navigation: 左侧栏（顶部 tab 列表 + 底部图标行）+ 右侧 pane 切换。点 tab / 「关于」图标切换右侧 pane。
-- 材质（macOS 26+）：右区内容背景 = 液态玻璃（`NSGlassEffectView`）；侧栏 / 下拉 popover 靠 macOS 26 SDK 自动获得液态玻璃。卡片 = 极淡填充（`quaternaryLabelColor`）+ 连续圆角（squircle）的分组卡片（stats.app 风），行 = 左标签 + 右控件居中对齐。旧 macOS 回退 vibrancy 材质。
+- 材质（当前稳定实现，按 Apple HIG 的 layer 语义）：窗口底层是一整片连续玻璃基底（透明标题栏 + `NSVisualEffectView` / vibrancy）以保持统一的 liquid-glass 观感；**导航 / 控制层** 主要由侧栏与右侧 header 读取，**内容层** 则靠极淡、连续圆角的 surface 与卡片（`quaternaryLabelColor`）形成标准材质分层。**不用硬 divider**，避免接缝和“像两块窗拼起来”的感觉；通过层级而不是厚重描边区分分区。
 - Content:
+  - 右侧内容区有自己的 **header**：标题固定在右侧内容 panel 的左上方，而不是漂在卡片列中央；header 下方用一条极淡分隔线，把 header/control layer 和 content/card layer 分开。
   - General pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、开机启动（占位，待实现）。详见 General Settings Card。
   - State pane(每状态一个): 颜色（横向单选色块）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
   - About pane: 版本号 + GitHub 链接（纯展示）。
