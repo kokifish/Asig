@@ -42,6 +42,7 @@ fn main() {
         settings_content: RefCell::new(None),
         settings_panes: RefCell::new(None),
         settings_selected: RefCell::new(0),
+        settings_selection: RefCell::new(None),
         state_controls: RefCell::new(HashMap::new()),
     });
     // popover / 设置窗改为首次点击时懒创建(省常驻内存,压到 <60MB 预算内)。

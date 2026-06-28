@@ -7,12 +7,12 @@
 use std::collections::HashMap;
 
 use objc2::rc::{Allocated, Retained};
-use objc2::runtime::{Bool, Sel};
+use objc2::runtime::{Bool, NSObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSBox, NSButton, NSColor, NSFont, NSImage, NSPopUpButton, NSSlider,
     NSSplitViewController, NSSplitViewItem, NSSwitch, NSTextField, NSView, NSViewController,
-    NSVisualEffectView, NSWindow,
+    NSWindow,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -76,16 +76,26 @@ const SWATCH_D: CGFloat = 24.0;
 // 居中列布局(stats.app 风):内容居中成一列,分组圆角卡片,行 = 左标签 + 右控件。
 const COL_W: CGFloat = 380.0;
 const ROW_H: CGFloat = 32.0;
+/// 卡片内顶部/底部留白;行间距 = ROW_H。所有行内容垂直居中对齐到 row_center_y。
+const CARD_TOP_PAD: CGFloat = 10.0;
+const CARD_BOT_PAD: CGFloat = 10.0;
+/// 卡片之间的统一间距。
+const CARD_GAP: CGFloat = 20.0;
 
-/// 卡片 frame:顶部 `top`、`rows` 行高。
+/// `rows` 行卡片的总高度。
+fn card_height(rows: usize) -> CGFloat {
+    CARD_TOP_PAD + rows as CGFloat * ROW_H + CARD_BOT_PAD
+}
+
+/// 卡片 frame:顶部边在 `top`、`rows` 行高(含上下留白)。
 fn card_frame(x0: CGFloat, top: CGFloat, rows: usize) -> NSRect {
-    let h = rows as CGFloat * ROW_H + 16.0;
+    let h = card_height(rows);
     NSRect::new(NSPoint::new(x0, top - h), NSSize::new(COL_W, h))
 }
 
-/// 第 i 行(0=最上)的标签/控件基线 y。
-fn row_y(top: CGFloat, i: usize) -> CGFloat {
-    top - 14.0 - i as CGFloat * ROW_H
+/// 第 i 行(0=最上)的垂直中心 y。所有 label 与控件都对齐到它(居中制,杜绝错位)。
+fn row_center_y(top: CGFloat, i: usize) -> CGFloat {
+    top - CARD_TOP_PAD - (i as CGFloat + 0.5) * ROW_H
 }
 
 /// 分组圆角卡片背景(NSBox custom:细边 + 圆角 + 浅填充),置于行后面。
@@ -94,30 +104,92 @@ fn add_card(pane: &Retained<NSView>, frame: NSRect) {
     unsafe {
         let _: () = msg_send![&b, setBoxType: 4u64]; // NSBoxCustom
         let _: () = msg_send![&b, setCornerRadius: 10.0f64];
-        let _: () = msg_send![&b, setBorderWidth: 1.0f64];
-        let border: Retained<NSColor> = msg_send![class!(NSColor), separatorColor];
-        let _: () = msg_send![&b, setBorderColor: &*border];
-        let fill: Retained<NSColor> = msg_send![class!(NSColor), controlBackgroundColor];
+        let _: () = msg_send![&b, setBorderWidth: 0.0f64];
+        let fill: Retained<NSColor> = msg_send![class!(NSColor), quaternaryLabelColor];
         let _: () = msg_send![&b, setFillColor: &*fill];
         let _: () = msg_send![&b, setTitle: &*NSString::from_str("")];
         let _: () = msg_send![&b, setFrame: frame];
+        let _: () = msg_send![&b, setWantsLayer: Bool::YES];
+        let layer: Retained<NSObject> = msg_send![&b, layer];
+        let _: () = msg_send![&layer, setCornerCurve: &*NSString::from_str("continuous")];
         let _: () = msg_send![&**pane, addSubview: &*b];
     }
 }
 
-/// NSVisualEffectView 容器(material 原生材质:12=windowBackground / 18=contentBackground /
-/// 7=sidebar)。blending=withinWindow、state=active。
-fn effect_view(frame: NSRect, material: i64) -> Retained<NSVisualEffectView> {
-    let alloc: Allocated<NSVisualEffectView> =
-        unsafe { msg_send![class!(NSVisualEffectView), alloc] };
-    let v: Retained<NSVisualEffectView> = unsafe { msg_send![alloc, initWithFrame: frame] };
+/// NSGlassEffectView 仅 macOS 26+ 存在;运行时按类是否注册判断,旧系统回退 vibrancy。
+fn glass_available() -> bool {
+    objc2::runtime::AnyClass::get(c"NSGlassEffectView").is_some()
+}
+
+/// 右区内容背景:macOS 26 用 NSGlassEffectView(真液态玻璃),旧系统回退 NSVisualEffectView
+/// (material=ContentBackground=18)。铺到 parent 最底层(pane 在其上)。
+fn add_content_background(parent: &Retained<NSView>, frame: NSRect) {
+    let bg: Retained<NSView> = if glass_available() {
+        let alloc: Allocated<NSView> = unsafe { msg_send![class!(NSGlassEffectView), alloc] };
+        let g: Retained<NSView> = unsafe { msg_send![alloc, initWithFrame: frame] };
+        unsafe {
+            let _: () = msg_send![&g, setStyle: 0i64]; // NSGlassEffectViewStyleRegular
+        }
+        g
+    } else {
+        let alloc: Allocated<NSView> = unsafe { msg_send![class!(NSVisualEffectView), alloc] };
+        let v: Retained<NSView> = unsafe { msg_send![alloc, initWithFrame: frame] };
+        unsafe {
+            let _: () = msg_send![&v, setMaterial: 18i64]; // ContentBackground
+            let _: () = msg_send![&v, setBlendingMode: 1i64]; // withinWindow
+            let _: () = msg_send![&v, setState: 1i64]; // active
+        }
+        v
+    };
     unsafe {
-        let _: () = msg_send![&v, setMaterial: material];
-        let _: () = msg_send![&v, setBlendingMode: 1i64]; // withinWindow
-        let _: () = msg_send![&v, setState: 1i64]; // active
-        let _: () = msg_send![&v, setWantsLayer: Bool::YES];
+        let _: () = msg_send![&bg, setAutoresizingMask: 18u64]; // width+height sizable
+        let _: () = msg_send![parent, addSubview: &*bg];
     }
-    v
+}
+
+/// 侧栏选中药丸 = 实心强调色圆角块(controlAccentColor)。玻璃/vibrancy 材质的选中态在已带玻璃
+/// 的侧栏上会与背景融为一体、不可辨(实测 NSGlassEffectView tint / NSVisualEffectView Selection
+/// 均不可见),故用实心强调色(同 stats.app 的 selectedContentBackgroundColor),在玻璃侧栏上清晰、
+/// 读作「选中」。一个共享视图,选中时移到对应 tab 行(见 update_selection)。初始隐藏。
+fn make_selection_pill() -> Retained<NSView> {
+    let b: Retained<NSView> = unsafe { msg_send![class!(NSBox), new] };
+    unsafe {
+        let _: () = msg_send![&b, setBoxType: 4u64]; // NSBoxCustom
+        let _: () = msg_send![&b, setCornerRadius: 8.0f64];
+        let _: () = msg_send![&b, setBorderWidth: 0.0f64];
+        let accent: Retained<NSColor> = msg_send![class!(NSColor), controlAccentColor];
+        let _: () = msg_send![&b, setFillColor: &*accent];
+        let _: () = msg_send![&b, setTitle: &*NSString::from_str("")];
+        let _: () = msg_send![&b, setWantsLayer: Bool::YES];
+        let layer: Retained<NSObject> = msg_send![&b, layer];
+        let _: () = msg_send![&layer, setCornerCurve: &*NSString::from_str("continuous")];
+        let _: () = msg_send![&b, setHidden: Bool::YES]; // 初始隐藏,update_selection 时显示
+    }
+    b
+}
+
+/// 给 borderless tab 按钮设文字色:选中 = 白、否则 = labelColor。用 attributedTitle
+/// 实现(borderless NSButton 默认标题色无法直接改)。状态色圆点图片保持彩色不变。
+fn set_tab_title(button: &Retained<NSView>, label: &str, selected: bool) {
+    let color: Retained<NSColor> = if selected {
+        unsafe { msg_send![class!(NSColor), whiteColor] }
+    } else {
+        unsafe { msg_send![class!(NSColor), labelColor] }
+    };
+    unsafe {
+        let attrs: Retained<NSObject> = msg_send![
+            class!(NSDictionary),
+            dictionaryWithObject: &*color,
+            forKey: &*NSString::from_str("NSColor"), // NSForegroundColorAttributeName
+        ];
+        let astr: Allocated<NSObject> = msg_send![class!(NSAttributedString), alloc];
+        let astr: Retained<NSObject> = msg_send![
+            astr,
+            initWithString: &*NSString::from_str(label),
+            attributes: &*attrs,
+        ];
+        let _: () = msg_send![&**button, setAttributedTitle: &*astr];
+    }
 }
 
 /// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
@@ -290,14 +362,11 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         NSSize::new(CONTENT_W, H),
     ));
     {
-        let bg = effect_view(
+        // 右区内容背景:真液态玻璃(macOS 26)/ vibrancy(旧系统)。pane 在其上。
+        add_content_background(
+            &content_area,
             NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(CONTENT_W, H)),
-            12, // windowBackground
         );
-        unsafe {
-            let _: () = msg_send![&bg, setAutoresizingMask: 18u64]; // width+height sizable
-            let _: () = msg_send![&content_area, addSubview: &*bg]; // 铺底,pane 在其上
-        }
     }
     // 8 pane:General + 6 状态(各带 StateControls)+ About。按 pane id(=索引)排。
     let mut panes: Vec<Retained<NSView>> = Vec::with_capacity(8);
@@ -347,16 +416,19 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     *delegate.ivars().settings_panes.borrow_mut() = Some(panes);
     *delegate.ivars().settings_selected.borrow_mut() = TAB_GENERAL;
     *delegate.ivars().state_controls.borrow_mut() = controls_map;
-    update_tab_prefixes(delegate, TAB_GENERAL);
+    update_selection(delegate, TAB_GENERAL);
 
     // ASIG_TAB(dev):直接打开指定 pane(1..7),便于逐页截图;默认 0(常规)。
-    if let Some(n) = std::env::var("ASIG_TAB").ok().and_then(|s| s.parse::<i64>().ok()) {
+    if let Some(n) = std::env::var("ASIG_TAB")
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+    {
         if (1..8).contains(&n) {
             {
                 let panes_ref = delegate.ivars().settings_panes.borrow();
                 if let Some(v) = panes_ref.as_ref() {
                     unsafe {
-                        if let Some(p0) = v.get(0) {
+                        if let Some(p0) = v.first() {
                             let _: () = msg_send![p0, setHidden: Bool::YES];
                         }
                         if let Some(pn) = v.get(n as usize) {
@@ -366,7 +438,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
                 }
             }
             *delegate.ivars().settings_selected.borrow_mut() = n;
-            update_tab_prefixes(delegate, n);
+            update_selection(delegate, n);
         }
     }
 
@@ -375,6 +447,14 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
 
 /// 侧栏:顶部 tab(General + 6 状态,左对齐;状态 tab = 当前色圆点 + 本地化简称)+ 底部单色图标行。
 fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &Strings) {
+    // 选中药丸(液态玻璃,共享):最先 addSubview → 落在所有 tab 按钮之下;update_selection
+    // 时按选中按钮的 frame 移位并显示。状态色圆点保持彩色,仅文字随选中转白。
+    let pill = make_selection_pill();
+    unsafe {
+        let _: () = msg_send![&**sidebar, addSubview: &*pill];
+    }
+    *delegate.ivars().settings_selection.borrow_mut() = Some(pill);
+
     let tab_w = SIDEBAR_W - 16.0;
     add_tab_button(
         sidebar,
@@ -426,8 +506,8 @@ fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &String
     }
 }
 
-/// 切换选中 tab:重设顶部文本 tab 的「▸」前缀(选中项加、其余去)。
-pub fn update_tab_prefixes(delegate: &AppDelegate, selected: i64) {
+/// 切换选中 tab:把液态玻璃药丸移到选中项并显示,选中文字转白、其余 labelColor。
+pub fn update_selection(delegate: &AppDelegate, selected: i64) {
     let Some(sidebar) = delegate.ivars().settings_sidebar.borrow().as_ref().cloned() else {
         return;
     };
@@ -439,18 +519,28 @@ pub fn update_tab_prefixes(delegate: &AppDelegate, selected: i64) {
             .zip(st.state.iter())
             .map(|((t, _), n)| (*t, *n)),
     );
+    let pill = delegate
+        .ivars()
+        .settings_selection
+        .borrow()
+        .as_ref()
+        .cloned();
     for (tag, label) in labels {
         let Some(b) = view_with_tag(&sidebar, tag) else {
             continue;
         };
-        let title = if tag == selected {
-            format!("▸ {label}")
-        } else {
-            label.to_string()
-        };
-        unsafe {
-            let _: () = msg_send![&b, setTitle: &*NSString::from_str(&title)];
+        let is_sel = tag == selected;
+        // 选中项:把药丸移到该按钮 frame 并显示。
+        if is_sel {
+            if let Some(p) = &pill {
+                let frame: NSRect = unsafe { msg_send![&b, frame] };
+                unsafe {
+                    let _: () = msg_send![&**p, setFrame: frame];
+                    let _: () = msg_send![&**p, setHidden: Bool::NO];
+                }
+            }
         }
+        set_tab_title(&b, label, is_sel);
     }
 }
 
@@ -484,10 +574,13 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
 
     // —— Card:常规设置(4 行)——
     add_card(&pane, card_frame(x0, y, 4));
-    // Light size
+    // Light size:label + slider 都对齐 row 0 中心。
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(lx, row_y(y, 0)), NSSize::new(120.0, 20.0)),
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 0) - 10.0),
+            NSSize::new(120.0, 20.0),
+        ),
         st.light_size,
         false,
         false,
@@ -495,17 +588,23 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     let dot = delegate.ivars().settings.borrow().dot_size as f64;
     add_slider(
         &pane,
-        NSRect::new(NSPoint::new(cx, row_y(y, 0) - 2.0), NSSize::new(cw, 22.0)),
+        NSRect::new(
+            NSPoint::new(cx, row_center_y(y, 0) - 11.0),
+            NSSize::new(cw, 22.0),
+        ),
         8.0,
         40.0,
         dot,
         sel!(changeSize:),
         delegate,
     );
-    // Click-through(标签 + 开关)
+    // Click-through(标签 + 开关;开关左对齐到 cx,与其余控件同列)
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(lx, row_y(y, 1)), NSSize::new(120.0, 20.0)),
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 1) - 10.0),
+            NSSize::new(120.0, 20.0),
+        ),
         st.click_through,
         false,
         false,
@@ -513,7 +612,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     add_switch(
         &pane,
         NSRect::new(
-            NSPoint::new(cx + cw - 40.0, row_y(y, 1) - 1.0),
+            NSPoint::new(cx, row_center_y(y, 1) - 11.0),
             NSSize::new(40.0, 22.0),
         ),
         *delegate.ivars().click_through.borrow(),
@@ -523,7 +622,10 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     // Poll interval
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(lx, row_y(y, 2)), NSSize::new(120.0, 20.0)),
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 2) - 10.0),
+            NSSize::new(120.0, 20.0),
+        ),
         st.poll_interval,
         false,
         false,
@@ -532,7 +634,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     add_popup(
         &pane,
         NSRect::new(
-            NSPoint::new(cx, row_y(y, 2) - 4.0),
+            NSPoint::new(cx, row_center_y(y, 2) - 13.0),
             NSSize::new(120.0, 26.0),
         ),
         &st.poll_opts,
@@ -544,7 +646,10 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     // Launch at login(标签 + 开关,占位禁用)
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(lx, row_y(y, 3)), NSSize::new(120.0, 20.0)),
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 3) - 10.0),
+            NSSize::new(120.0, 20.0),
+        ),
         st.launch_login,
         false,
         false,
@@ -552,7 +657,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     let launch = add_switch(
         &pane,
         NSRect::new(
-            NSPoint::new(cx + cw - 40.0, row_y(y, 3) - 1.0),
+            NSPoint::new(cx, row_center_y(y, 3) - 11.0),
             NSSize::new(40.0, 22.0),
         ),
         false,
@@ -562,13 +667,16 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     unsafe {
         let _: () = msg_send![&launch, setEnabled: Bool::NO];
     }
-    y -= 4.0 * ROW_H + 16.0 + 20.0;
+    y -= card_height(4) + CARD_GAP;
 
     // —— Card:语言(1 行)——
     add_card(&pane, card_frame(x0, y, 1));
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(lx, row_y(y, 0)), NSSize::new(80.0, 20.0)),
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 0) - 10.0),
+            NSSize::new(80.0, 20.0),
+        ),
         st.language,
         false,
         false,
@@ -576,7 +684,10 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     let lang = delegate.ivars().settings.borrow().lang;
     add_radio_button(
         &pane,
-        NSRect::new(NSPoint::new(cx, row_y(y, 0)), NSSize::new(90.0, 22.0)),
+        NSRect::new(
+            NSPoint::new(cx, row_center_y(y, 0) - 11.0),
+            NSSize::new(90.0, 22.0),
+        ),
         "English",
         LANG_EN_TAG,
         delegate,
@@ -585,7 +696,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     add_radio_button(
         &pane,
         NSRect::new(
-            NSPoint::new(cx + 100.0, row_y(y, 0)),
+            NSPoint::new(cx + 100.0, row_center_y(y, 0) - 11.0),
             NSSize::new(90.0, 22.0),
         ),
         "中文",
@@ -605,7 +716,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
             }
         }
     }
-    y -= 1.0 * ROW_H + 16.0 + 24.0;
+    y -= card_height(1) + CARD_GAP;
 
     // Reset(全部,居中)
     let _ = add_plain_button(
@@ -663,10 +774,13 @@ fn build_state_pane(
 
     // —— Card:状态(3 行)——
     add_card(&pane, card_frame(x0, y, 3));
-    // Color(标签 + 横向色块)
+    // Color(标签 + 横向色块;都对齐 row 0 中心)
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(lx, row_y(y, 0)), NSSize::new(120.0, 20.0)),
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 0) - 10.0),
+            NSSize::new(120.0, 20.0),
+        ),
         st.color,
         false,
         false,
@@ -677,7 +791,7 @@ fn build_state_pane(
         color_btns.push(add_swatch_button(
             &pane,
             NSRect::new(
-                NSPoint::new(sx, row_y(y, 0) - 4.0),
+                NSPoint::new(sx, row_center_y(y, 0) - 12.0),
                 NSSize::new(SWATCH_D, SWATCH_D),
             ),
             color,
@@ -685,10 +799,13 @@ fn build_state_pane(
             delegate,
         ));
     }
-    // Animation(标签 + 3 单选)
+    // Animation(标签 + 3 单选;都对齐 row 1 中心)
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(lx, row_y(y, 1)), NSSize::new(120.0, 20.0)),
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 1) - 10.0),
+            NSSize::new(120.0, 20.0),
+        ),
         st.animation,
         false,
         false,
@@ -698,7 +815,7 @@ fn build_state_pane(
         anim_btns.push(add_radio_button(
             &pane,
             NSRect::new(
-                NSPoint::new(cx + i as CGFloat * 76.0, row_y(y, 1)),
+                NSPoint::new(cx + i as CGFloat * 76.0, row_center_y(y, 1) - 11.0),
                 NSSize::new(72.0, 22.0),
             ),
             nm,
@@ -707,10 +824,13 @@ fn build_state_pane(
             sel!(changeAnim:),
         ));
     }
-    // Speed(标签 + 滑块 + Hz)
+    // Speed(标签 + 滑块 + Hz;都对齐 row 2 中心)
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(lx, row_y(y, 2)), NSSize::new(120.0, 20.0)),
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 2) - 10.0),
+            NSSize::new(120.0, 20.0),
+        ),
         st.speed,
         false,
         false,
@@ -718,7 +838,7 @@ fn build_state_pane(
     let speed = add_slider(
         &pane,
         NSRect::new(
-            NSPoint::new(cx, row_y(y, 2) - 2.0),
+            NSPoint::new(cx, row_center_y(y, 2) - 11.0),
             NSSize::new(cw - 64.0, 22.0),
         ),
         SPEED_MIN,
@@ -731,7 +851,7 @@ fn build_state_pane(
     let speed_label = add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(cx + cw - 56.0, row_y(y, 2) + 2.0),
+            NSPoint::new(cx + cw - 56.0, row_center_y(y, 2) - 10.0),
             NSSize::new(56.0, 20.0),
         ),
         "—",

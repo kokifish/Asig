@@ -43,10 +43,10 @@ pub fn build(delegate: &AppDelegate) -> Popover {
         true,
     );
 
-    // —— 顶部三按钮(左→右):设置 / 锁定 / 退出 ——
+    // —— 顶部三按钮(左→右):设置 / 锁定 / 退出。三按钮均 76pt 宽、间距 10pt(248pt 可用)——
     let _ = add_button(
         &content,
-        NSRect::new(NSPoint::new(16.0, PANEL_H - 64.0), NSSize::new(84.0, 30.0)),
+        NSRect::new(NSPoint::new(16.0, PANEL_H - 64.0), NSSize::new(76.0, 30.0)),
         "设置",
         delegate,
         sel!(openSettings:),
@@ -54,7 +54,7 @@ pub fn build(delegate: &AppDelegate) -> Popover {
     let locked = *delegate.ivars().click_through.borrow(); // 锁定 = 不可拖动 = click_through
     let btn_lock = add_button(
         &content,
-        NSRect::new(NSPoint::new(110.0, PANEL_H - 64.0), NSSize::new(74.0, 30.0)),
+        NSRect::new(NSPoint::new(102.0, PANEL_H - 64.0), NSSize::new(76.0, 30.0)),
         "锁定",
         delegate,
         sel!(toggleClickThrough:),
@@ -66,8 +66,8 @@ pub fn build(delegate: &AppDelegate) -> Popover {
     let _ = add_button(
         &content,
         NSRect::new(
-            NSPoint::new(PANEL_W - 16.0 - 84.0, PANEL_H - 64.0),
-            NSSize::new(84.0, 30.0),
+            NSPoint::new(PANEL_W - 16.0 - 76.0, PANEL_H - 64.0),
+            NSSize::new(76.0, 30.0),
         ),
         "退出",
         delegate,
@@ -95,7 +95,11 @@ pub fn build(delegate: &AppDelegate) -> Popover {
     }
     let popover = NSPopover::new(mtm);
     // ASIG_NO_HIDE(dev):behavior=0(ApplicationDefined)不随失焦关,便于截图;默认 1(Transient)。
-    let behavior: i64 = if std::env::var("ASIG_NO_HIDE").is_ok() { 0 } else { 1 };
+    let behavior: i64 = if std::env::var("ASIG_NO_HIDE").is_ok() {
+        0
+    } else {
+        1
+    };
     unsafe {
         let _: () = msg_send![&popover, setBehavior: behavior]; // 0=ApplicationDefined / 1=Transient
         let _: () = msg_send![&popover, setContentSize: NSSize::new(PANEL_W, PANEL_H)];

@@ -110,6 +110,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
 - Position: 默认在屏幕中央，可以拖动
 - Navigation: 左侧栏（顶部 tab 列表 + 底部图标行）+ 右侧 pane 切换。点 tab / 「关于」图标切换右侧 pane。
+- 材质（macOS 26+）：右区内容背景 = 液态玻璃（`NSGlassEffectView`）；侧栏 / 下拉 popover 靠 macOS 26 SDK 自动获得液态玻璃。卡片 = 极淡填充（`quaternaryLabelColor`）+ 连续圆角（squircle）的分组卡片（stats.app 风），行 = 左标签 + 右控件居中对齐。旧 macOS 回退 vibrancy 材质。
 - Content:
   - General pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、开机启动（占位，待实现）。详见 General Settings Card。
   - State pane(每状态一个): 颜色（横向单选色块）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
@@ -117,6 +118,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
   - 各状态可独立改 动画 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
 - Left Side Tabs(in order): General, DoneNotif, Done, Working, NeedsDeci, Error, Offline. Left aligned。状态 tab = 当前色圆点 + 英文简称；其余黑白风（macOS 默认暗色）。
   - Color: 除状态色圆点外，其余均黑白风 / macOS 默认暗色，不用彩色。
+  - 选中态：选中 tab = 实心强调色圆角块（`controlAccentColor`，cornerRadius 8，连续圆角 squircle），选中文字转白；状态色圆点保持彩色。**不用文字前缀（无 ▸ 三角形）**，与 stats.app 一致（玻璃/vibrancy 材质的选中态在玻璃侧栏上不可辨，故用实心强调色）。
 - Left Side Buttons: 关于(About)、访问官网、调试、捐赠、退出Asig（左→右）。除「关于」外均为占位禁用按钮(留待实现)。
   - Color: 均黑白风 / macOS 默认暗色（单色 SF Symbol 图标），不用彩色。
 

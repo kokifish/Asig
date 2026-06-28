@@ -43,6 +43,8 @@ pub struct AppIvars {
     pub settings_panes: RefCell<Option<Vec<Retained<NSView>>>>,
     /// 设置窗当前选中的 tab(pane id)。
     pub settings_selected: RefCell<i64>,
+    /// 侧栏选中药丸(液态玻璃,共享一个);update_selection 按选中 tab 移位/显隐。
+    pub settings_selection: RefCell<Option<Retained<NSView>>>,
     /// 各状态 pane 的控件(色块/radio/速度),按 StyleKey 索引;reset / 选择变更时刷新。
     pub state_controls: RefCell<HashMap<StyleKey, crate::settings::StateControls>>,
 }
@@ -308,7 +310,7 @@ define_class!(
                 }
             }
             *self.ivars().settings_selected.borrow_mut() = new;
-            crate::settings::update_tab_prefixes(self, new);
+            crate::settings::update_selection(self, new);
         }
 
         /// 常规页「轮询间隔」下拉 action。改完即时重排 tick 定时器。
