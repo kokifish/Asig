@@ -155,11 +155,24 @@ define_class!(
             self.apply_click_through();
         }
 
-        /// 设置面板「大小」滑块 action。
+        /// 设置面板「浮窗灯大小」滑块 action;同步刷新右侧 `xx px` 标签。
         #[unsafe(method(changeSize:))]
         fn change_size(&self, sender: *mut NSObject) {
             let v: f64 = unsafe { msg_send![sender, doubleValue] };
-            self.ivars().settings.borrow_mut().dot_size = v.round().max(6.0) as u32;
+            let dot = v.round().max(6.0) as u32;
+            self.ivars().settings.borrow_mut().dot_size = dot;
+            if let Some(content) = self.ivars().settings_content.borrow().as_ref() {
+                if let Some(label) =
+                    crate::settings::view_with_tag(content, crate::settings::SIZE_LABEL_TAG)
+                {
+                    unsafe {
+                        let _: () = msg_send![
+                            &label,
+                            setStringValue: &*NSString::from_str(&format!("{} px", dot))
+                        ];
+                    }
+                }
+            }
             self.settings_changed();
         }
 

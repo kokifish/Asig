@@ -50,7 +50,7 @@ pub const COLOR_ORDER: [Color; 6] = [
     Color::Purple,
 ];
 /// 轮询间隔下拉的可选项(ms)。index ↔ 选中项。
-pub const POLL_PRESETS_MS: [u32; 5] = [1000, 2000, 3000, 5000, 10000];
+pub const POLL_PRESETS_MS: [u32; 6] = [1000, 2000, 3000, 5000, 10000, 15000];
 
 pub const TAB_GENERAL: i64 = 0;
 pub const TAB_ABOUT: i64 = 7;
@@ -74,6 +74,8 @@ pub const RESET_OFF: i64 = 40;
 // General pane 语言单选 tag。
 pub const LANG_EN_TAG: i64 = 501;
 pub const LANG_ZH_TAG: i64 = 502;
+// General pane「浮窗灯大小」右侧 `xx px` 实时标签 tag(changeSize 时按它刷新)。
+pub const SIZE_LABEL_TAG: i64 = 503;
 
 pub const SPEED_MIN: f64 = 0.2;
 pub const SPEED_MAX: f64 = 5.0;
@@ -220,6 +222,7 @@ pub struct StateControls {
 /// 当前语言的全部界面文案。
 struct Strings {
     general: &'static str,
+    general_title: &'static str,
     about: &'static str,
     light_size: &'static str,
     click_through: &'static str,
@@ -227,13 +230,14 @@ struct Strings {
     launch_login: &'static str,
     language: &'static str,
     reset: &'static str,
+    reset_all: &'static str,
     color: &'static str,
     animation: &'static str,
     speed: &'static str,
     version: &'static str,
     state: [&'static str; 6], // 与 STATE_KEYS 同序
     anim: [&'static str; 3],
-    poll_opts: [&'static str; 5],
+    poll_opts: [&'static str; 6],
     reset_confirm_title: &'static str,
     reset_confirm_msg: &'static str,
     reset_yes: &'static str,
@@ -255,20 +259,22 @@ fn strings_for(l: Lang) -> Strings {
     match l {
         Lang::Zh => Strings {
             general: "常规",
+            general_title: "常规设置",
             about: "关于",
-            light_size: "浮窗大小",
-            click_through: "浮窗点击穿透(取消则可拖动)",
-            poll_interval: "轮询间隔",
-            launch_login: "开机启动(待实现)",
+            light_size: "浮窗灯大小",
+            click_through: "点击穿透(取消则可拖动)",
+            poll_interval: "Agent状态轮询间隔",
+            launch_login: "开机自启动(待实现)",
             language: "语言",
             reset: "重置",
+            reset_all: "重置所有",
             color: "颜色",
             animation: "效果",
             speed: "速度",
             version: "版本 ",
             state: ["完成通知", "完成", "运行", "待决策", "报错", "离线"],
             anim: ["常亮", "呼吸", "波纹"],
-            poll_opts: ["1 秒", "2 秒", "3 秒", "5 秒", "10 秒"],
+            poll_opts: ["1 秒", "2 秒", "3 秒", "5 秒", "10 秒", "15 秒"],
             reset_confirm_title: "重置全部设置",
             reset_confirm_msg: "将所有自定义(语言 + 各状态灯效)恢复为默认值。确认?",
             reset_yes: "重置",
@@ -276,13 +282,15 @@ fn strings_for(l: Lang) -> Strings {
         },
         Lang::En => Strings {
             general: "General",
+            general_title: "General Settings",
             about: "About",
             light_size: "Light size",
             click_through: "Click-through (off = draggable)",
-            poll_interval: "Poll interval",
+            poll_interval: "Agent poll interval",
             launch_login: "Launch at login (TBD)",
             language: "Language",
             reset: "Reset",
+            reset_all: "Reset All",
             color: "Color",
             animation: "Animation",
             speed: "Speed",
@@ -296,7 +304,7 @@ fn strings_for(l: Lang) -> Strings {
                 "Offline",
             ],
             anim: ["Steady", "Pulse", "Ripple"],
-            poll_opts: ["1 s", "2 s", "3 s", "5 s", "10 s"],
+            poll_opts: ["1 s", "2 s", "3 s", "5 s", "10 s", "15 s"],
             reset_confirm_title: "Reset all settings",
             reset_confirm_msg: "Restore all custom settings (language + per-state styles) to defaults?",
             reset_yes: "Reset",
@@ -557,6 +565,21 @@ pub fn view_with_tag(view: &Retained<NSView>, tag: i64) -> Option<Retained<NSVie
 
 // ---- 各 pane ----
 
+/// header 图标:NSImageView + 单色(template)SF Symbol,contentTintColor=labelColor,随明暗。
+fn add_header_icon(pane: &Retained<NSView>, frame: NSRect, symbol: &str) {
+    let img = sf_symbol(symbol);
+    unsafe {
+        let _: () = msg_send![&img, setTemplate: Bool::YES];
+        let iv: Retained<NSView> = msg_send![class!(NSImageView), new];
+        let _: () = msg_send![&iv, setFrame: frame];
+        let _: () = msg_send![&iv, setImage: &*img];
+        let _: () = msg_send![&iv, setImageScaling: 0i64]; // scaleProportionallyDown
+        let tint: Retained<NSColor> = msg_send![class!(NSColor), labelColor];
+        let _: () = msg_send![&iv, setContentTintColor: &*tint];
+        let _: () = msg_send![&**pane, addSubview: &*iv];
+    }
+}
+
 fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> {
     let pane = new_view(NSRect::new(
         NSPoint::new(0.0, 0.0),
@@ -566,22 +589,92 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     let lx = x0 + 16.0; // 标签 x
     let cx = x0 + 200.0; // 控件 x
     let cw = COL_W - 200.0 - 16.0; // 控件区宽
-    let lw = cx - lx; // 标签列宽(容纳最长标签如「浮窗点击穿透(取消则可拖动)」,不裁剪)
+    let lw = cx - lx; // 标签列宽(容纳最长标签,不裁剪)
     let mut y = H - CONTENT_PAD_X - TOP_INSET;
 
-    // 标题属于右侧内容 panel 的 header,不再居中漂在卡片列里。
+    // header:齿轮图标 + 标题(DEV.md General Settings Card 的 icon + Name)
+    add_header_icon(
+        &pane,
+        NSRect::new(NSPoint::new(x0, y + 3.0), NSSize::new(20.0, 20.0)),
+        "gearshape",
+    );
     add_text(
         &pane,
-        NSRect::new(NSPoint::new(x0, y), NSSize::new(COL_W, CONTENT_HEADER_H)),
-        st.general,
+        NSRect::new(
+            NSPoint::new(x0 + 28.0, y),
+            NSSize::new(COL_W - 28.0, CONTENT_HEADER_H),
+        ),
+        st.general_title,
         false,
         true,
     );
     y -= HEADER_GAP;
 
-    // —— Card:常规设置(4 行)——
+    // —— Group-1:语言 + 重置所有(DEV.md「Group 不带名称,仅分组」,顺序即从上至下)——
+    add_card(&pane, card_frame(x0, y, 2));
+    // Language(标签 + English / 中文 单选;默认中文)
+    add_text(
+        &pane,
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 0) - 10.0),
+            NSSize::new(lw, 20.0),
+        ),
+        st.language,
+        false,
+        false,
+    );
+    add_radio_button(
+        &pane,
+        NSRect::new(
+            NSPoint::new(cx, row_center_y(y, 0) - 11.0),
+            NSSize::new(90.0, 22.0),
+        ),
+        "English",
+        LANG_EN_TAG,
+        delegate,
+        sel!(changeLanguage:),
+    );
+    add_radio_button(
+        &pane,
+        NSRect::new(
+            NSPoint::new(cx + 100.0, row_center_y(y, 0) - 11.0),
+            NSSize::new(90.0, 22.0),
+        ),
+        "中文",
+        LANG_ZH_TAG,
+        delegate,
+        sel!(changeLanguage:),
+    );
+    let lang = delegate.ivars().settings.borrow().lang;
+    let want_tag = if lang == Lang::En {
+        LANG_EN_TAG
+    } else {
+        LANG_ZH_TAG
+    };
+    for t in [LANG_EN_TAG, LANG_ZH_TAG] {
+        if let Some(b) = view_with_tag(&pane, t) {
+            unsafe {
+                let _: () = msg_send![&b, setState: if t == want_tag { 1i64 } else { 0 }];
+            }
+        }
+    }
+    // Reset All(按钮 → 确认对话框 → 重置全部自定义:语言 + 各状态灯效)
+    let _ = add_plain_button(
+        &pane,
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 1) - 14.0),
+            NSSize::new(130.0, 28.0),
+        ),
+        st.reset_all,
+        0,
+        sel!(resetAll:),
+        delegate,
+    );
+    y -= card_height(2) + CARD_GAP;
+
+    // —— Group-2:浮窗灯大小 / 点击穿透 / Agent状态轮询间隔 / 开机自启动 ——
     add_card(&pane, card_frame(x0, y, 4));
-    // Light size:label + slider 都对齐 row 0 中心。
+    // Light size(标签 + 滑块 + 右侧 `xx px` 实时标签)
     add_text(
         &pane,
         NSRect::new(
@@ -592,20 +685,31 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         false,
         false,
     );
-    let dot = delegate.ivars().settings.borrow().dot_size as f64;
+    let dot = delegate.ivars().settings.borrow().dot_size;
     add_slider(
         &pane,
         NSRect::new(
             NSPoint::new(cx, row_center_y(y, 0) - 11.0),
-            NSSize::new(cw, 22.0),
+            NSSize::new(cw - 60.0, 22.0),
         ),
         8.0,
         40.0,
-        dot,
+        dot as f64,
         sel!(changeSize:),
         delegate,
     );
-    // Click-through(标签 + 开关;开关左对齐到 cx,与其余控件同列)
+    let size_label = add_text(
+        &pane,
+        NSRect::new(
+            NSPoint::new(cx + cw - 52.0, row_center_y(y, 0) - 10.0),
+            NSSize::new(52.0, 20.0),
+        ),
+        &format!("{} px", dot),
+        false,
+        false,
+    );
+    set_tag(&size_label, SIZE_LABEL_TAG);
+    // Click-through(标签 + 开关;与 Drop-down「锁定」同步同一开关)
     add_text(
         &pane,
         NSRect::new(
@@ -626,7 +730,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         sel!(toggleClickThrough:),
         delegate,
     );
-    // Poll interval
+    // Agent poll interval(标签 + 下拉;1/2/3/5/10/15 秒)
     add_text(
         &pane,
         NSRect::new(
@@ -674,69 +778,6 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     unsafe {
         let _: () = msg_send![&launch, setEnabled: Bool::NO];
     }
-    y -= card_height(4) + CARD_GAP;
-
-    // —— Card:语言(1 行)——
-    add_card(&pane, card_frame(x0, y, 1));
-    add_text(
-        &pane,
-        NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 0) - 10.0),
-            NSSize::new(80.0, 20.0),
-        ),
-        st.language,
-        false,
-        false,
-    );
-    let lang = delegate.ivars().settings.borrow().lang;
-    add_radio_button(
-        &pane,
-        NSRect::new(
-            NSPoint::new(cx, row_center_y(y, 0) - 11.0),
-            NSSize::new(90.0, 22.0),
-        ),
-        "English",
-        LANG_EN_TAG,
-        delegate,
-        sel!(changeLanguage:),
-    );
-    add_radio_button(
-        &pane,
-        NSRect::new(
-            NSPoint::new(cx + 100.0, row_center_y(y, 0) - 11.0),
-            NSSize::new(90.0, 22.0),
-        ),
-        "中文",
-        LANG_ZH_TAG,
-        delegate,
-        sel!(changeLanguage:),
-    );
-    let want_tag = if lang == Lang::En {
-        LANG_EN_TAG
-    } else {
-        LANG_ZH_TAG
-    };
-    for t in [LANG_EN_TAG, LANG_ZH_TAG] {
-        if let Some(b) = view_with_tag(&pane, t) {
-            unsafe {
-                let _: () = msg_send![&b, setState: if t == want_tag { 1i64 } else { 0 }];
-            }
-        }
-    }
-    y -= card_height(1) + CARD_GAP;
-
-    // Reset(全部,居中)
-    let _ = add_plain_button(
-        &pane,
-        NSRect::new(
-            NSPoint::new((CONTENT_W - 120.0) / 2.0, y),
-            NSSize::new(120.0, 28.0),
-        ),
-        st.reset,
-        0,
-        sel!(resetAll:),
-        delegate,
-    );
 
     pane
 }
