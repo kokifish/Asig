@@ -3,6 +3,8 @@
 > Asig 简洁的、最权威的开发维护手册，语义冲突时以本文档为准，包括README.md和源码。
 > 没有明确允许，Agent 不可修改本文档。
 
+- Troubleshooting: 通用故障排查与修复经验沉淀在 [FIX.md](./FIX.md)。
+
 Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸浮窗。
 监控 Claude Code / CodeBuddy / OpenClaw，Trae 待支持。
 
