@@ -20,6 +20,17 @@ The script repairs both conditions for a chosen bundle id:
 
 By default it writes a patched copy. Use `--in-place` only when you are already
 running with enough privileges to modify the real ControlCenter plist.
+
+One-shot full repair (patches the system plist in place and restarts cfprefsd and
+ControlCenter so the cached bad state is dropped):
+
+    python3 scripts/repair_statuskit_block.py --apply --relaunch-app build/Asig.app
+
+`--apply` is shorthand for `--in-place --restart-controlcenter`; add
+`--relaunch-app APP_BUNDLE` to reopen the app afterward. It needs the terminal to
+have Full Disk Access (System Settings -> Privacy & Security -> Full Disk Access);
+`sudo` does NOT bypass that TCC check, so the script reads/writes the plist
+directly as the current user instead of trying sudo.
 """
 
 from __future__ import annotations
@@ -104,6 +115,16 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Optional app bundle path to reopen after the repair, for example "
             "`build/Asig.app`."
+        ),
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "One-shot full repair on the system plist: in-place patch with backup "
+            "plus restart of cfprefsd/ControlCenter. Shorthand for "
+            "--in-place --restart-controlcenter; add --relaunch-app APP_BUNDLE to "
+            "reopen the app afterward. Requires Full Disk Access."
         ),
     )
     parser.add_argument(
@@ -271,16 +292,25 @@ def print_summary(
     print(f"foreign_blocked_refs_to_target={foreign_ref_count}")
 
 
-def validate_write_mode(args: argparse.Namespace) -> None:
-    """Ensure the caller picked an explicit output mode."""
-    if args.print_summary_only:
-        return
-    if args.in_place:
-        return
-    if args.output is not None:
-        return
-    raise SystemExit(
-        "Either provide --output, or use --in-place, or use --print-summary-only."
+def has_selected_mode(args: argparse.Namespace) -> bool:
+    """Return True if the caller picked a write/inspect mode."""
+    return bool(args.print_summary_only or args.in_place or args.output is not None)
+
+
+def print_fda_error(path: Path, exc: PermissionError) -> None:
+    """Print actionable guidance when the system plist cannot be accessed.
+
+    macOS blocks `~/Library/Group Containers/...` behind a TCC Full Disk Access
+    check on the responsible process, so a permission error here means the running
+    terminal lacks FDA (not a missing sudo).
+    """
+    print(f"error: permission denied accessing {path}: {exc}", file=sys.stderr)
+    print(
+        "       This terminal lacks Full Disk Access. Grant it in\n"
+        "         System Settings -> Privacy & Security -> Full Disk Access\n"
+        "       to your terminal (Terminal/iTerm/Warp) or to Claude Code, restart\n"
+        "       it, and rerun. (sudo does NOT bypass this TCC check.)",
+        file=sys.stderr,
     )
 
 
@@ -304,11 +334,21 @@ def maybe_backup_input(args: argparse.Namespace) -> Path | None:
 def main() -> int:
     """CLI entry point."""
     args = parse_args()
-    validate_write_mode(args)
+    # --apply = --in-place --restart-controlcenter; pair with --relaunch-app to reopen.
+    if args.apply:
+        args.in_place = True
+        args.restart_controlcenter = True
+
+    if not has_selected_mode(args):
+        print(__doc__)
+        return 0
 
     try:
         outer = load_outer_plist(args.input)
         entries = load_tracked_entries(outer)
+    except PermissionError as exc:  # pragma: no cover - terminal lacks Full Disk Access
+        print_fda_error(args.input, exc)
+        return 1
     except Exception as exc:  # pragma: no cover - surface exact failure to CLI
         print(f"error: failed to load plist: {exc}", file=sys.stderr)
         return 1
@@ -337,17 +377,20 @@ def main() -> int:
         return 2
 
     backup_path = None
+    output_path = resolve_output_path(args)
     try:
         backup_path = maybe_backup_input(args)
         stats = repair_entries(entries, args.bundle_id)
         store_tracked_entries(outer, entries)
-        output_path = resolve_output_path(args)
         write_outer_plist(output_path, outer)
+    except PermissionError as exc:  # pragma: no cover - terminal lacks Full Disk Access
+        print_fda_error(output_path, exc)
+        return 1
     except Exception as exc:  # pragma: no cover - surface exact failure to CLI
         print(f"error: failed to write patched plist: {exc}", file=sys.stderr)
         return 1
 
-    print(f"patched={resolve_output_path(args)}")
+    print(f"patched={output_path}")
     if backup_path is not None:
         print(f"backup={backup_path}")
     print(f"target_entries_seen={stats.target_entries}")

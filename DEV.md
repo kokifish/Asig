@@ -12,6 +12,8 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 
 - 结构清晰，逻辑简单，高内聚低耦合，提高代码复用率，降低总代码量和行数
 - 不过度设计，避免不必要的薄封装
+- 保持组件、工具链、依赖等保持release版本最新，非必要不兼容旧版
+- 在保持美观、功能符合要求的前提下，尽可能降低 CPU、Memory 占用
 
 ## Tech Overview
 
@@ -24,6 +26,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 文件级架构（一句话/文件）。分层：内核 `crates/core`（可移植，零 AppKit）→ UI 壳 `crates/app`（objc2/AppKit），壳只调 `Monitor::poll()` 拿 `Snapshot` 驱动灯。
 
 **内核 `crates/core`：**
+
 - `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
 - `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）；读 session 文件 + pid 存活判定做 Offline 检测；busy 时读 transcript 尾部 `stop_reason`（`end_turn`→NeedsDeci / `tool_use`→Working）做可靠的待决策检测
 - `openclaw.rs` — `OpenClawSource`：SQLite 状态库（Phase 3 补全，当前占位）
@@ -33,6 +36,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `lib.rs` — `Monitor`（轮询编排 → `Snapshot`，含 DoneNotif 边沿检测）
 
 **UI 壳 `crates/app`（objc2/AppKit，纯 Rust，无 WebView）：**
+
 - `main.rs` — 入口：加载设置 → 建浮窗 → 建 `AppDelegate` → 状态栏 + tick 定时器
 - `app_delegate.rs` — `AppDelegate`（declare_class）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
@@ -106,15 +110,16 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 - Def: 单击菜单栏图标后的弹窗
 - Position: 菜单栏单击后在图标右下方弹出菜单栏弹窗，菜单栏弹窗左侧和菜单栏Asig图标左侧对齐，但如果右侧空间不足，则右侧贴屏幕边缘。不可拖动不可自定义大小
 - Upper Button: 从左至右分别为`设置`-用于打开 Settings Panel 的最左侧按钮，`锁定`-用于快速设置是否可以拖动圆角单选按钮（与 Settings Panel「浮窗点击穿透」同步同一开关），`退出`-用于退出Asig的最右侧按钮
+- 材质：`NSPopover`（SDK 26+ 链接即自动获得液态玻璃，无需手动 vibrancy）。
 
 ### Settings Panel
 
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
 - Position: 默认在屏幕中央，可以拖动
 - Navigation: 左侧栏（顶部 tab 列表 + 底部图标行）+ 右侧 pane 切换。点 tab / 「关于」图标切换右侧 pane。
-- 材质（当前稳定实现，按 Apple HIG 的 layer 语义）：窗口底层是一整片连续玻璃基底（透明标题栏 + `NSVisualEffectView` / vibrancy）以保持统一的 liquid-glass 观感；**导航 / 控制层** 主要由侧栏与右侧 header 读取，**内容层** 则靠极淡、连续圆角的 surface 与卡片（`quaternaryLabelColor`）形成标准材质分层。**不用硬 divider**，避免接缝和“像两块窗拼起来”的感觉；通过层级而不是厚重描边区分分区。
+- 材质：真·液态玻璃（macOS 26+ `NSGlassEffectView`，UI 必须放进其 `contentView`；旧系统回退 `NSVisualEffectView` vibrancy）。窗口 = 一整片主玻璃（透明标题栏，玻璃贯穿顶部）；**左侧栏是浮动玻璃面板**——独立一块 `NSGlassEffectView` 叠在主玻璃上，二次模糊自然更不透明，读作浮于内容之上的圆角玻璃块。刻意**不用** `NSGlassEffectContainerView`：它会合并重叠/相邻的玻璃成一次模糊，反而让浮动侧栏与主玻璃融为一体、失去「浮动」层次。**右侧内容区无外框、标题下无横线**；靠极淡连续圆角卡片（`quaternaryLabelColor`）分组（stats.app 式编排），用层级而非厚重描边区分。
 - Content:
-  - 右侧内容区有自己的 **header**：标题固定在右侧内容 panel 的左上方，而不是漂在卡片列中央；header 下方用一条极淡分隔线，把 header/control layer 和 content/card layer 分开。
+  - 右侧内容区有自己的 **header**：标题固定在右侧内容区的左上方（State pane 的 Reset 按钮对齐到该 header 右侧），而不是漂在卡片列中央；标题下方不再有分隔线。
   - General pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、开机启动（占位，待实现）。详见 General Settings Card。
   - State pane(每状态一个): 颜色（横向单选色块）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
   - About pane: 版本号 + GitHub 链接（纯展示）。
@@ -127,8 +132,19 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 #### General Settings Card
 
-- Language: 单行单选列表: English, 中文。默认中文
-- Reset: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值
+- Name: General Settings/常规设置
+- icon: 常见的齿轮形状的macos纯色图标
+
+> Group不带名称，仅用于分组，以下描述顺序也是卡片内选项的从上至下的顺序
+
+- Group-1:
+  - Language/语言: 单行单选列表: English, 中文。默认中文
+  - Reset All/重置所有: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值
+- Group-2:
+  - 浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`
+  - 点击穿透(取消则可拖动): 开关
+  - Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒
+  - 开机自启动(待实现): 开关
 
 #### State Settings Card
 

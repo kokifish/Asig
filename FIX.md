@@ -21,32 +21,26 @@
 - **恢复正式 Asig 状态栏图标的推荐流程**：
 
 ```bash
-# 0) 若当前终端连 sudo cp 都报 Operation not permitted，
-#    先给 Terminal / iTerm / Warp 打开 Full Disk Access，再重开终端
+# 前置:当前终端(Claude Code / Terminal / iTerm / Warp)必须有 Full Disk Access。
+#   sudo 不能绕过这个 TCC 检查 —— 报 Operation not permitted 就去
+#   System Settings → Privacy & Security → Full Disk Access 开权限后重开终端。
+#   plist 文件归当前用户所有,有 FDA 即可直接读写,无需 sudo。
 
-# 1) 从受保护路径复制出 ControlCenter plist
-sudo cp /Users/<你的用户名>/Library/Group\ Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter.plist \
-  /tmp/group.com.apple.controlcenter.plist
+# 一条命令:原地修补系统 plist(+自动 .bak 备份)→ killall cfprefsd/ControlCenter → open Asig
+python3 scripts/repair_statuskit_block.py --apply --relaunch-app build/Asig.app
 
-# 2) 用项目脚本修补 trackedApplications
-python3 scripts/repair_statuskit_block.py \
-  --bundle-id com.kokifish.asig \
-  --input /tmp/group.com.apple.controlcenter.plist \
-  --output /tmp/group.com.apple.controlcenter.fixed.plist
+# 只读检查(不改文件):
+python3 scripts/repair_statuskit_block.py --print-summary-only
 
-# 3) 覆盖回系统 plist
-sudo cp /tmp/group.com.apple.controlcenter.fixed.plist \
-  /Users/<你的用户名>/Library/Group\ Containers/group.com.apple.controlcenter/Library/Preferences/group.com.apple.controlcenter.plist
-
-# 4) 重启缓存与菜单栏宿主，再打开最新版 Asig
-killall cfprefsd ControlCenter
-open build/Asig.app
+# 手动分解(脚本仍支持,用于 /tmp 上的离线修补/对照):
+#   python3 scripts/repair_statuskit_block.py --bundle-id com.kokifish.asig \
+#     --input <拷出的 plist> --output <修好.plist>
 ```
 
 - **为什么这样恢复**：
-  - 第 1/3 步只对 `cp` 单独提权，避免 `sudo su` 把 `$HOME` 变成 `/var/root`
-  - 第 2 步保留普通用户执行，便于在 `/tmp` 上调试和复用脚本
-  - 第 4 步是必须的，因为 `ControlCenter` / `cfprefsd` 会缓存坏状态；不重启宿主，看不到修补效果
+  - `--apply` = `--in-place --restart-controlcenter` 的合一（再加 `--relaunch-app` 重开 app）；脚本自动建 `.bak` 备份，并在访问被拒时提示去开 Full Disk Access
+  - 必须重启 `cfprefsd` / `ControlCenter`：它们缓存坏状态，不重启看不到修补效果
+  - 无需 sudo：plist 归当前用户；真正的门槛是终端的 Full Disk Access（TCC），`sudo` 绕不过（实测 `sudo cp` 在无 FDA 时同样 `Operation not permitted`）
 - **项目内脚本**：`scripts/repair_statuskit_block.py`
   - 用途：修补 `trackedApplications` 里的目标 bundle entry，并移除其他 `isAllowed = false` entry 中残留指向目标 bundle 的 `menuItemLocations` 脏引用
   - 设计原因：只把目标 entry 改成 allowed 并不总够，因为 Tahoe 可能是被“外部 blocked entry 的脏引用”覆盖掉
