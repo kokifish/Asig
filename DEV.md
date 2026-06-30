@@ -96,6 +96,13 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 - Carrier：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用两个错相 `RingView` 子视图扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示自绘彩色圆点（`overlay::swatch_image`，`setTemplate:NO` 保留真彩），不可设动效。
 - 速度（周期）以 **Hz** 呈现给用户（`period_ms = 1000 / Hz`）；常亮（Steady）无周期、速度不可设。
 
+### Accessibility（Reduce Motion / Reduce Transparency）
+
+遵循 macOS 无障碍开关（System Settings → Accessibility → Display），读 `NSWorkspace.shared` 的两个布尔：
+
+- **Reduce Motion 开启**：Signal Light 的 `Pulse`/`Ripple` 一律**降级为 `Steady`**（保留颜色、不动）—— 状态仍由颜色区分，只是不再脉冲/扩散，避免对晕动症用户不适。降级在 `overlay::set_light` 入口处据 `reduce_motion_on()` 完成；用户切该开关时，tick 把 `reduce_motion` 并入渲染签名 → 签名变化 → 立即重渲染（无需常驻渲染，不损 CPU）。Signal Icon（菜单栏）本就无动效，不受影响。
+- **Reduce Transparency 开启**：Settings/Drop-down 的液态玻璃退化不透明。Drop-down 的 `NSPopover` 由系统自动处理；Settings 在 `glass_pane` 里**跳过 `NSGlassEffectView`**、改用 `NSVisualEffectView`（其在 Reduce Transparency 下自动变实色），保证文字可读（设置窗在(重)开时取最新值）。
+
 ### Signal Light
 
 - Def: 在桌面上的可以配置动效、大小的叫 Signal Light
@@ -132,19 +139,19 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 #### General Settings Card
 
-- Name: General Settings/常规设置
-- icon: 常见的齿轮形状的macos纯色图标
+- [Name/名称]: General Settings/常规设置
+- [icon/图标]: 常见的齿轮形状的macos纯色图标
 
 > Group不带名称，仅用于分组，以下描述顺序也是卡片内选项的从上至下的顺序
 
 - Group-1:
-  - Language/语言: 单行单选列表: English, 中文。默认中文
-  - Reset All/重置所有: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值
+  - [Language/语言]: 单行单选列表: English, 中文。默认中文
+  - [Reset All/重置所有]: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值
 - Group-2:
-  - 浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`
-  - 点击穿透(取消则可拖动): 开关
-  - Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒
-  - 开机自启动(待实现): 开关
+  - [Light size/浮窗灯大小]: 左右方向的调整拉杆，右侧显示 `xx px`
+  - [Click-through/点击穿透(取消则可拖动)]: 开关
+  - [Agent poll interval/Agent状态轮询间隔]: 单选栏，1/2/3/5/10/15 秒
+  - [Launch at login/开机自启动(待实现)]: 开关
 
 #### State Settings Card
 

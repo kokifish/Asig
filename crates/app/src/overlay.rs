@@ -86,6 +86,26 @@ fn anim_color(a: LightAnim) -> Color {
     }
 }
 
+/// 系统「Reduce Motion」是否开启(无障碍 → Display)。开启时浮窗动画降级为常亮,
+/// 状态仍由颜色区分 —— 避免对晕动症用户持续脉冲/扩散。
+pub fn reduce_motion_on() -> bool {
+    unsafe {
+        let ws: Retained<NSObject> = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let on: Bool = msg_send![&ws, accessibilityDisplayShouldReduceMotion];
+        on == Bool::YES
+    }
+}
+
+/// 系统「Reduce Transparency」是否开启(无障碍 → Display)。开启时液态玻璃退化不透明
+/// (走 NSVisualEffectView,其自动在 Reduce Transparency 下变实色),保证内容可读。
+pub fn reduce_transparency_on() -> bool {
+    unsafe {
+        let ws: Retained<NSObject> = msg_send![class!(NSWorkspace), sharedWorkspace];
+        let on: Bool = msg_send![&ws, accessibilityDisplayShouldReduceTransparency];
+        on == Bool::YES
+    }
+}
+
 /// 圆点在窗口内居中的左下角 origin。
 fn dot_origin(dot: CGFloat) -> CGFloat {
     (WIN - dot) / 2.0
@@ -318,6 +338,14 @@ pub fn set_size(view: &PillView, dot_size: u32) {
 
 // ---- 按灯效更新颜色 + 动画 ----
 pub fn set_light(view: &PillView, anim: LightAnim) {
+    // Reduce Motion 开启:动画降级为常亮(保留颜色),不脉冲/不扩散。
+    let anim = if reduce_motion_on() {
+        LightAnim::Steady {
+            color: anim_color(anim),
+        }
+    } else {
+        anim
+    };
     view.rust_set_color(nscolor(anim_color(anim)));
 
     let layer: Retained<CALayer> = unsafe { msg_send![view, layer] };

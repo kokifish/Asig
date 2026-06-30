@@ -2,7 +2,9 @@
 
 use std::cell::RefCell;
 
-use agent_light_core::{Anim, Lang, LightPosition, Monitor, Settings, Snapshot, StyleKey};
+use agent_light_core::{
+    AgentStatus, Anim, Color, Lang, LightAnim, LightPosition, Monitor, Settings, Snapshot, StyleKey,
+};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
 use objc2::{
@@ -61,9 +63,15 @@ define_class!(
         /// NSTimer 每 ~3s:轮询内核 → 状态有变化才渲染(菜单栏灯 + 浮窗 + popover)。
         #[unsafe(method(tick:))]
         fn tick(&self, _timer: *mut NSObject) {
+            // dev 预览(ASIG_PREVIEW=1):跳过轮询,循环展示各状态默认灯效。
+            if std::env::var_os("ASIG_PREVIEW").is_some() {
+                return self.preview_tick();
+            }
             self.persist_light_pos();
             let snap = self.ivars().monitor.poll();
-            let sig = signature(&snap);
+            // 把 Reduce Motion 并入签名:用户在系统设置里切该开关时,签名变化 → 立即重渲染,
+            // set_light 据 reduce_motion_on 把动画降级为常亮(无需常驻渲染,不损 CPU)。
+            let sig = format!("{}|rm={}", signature(&snap), crate::overlay::reduce_motion_on());
             let same = {
                 let last = self.ivars().last_sig.borrow();
                 *last == sig
@@ -409,6 +417,39 @@ impl AppDelegate {
         }
         let snap = self.ivars().monitor.poll();
         self.render(&snap);
+    }
+
+    /// dev 预览(ASIG_PREVIEW=1):不轮询,每个 tick(~3s)把浮窗灯切到下一状态的**默认**动效并打印,
+    /// 便于一行命令查看 Done/DoneNotif/Working/NeedsDeci/Error/Offline 的默认灯效。循环不息。
+    fn preview_tick(&self) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static IDX: AtomicUsize = AtomicUsize::new(0);
+        // (名称, 默认动效)。DoneNotif 不是 AgentStatus,单独构造其浅蓝快呼吸。
+        let states: [(&str, LightAnim); 6] = [
+            ("Done", AgentStatus::Done.light()),
+            (
+                "DoneNotif",
+                LightAnim::Pulse {
+                    color: Color::LightBlue,
+                    period_ms: 450,
+                },
+            ),
+            ("Working", AgentStatus::Working.light()),
+            ("NeedsDeci", AgentStatus::NeedsDeci.light()),
+            ("Error", AgentStatus::Error.light()),
+            ("Offline", AgentStatus::Offline.light()),
+        ];
+        let (name, anim) = states[IDX.fetch_add(1, Ordering::SeqCst) % states.len()];
+        let mtm = MainThreadMarker::new().expect("preview 须在主线程");
+        if let Some(item) = self.ivars().status_item.borrow().as_ref() {
+            crate::tray::set_light(item, &anim, mtm);
+        }
+        if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
+            crate::overlay::set_light(view, anim);
+        }
+        println!("[asig-preview] {name}: {anim:?}");
+        let mut out = std::io::stdout();
+        let _ = std::io::Write::flush(&mut out);
     }
 
     /// 记住浮窗当前位置(全局 origin + 所在屏 id),供下次启动恢复。tick 每 ~3s 调一次,

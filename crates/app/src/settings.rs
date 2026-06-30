@@ -141,7 +141,9 @@ struct GlassPane {
 }
 
 fn glass_pane(frame: NSRect, corner_radius: CGFloat, fallback_material: i64) -> GlassPane {
-    if glass_available() {
+    // Reduce Transparency 开启时跳过 NSGlassEffectView,改走 NSVisualEffectView 分支
+    // (它在 Reduce Transparency 下自动变不透明实色),保证文字可读。
+    if glass_available() && !crate::overlay::reduce_transparency_on() {
         let g: Retained<NSView> = unsafe { msg_send![class!(NSGlassEffectView), new] };
         let content = new_view(NSRect::new(NSPoint::new(0.0, 0.0), frame.size));
         unsafe {
@@ -222,7 +224,6 @@ pub struct StateControls {
 /// 当前语言的全部界面文案。
 struct Strings {
     general: &'static str,
-    general_title: &'static str,
     about: &'static str,
     light_size: &'static str,
     click_through: &'static str,
@@ -258,8 +259,7 @@ pub fn reset_confirm_texts(l: Lang) -> (&'static str, &'static str, &'static str
 fn strings_for(l: Lang) -> Strings {
     match l {
         Lang::Zh => Strings {
-            general: "常规",
-            general_title: "常规设置",
+            general: "常规设置",
             about: "关于",
             light_size: "浮窗灯大小",
             click_through: "点击穿透(取消则可拖动)",
@@ -281,8 +281,7 @@ fn strings_for(l: Lang) -> Strings {
             reset_no: "取消",
         },
         Lang::En => Strings {
-            general: "General",
-            general_title: "General Settings",
+            general: "General Settings",
             about: "About",
             light_size: "Light size",
             click_through: "Click-through (off = draggable)",
@@ -473,11 +472,16 @@ fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &String
 
     let tab_w = SIDEBAR_PANE_W - 16.0;
     let top = SIDEBAR_PANE_H - 14.0 - 28.0; // 顶部留白 14 + tab 高 28
+    // General tab = 齿轮(template SF Symbol)+ 常规设置;选中时 update_selection 把齿轮转白。
+    let gear = sf_symbol("gearshape");
+    unsafe {
+        let _: () = msg_send![&gear, setTemplate: Bool::YES];
+    }
     add_tab_button(
         sidebar,
         NSRect::new(NSPoint::new(8.0, top), NSSize::new(tab_w, 28.0)),
         st.general,
-        None,
+        Some(&gear),
         TAB_GENERAL,
         delegate,
     );
@@ -539,6 +543,7 @@ pub fn update_selection(delegate: &AppDelegate, selected: i64) {
         .borrow()
         .as_ref()
         .cloned();
+    let is_tab = labels.iter().any(|(t, _)| *t == selected);
     for (tag, label) in labels {
         let Some(b) = view_with_tag(&sidebar, tag) else {
             continue;
@@ -555,6 +560,25 @@ pub fn update_selection(delegate: &AppDelegate, selected: i64) {
             }
         }
         set_tab_title(&b, label, is_sel);
+        // General tab 的齿轮(template)随选中转白;状态色点保持彩色不变。
+        if tag == TAB_GENERAL {
+            let tint: Retained<NSColor> = if is_sel {
+                unsafe { msg_send![class!(NSColor), whiteColor] }
+            } else {
+                unsafe { msg_send![class!(NSColor), labelColor] }
+            };
+            unsafe {
+                let _: () = msg_send![&b, setContentTintColor: &*tint];
+            }
+        }
+    }
+    // 选中的是非 tab 项(如「关于」= pane 7)时隐藏药丸 —— 不让某个 tab 仍读作选中。
+    if !is_tab {
+        if let Some(p) = &pill {
+            unsafe {
+                let _: () = msg_send![&**p, setHidden: Bool::YES];
+            }
+        }
     }
 }
 
@@ -604,7 +628,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
             NSPoint::new(x0 + 28.0, y),
             NSSize::new(COL_W - 28.0, CONTENT_HEADER_H),
         ),
-        st.general_title,
+        st.general,
         false,
         true,
     );
