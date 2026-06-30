@@ -1,0 +1,18 @@
+# A5: cargo-deny 每周一次联网拉 RustSec 库,捕捉新出现的漏洞。
+# 与主 ci.yml 的 deny job 互补 —— ci.yml 随 push/PR 触发但可能不联网;
+# 本 workflow 强制 weekly 联网跑一次全量检查。
+# 也支持手动 workflow_dispatch,便于临时复检。
+name: cargo-deny (weekly)
+
+on:
+  schedule:
+    # 每周一 06:00 UTC(避开周内高峰期)
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

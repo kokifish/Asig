@@ -1,5 +1,9 @@
 # Asig
 
+[![CI](https://github.com/kokifish/Asig/actions/workflows/ci.yml/badge.svg)](https://github.com/kokifish/Asig/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/kokifish/Asig/actions/workflows/codeql.yml/badge.svg)](https://github.com/kokifish/Asig/security/code-scanning)
+[![Release](https://img.shields.io/github/v/release/kokifish/Asig)](https://github.com/kokifish/Asig/releases/latest)
+
 macOS 上的多 Agent 状态监控灯。把 Claude Code / CodeBuddy / OpenClaw 的实时状态,变成屏幕上一眼就懂的灯。
 
 **三种形态**:菜单栏状态灯 + 全局置顶的动态药丸浮窗 + 点灯弹出的详情/设置面板。

@@ -1,0 +1,17 @@
+# H: CODEOWNERS — PR 自动指派 reviewer。
+# 当前仓库只有 @kokifish 一个 owner,后续加协作者时按 crate 拆分。
+# 路径模式语法:https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# 默认 owner —— 所有未明确指派的文件都归 @kokifish 审
+* @kokifish
+
+# Crate owner
+/crates/core/ @kokifish
+/crates/app/  @kokifish
+
+# CI / 自动化 / 治理 文件归 owner(改动需重点 review)
+/.github/   @kokifish
+/CLAUDE.md  @kokifish
+/DEV.md     @kokifish
+/FIX.md     @kokifish
+/deny.toml  @kokifish

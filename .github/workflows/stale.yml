@@ -1,0 +1,28 @@
+# K: Stale bot —— 长期无回复 issue / PR 自动标记并关闭,保持仓库活跃度。
+# 阈值:60 天无活动 → 打 stale label;再 7 天无活动 → 自动关闭。
+# 例外:带 pinned / security / enhancement 标签的 issue 不算 stale(留待人工)。
+name: Stale
+
+on:
+  schedule:
+    # 每天 00:00 UTC 跑一次
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/stale@v9
+        with:
+          days-before-stale: 60
+          days-before-close: 7
+          stale-issue-label: 'stale'
+          close-issue-message: |
+            This issue was closed because it has been stale for 7 days with no activity.
+            如仍需讨论,请重新打开或开新 issue。
+          exempt-issue-labels: 'pinned,security,enhancement'
+          operations-per-run: 100

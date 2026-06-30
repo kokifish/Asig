@@ -1,0 +1,39 @@
+# I: CodeQL —— GitHub 原生代码扫描,与 cargo-deny 互补:
+#   - cargo-deny 看「依赖」(RustSec 漏洞在外部 crate)
+#   - CodeQL 看「自身代码」(unsafe 误用、未初始化、并发漏洞等)
+# push / PR 触发即时分析;schedule 每周再扫一次(覆盖 main 分支长期驻留的新 CVE)。
+name: CodeQL
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    # 每周三 04:00 UTC
+    - cron: '0 4 * * 3'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"

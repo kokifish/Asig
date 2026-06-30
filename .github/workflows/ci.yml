@@ -6,6 +6,54 @@ on:
   pull_request:
 
 jobs:
+  # Fast lane:纯 Rust 内核逻辑,ubuntu 起 runner 更快,几秒就能 fail。
+  # 守住「内核 bug 不被 AppKit 编译拖慢」的反馈速度。
+  core-fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable) + rustfmt + clippy
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy (core)
+        run: cargo clippy -p agent-light-core --all-targets -- -D warnings
+
+      - name: test (core)
+        run: cargo test -p agent-light-core
+
+  # Cross-compile smoke test:守住 DEV.md「内核零 AppKit、可移植」的设计原则。
+  # 一旦有人在 crates/core 误引 objc2 / cocoa,跨平台 cargo check 立刻 fail。
+  core-cross:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable) + cross target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: check (core, ${{ matrix.target }})
+        run: cargo check -p agent-light-core --target ${{ matrix.target }}
+
   check:
     # app 壳依赖 objc2/AppKit,只能在 macOS 上编译/测试。
     runs-on: macos-latest
@@ -28,6 +76,19 @@ jobs:
 
       - name: test
         run: cargo test --workspace
+
+      # 端到端:把 make-app.sh 跑一遍,把可双击运行的 .app 上传成 artifact。
+      # reviewer 在 PR 页面直接下载 Asig.app 即可实测,不再依赖本地重编。
+      - name: Package .app
+        run: ./scripts/make-app.sh
+
+      - name: Upload Asig.app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Asig-app
+          path: build/Asig.app
+          if-no-files-found: error
+          retention-days: 14
 
   # 供应链检查:许可证白名单 + RustSec 漏洞 + 禁用/重复版本/来源。
   # cargo-deny 的 advisories 检查与 cargo-audit 同源(都读 RustSec 库),已覆盖其职责,
