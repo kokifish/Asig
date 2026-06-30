@@ -71,7 +71,11 @@ define_class!(
             let snap = self.ivars().monitor.poll();
             // 把 Reduce Motion 并入签名:用户在系统设置里切该开关时,签名变化 → 立即重渲染,
             // set_light 据 reduce_motion_on 把动画降级为常亮(无需常驻渲染,不损 CPU)。
-            let sig = format!("{}|rm={}", signature(&snap), crate::overlay::reduce_motion_on());
+            let sig = format!(
+                "{}|rm={}",
+                signature(&snap),
+                crate::overlay::reduce_motion_on()
+            );
             let same = {
                 let last = self.ivars().last_sig.borrow();
                 *last == sig
