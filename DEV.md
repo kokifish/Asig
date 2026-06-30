@@ -146,12 +146,13 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 - Group-1:
   - Language/语言: 单行单选列表: English, 中文。默认中文
-  - Reset All/重置所有: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值
+  - Reset All/重置所有: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值。在该group下居中
 - Group-2:
-  - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`
+  - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围5-50px，默认25px
   - Click-through/点击穿透(取消则可拖动): 开关
-  - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒
+  - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
   - Launch at login/开机自启动(待实现): 开关
+  - Theme/主题: 单选"跟随系统", "深色", "浅色"。默认"跟随系统"
 
 #### State Settings Card
 
