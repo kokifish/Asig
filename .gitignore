@@ -3,6 +3,8 @@
 **/*.rs.bk
 
 __pycache__
+.venv/
+uv.lock
 
 # macOS
 .DS_Store

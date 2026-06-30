@@ -64,10 +64,7 @@ class RepairStats:
 def parse_args() -> argparse.Namespace:
     """Parse command-line flags."""
     parser = argparse.ArgumentParser(
-        description=(
-            "Repair Tahoe StatusKit/ControlCenter blocked state for a menu-bar "
-            "bundle id."
-        )
+        description=("Repair Tahoe StatusKit/ControlCenter blocked state for a menu-bar bundle id.")
     )
     parser.add_argument(
         "--bundle-id",
@@ -112,10 +109,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--relaunch-app",
         type=Path,
-        help=(
-            "Optional app bundle path to reopen after the repair, for example "
-            "`build/Asig.app`."
-        ),
+        help=("Optional app bundle path to reopen after the repair, for example `build/Asig.app`."),
     )
     parser.add_argument(
         "--apply",
@@ -180,11 +174,7 @@ def summarize_entries(
             continue
         if entry.get("isAllowed") is False:
             refs = menu_item_locations(entry)
-            foreign_ref_count += sum(
-                1
-                for item in refs
-                if location_bundle_id(item) == bundle_id
-            )
+            foreign_ref_count += sum(1 for item in refs if location_bundle_id(item) == bundle_id)
     return target_count, target_allowed, foreign_ref_count
 
 
@@ -211,9 +201,7 @@ def repair_entries(entries: list[Any], bundle_id: str) -> RepairStats:
             continue
 
         filtered_locations = [
-            item
-            for item in original_locations
-            if location_bundle_id(item) != bundle_id
+            item for item in original_locations if location_bundle_id(item) != bundle_id
         ]
         removed_count = len(original_locations) - len(filtered_locations)
         if removed_count == 0:
@@ -242,8 +230,7 @@ def load_tracked_entries(outer: dict[str, Any]) -> list[Any]:
         raise KeyError("missing `trackedApplications` key")
     if not isinstance(tracked, (bytes, bytearray)):
         raise TypeError(
-            "`trackedApplications` is not binary plist data; "
-            f"got {type(tracked).__name__}"
+            f"`trackedApplications` is not binary plist data; got {type(tracked).__name__}"
         )
     decoded = plistlib.loads(bytes(tracked))
     if not isinstance(decoded, list):
