@@ -139,23 +139,23 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 #### General Settings Card
 
-- [Name/名称]: General Settings/常规设置
-- [icon/图标]: 常见的齿轮形状的macos纯色图标
+- Name/名称: General Settings/常规设置
+- icon/图标: 常见的齿轮形状的macos纯色图标
 
 > Group不带名称，仅用于分组，以下描述顺序也是卡片内选项的从上至下的顺序
 
 - Group-1:
-  - [Language/语言]: 单行单选列表: English, 中文。默认中文
-  - [Reset All/重置所有]: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值
+  - Language/语言: 单行单选列表: English, 中文。默认中文
+  - Reset All/重置所有: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值
 - Group-2:
-  - [Light size/浮窗灯大小]: 左右方向的调整拉杆，右侧显示 `xx px`
-  - [Click-through/点击穿透(取消则可拖动)]: 开关
-  - [Agent poll interval/Agent状态轮询间隔]: 单选栏，1/2/3/5/10/15 秒
-  - [Launch at login/开机自启动(待实现)]: 开关
+  - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`
+  - Click-through/点击穿透(取消则可拖动): 开关
+  - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒
+  - Launch at login/开机自启动(待实现): 开关
 
 #### State Settings Card
 
-- Reset: 右上角"reset"按钮可以将这个State的所有配置恢复为默认值
-- Color: "颜色"为横向的单选按钮，按钮中间为颜色展示，选中时外圈有选中的效果。"颜色: " + 颜色单选按钮 总共占据一行
-- Animations: "效果"单选，选中效果同"Color"。总共占据一行
-- Speed: "速度"调整。波纹/呼吸 支持自定义速度，范围为0.2Hz - 5Hz。总共占据一行
+- Reset/重置: 右上角"reset"按钮可以将这个State的所有配置恢复为默认值
+- Color/颜色: "颜色"为横向的单选按钮，按钮中间为颜色展示，选中时外圈有选中的效果。"颜色: " + 颜色单选按钮 总共占据一行
+- Animation/效果: "效果"单选，选中效果同"Color"。总共占据一行
+- Speed/速度: "速度"调整。波纹/呼吸 支持自定义速度，范围为0.2Hz - 5Hz。总共占据一行
