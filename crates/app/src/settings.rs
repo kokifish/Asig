@@ -42,8 +42,8 @@ const GITHUB_URL: &str = "https://github.com/koki/Asig";
 
 pub const ANIM_ORDER: [Anim; 3] = [Anim::Steady, Anim::Pulse, Anim::Ripple];
 pub const COLOR_ORDER: [Color; 6] = [
-    Color::Green,
     Color::LightBlue,
+    Color::Green,
     Color::Yellow,
     Color::Amber,
     Color::Red,
