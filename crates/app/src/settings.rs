@@ -1,5 +1,6 @@
 //! 设置窗口(左侧栏导航)。界面文案按 `Settings.lang`(默认中文)本地化,可切全英文。
-//! 左栏:General + 6 状态 tab(左对齐;状态 tab = 当前色圆点 + 本地化简称)+ 底部单色 SF Symbol
+//! 左栏:General + 6 状态 tab(左对齐;状态 tab = 当前色圆点 + 单语言名称——按 `lang` 取 DEV.md
+//! 「Signal Color」表「状态名称」列的中文或英文其中一档,不双语并排)+ 底部单色 SF Symbol
 //! 图标行(关于 functional;其余占位禁用)。右区:8 pane。
 //! 状态 pane = State Settings Card(Reset + Color 色块单选 + Animation 单选 + Speed Hz),
 //! 颜色/动画/速度各占一行。
@@ -91,7 +92,7 @@ pub const SPEED_MAX: f64 = 5.0;
 const SWATCH_D: CGFloat = 28.0;
 /// 相邻色块之间的固定像素间距(恒定,不随宽度变);色块按此间距左对齐 flow,
 /// 放不下则换行(每行数量可不同),窗口拉到很宽时合并为 1 行。
-const COLOR_GAP: CGFloat = 16.0;
+const COLOR_GAP: CGFloat = 15.0;
 
 // 右区内容布局:标题属于 content panel 的 header;卡片与标题左边缘对齐。
 const COL_W: CGFloat = CONTENT_W - CONTENT_PAD_X * 2.0;
@@ -296,7 +297,7 @@ fn strings_for(l: Lang) -> Strings {
             animation: "效果",
             speed: "速度",
             version: "版本 ",
-            state: ["完成通知", "完成", "运行", "待决策", "报错", "离线"],
+            state: ["完成通知", "已完成", "运行中", "待决策", "错误", "异常"],
             anim: ["常亮", "呼吸", "波纹"],
             poll_opts: ["1 秒", "2 秒", "3 秒", "5 秒", "10 秒", "15 秒"],
             reset_confirm_title: "重置全部设置",
@@ -320,14 +321,7 @@ fn strings_for(l: Lang) -> Strings {
             animation: "Animation",
             speed: "Speed",
             version: "Version ",
-            state: [
-                "DoneNotif",
-                "Done",
-                "Working",
-                "NeedsDeci",
-                "Error",
-                "Offline",
-            ],
+            state: ["Notify", "Done", "Working", "Pending", "Error", "Offline"],
             anim: ["Steady", "Pulse", "Ripple"],
             poll_opts: ["1 s", "2 s", "3 s", "5 s", "10 s", "15 s"],
             reset_confirm_title: "Reset all settings",
@@ -659,13 +653,22 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     let lw = cx - lx; // 标签列宽(容纳最长标签,不裁剪)
     let mut y = H - CONTENT_PAD_X - TOP_INSET;
 
-    // header:齿轮图标 + 标题(DEV.md General Settings Card 的 icon + Name)
+    // header:齿轮图标 + 标题(DEV.md General Settings Card 的 icon + Name)。
+    // 关键:按「墨迹中心」而非「框中心」对齐——NSTextField 在偏高的框里会按基线把文字画到
+    // 下部(墨迹低于框中心 ~6px),而 NSImageView 几何居中其 image;若只把两者框中心对齐,
+    // 文字会读作比齿轮低(实测低 ~4px)。故标题先 sizeToFit 取文字自然高,再把 tight 框与
+    // 齿轮框都居中到同一条 band_center,让两者的墨迹中心落到同一水平线。
+    let band_center = y + CONTENT_HEADER_H / 2.0;
+    let gear_s = 20.0;
     add_header_icon(
         &pane,
-        NSRect::new(NSPoint::new(x0, y + 3.0), NSSize::new(20.0, 20.0)),
+        NSRect::new(
+            NSPoint::new(x0, band_center - gear_s / 2.0),
+            NSSize::new(gear_s, gear_s),
+        ),
         "gearshape",
     );
-    add_text(
+    let title = add_text(
         &pane,
         NSRect::new(
             NSPoint::new(x0 + 28.0, y),
@@ -675,6 +678,18 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         false,
         true,
     );
+    unsafe {
+        let _: () = msg_send![&title, sizeToFit];
+        let fit: NSRect = msg_send![&title, frame];
+        let fit_h = fit.size.height;
+        let _: () = msg_send![
+            &title,
+            setFrame: NSRect::new(
+                NSPoint::new(x0 + 28.0, band_center - fit_h / 2.0),
+                NSSize::new(COL_W - 28.0, fit_h)
+            )
+        ];
+    }
     y -= HEADER_GAP;
 
     // —— Group-1:语言 + 重置所有(DEV.md「Group 不带名称,仅分组」,顺序即从上至下)——
@@ -878,8 +893,12 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
             sel!(changeTheme:),
         );
         unsafe {
-            let sz: NSSize = msg_send![&btn, sizeToFit];
-            let w = sz.width + 2.0;
+            // sizeToFit 返回 void(就地改 frame),不是返回自适应尺寸——直接当 NSSize 读会拿到
+            // 垃圾值,算出错误的按钮宽,标题被裁掉(主题三个 radio 只见圆点不见名称的根因)。
+            // 正确做法:调完 sizeToFit 再读 frame 拿自适应宽。
+            let _: () = msg_send![&btn, sizeToFit];
+            let fitted: NSRect = msg_send![&btn, frame];
+            let w = fitted.size.width + 2.0;
             let _: () = msg_send![&btn, setFrameSize: NSSize::new(w, 22.0)];
             if i == theme_idx {
                 let _: () = msg_send![&btn, setState: 1i64];

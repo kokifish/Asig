@@ -63,14 +63,16 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 一个 `AgentStatus` 同时决定**灯的颜色 + 灯效(动画)**,UI 层只消费 `status.light()`。
 
-| 优先级 | 状态 | 灯 | 默认动效 | 含义 |
-|:---:|---|:---:|---|---|
-| 5 | `Error` | 🔴 红 | 快闪 | agent 报错且无法自动恢复 |
-| 4 | `NeedsDeci` | 🟠 琥珀 | 慢闪 | 待决策（要权限 / 要输入） |
-| 3 | `Offline` | 🟣 紫 | 常亮 | 异常 / 卡住 / 进程没了 / 未知 |
-| 2 | `Working` | 🟡 黄 | 呼吸-慢速 | 正在跑 |
-| 1 | `Done` | 🟢 绿 | 波纹 | 完成 / 空闲 / 初始默认态 |
-| 0 | `DoneNotif` | 🔵 浅蓝 | 快速呼吸 | 其他状态转入Done状态 |
+| 优先级 | 状态 | 状态名称 | 灯 | 默认动效 | 含义 |
+|:---:|---|---|:---:|---|---|
+| 5 | `Error` | 错误/Error | 🔴 红 | 快闪 | agent 报错且无法自动恢复 |
+| 4 | `NeedsDeci` | 待决策/Pending | 🟠 琥珀 | 慢闪 | 待决策（要权限 / 要输入） |
+| 3 | `Offline` | 异常/Offline | 🟣 紫 | 常亮 | 异常 / 卡住 / 进程没了 / 未知 |
+| 2 | `Working` | 运行中/Working | 🟡 黄 | 呼吸-慢速 | 正在跑 |
+| 1 | `Done` | 已完成/Done | 🟢 绿 | 波纹 | 完成 / 空闲 / 初始默认态 |
+| 0 | `DoneNotif` | 完成通知/Notify | 🔵 浅蓝 | 快速呼吸 | 其他状态转入Done状态 |
+
+- **状态名称** = 中文 / 英文（两档双语专称，表中并列）。Settings Panel「Left Side Tabs」状态 tab 的显示名**只取其中一档**——按常规设置「语言」决定（中文模式→中文 / 英文模式→英文短称），不双语并排。英文为面向 tab 的简称：Error / Pending / Offline / Working / Done / Notify。
 
 - **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 DoneNotif (Done-Notification)，用浅蓝色表示，默认动效为快速呼吸
 - **Aggregation**：同一个Agent多个会话同时存在时，全局灯取**优先级最高**的那一个（`AgentStatus::priority()`，数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
@@ -133,12 +135,15 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 - Content:
   - 右侧内容区有自己的 **header**：标题固定在右侧内容区的左上方（State pane 的 Reset 按钮对齐到该 header 右侧），而不是漂在卡片列中央；标题下方不再有分隔线。
   - General pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、开机启动（占位，待实现）。详见 General Settings Card。
-  - State pane(每状态一个): 颜色（12 色块,**固定像素间距(16px)、左对齐 flow**——随窗宽自动换行,每行数量可不同,很宽时合并为 1 行;间距始终恒定、换行后与第一行同间距左对齐;label 左对齐、控件区往左加宽;Tailwind 源、随主题深浅自适应）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
+  - State pane(每状态一个): 颜色（12 色块,**固定像素间距(15px)、左对齐 flow**——随窗宽自动换行,每行数量可不同,很宽时合并为 1 行;间距始终恒定、换行后与第一行同间距左对齐;label 左对齐、控件区往左加宽;Tailwind 源、随主题深浅自适应）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
   - About pane: 版本号 + GitHub 链接（纯展示）。
   - 各状态可独立改 动画 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
-- Left Side Tabs(in order): General, DoneNotif, Done, Working, NeedsDeci, Error, Offline. Left aligned。状态 tab = 当前色圆点 + 英文简称；其余黑白风（macOS 默认暗色）。
-  - Color: 除状态色圆点外，其余均黑白风 / macOS 默认暗色，不用彩色。
-  - 选中态：选中 tab = 实心强调色圆角块（`controlAccentColor`，cornerRadius 8，连续圆角 squircle），选中文字转白；状态色圆点保持彩色。**不用文字前缀（无 ▸ 三角形）**，与 stats.app 一致（玻璃/vibrancy 材质的选中态在玻璃侧栏上不可辨，故用实心强调色）。
+- **Left Side Tabs**（左侧栏顶部、左对齐、自上而下 7 项；顺序固定）：
+  - 顺序（中文 / 英文）：① 常规设置 / General Settings（齿轮）→ ② 完成通知 / Notify → ③ 已完成 / Done → ④ 运行中 / Working → ⑤ 待决策 / Pending → ⑥ 错误 / Error → ⑦ 异常 / Offline。②–⑦ 为状态 tab，名称取自上表「状态名称」列。
+  - 语言：按常规设置「语言」**只显示其中一档**——中文模式全中文、英文模式全英文短称，**不双语并排**。
+  - 结构：状态 tab = 当前色圆点 + 名称；General tab = 齿轮（template SF Symbol）+ 名称。
+  - Color: 除状态色圆点外，其余（齿轮、文字）均黑白风 / macOS 默认暗色，不用彩色。
+  - 选中态：选中 tab = 实心强调色圆角块（`controlAccentColor`，cornerRadius 8，连续圆角 squircle），选中文字（及 General 齿轮）转白；状态色圆点保持彩色。**不用文字前缀（无 ▸ 三角形）**，与 stats.app 一致（玻璃/vibrancy 材质的选中态在玻璃侧栏上不可辨，故用实心强调色）。
 - Left Side Buttons: 关于(About)、访问官网、调试、捐赠、退出Asig（左→右）。除「关于」外均为占位禁用按钮(留待实现)。
   - Color: 均黑白风 / macOS 默认暗色（单色 SF Symbol 图标），不用彩色。
 
@@ -154,14 +159,20 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
   - Reset All/重置所有: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值。在该group下居中
 - Group-2:
   - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围5-50px，默认25px
-  - Click-through/点击穿透(取消则可拖动): 开关
+  - Click-through/点击穿透(取消则可拖动): 开关。默认开
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
-  - Launch at login/开机自启动(待实现): 开关
+  - Launch at login/开机自启动(待实现): 开关。默认开
   - Theme/主题: 横向单选按钮组 "跟随系统", "深色", "浅色"。默认"跟随系统"
 
 #### State Pane
 
 - Reset/重置: 右上角"reset"按钮可以将这个State的所有配置恢复为默认值
-- Color/颜色: "颜色"为色块单选(按钮中间为颜色展示,选中时外圈带选中环)。色块**固定像素间距(16px)、左对齐 flow**,随窗宽自动换行(每行数量可不同)、很宽时合并为 1 行;换行后与第一行保持同间距、左对齐(间距始终恒定,不随宽度拉伸)。"颜色: "label + 色块组占一或多行。
+- Color/颜色: "颜色"为色块单选(按钮中间为颜色展示,选中时外圈带选中环)。色块**固定像素间距(15px)、左对齐 flow**,随窗宽自动换行(每行数量可不同)、很宽时合并为 1 行;换行后与第一行保持同间距、左对齐(间距始终恒定,不随宽度拉伸)。"颜色: "label + 色块组占一或多行。
 - Animation/效果: 横向单选按钮组。总共占一行
 - Speed/速度: "速度"调整。波纹/呼吸 支持自定义速度，范围为0.2Hz - 5Hz。总共占一行
+
+##### DoneNotif Pane
+
+相比普通 State Pane 新增：
+
+- 持续时间：左右拉杆调整，范围5s-60s。默认30s
