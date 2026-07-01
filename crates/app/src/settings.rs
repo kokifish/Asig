@@ -16,7 +16,7 @@ use objc2_app_kit::{
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use agent_light_core::{Anim, Color, Lang, StateStyle, StyleKey};
+use agent_light_core::{Anim, Color, Lang, StateStyle, StyleKey, Theme};
 
 use crate::app_delegate::AppDelegate;
 use crate::overlay::swatch_image;
@@ -24,7 +24,7 @@ use crate::overlay::swatch_image;
 const W: CGFloat = 680.0;
 const H: CGFloat = 460.0;
 const SIDEBAR_W: CGFloat = 170.0;
-const CONTENT_W: CGFloat = W - SIDEBAR_W;
+pub const CONTENT_W: CGFloat = W - SIDEBAR_W;
 const CONTENT_PAD_X: CGFloat = 26.0;
 const CONTENT_HEADER_H: CGFloat = 26.0;
 /// 标题(下方不再有横线)到首张卡片的间距。
@@ -41,13 +41,20 @@ const SIDEBAR_PANE_H: CGFloat = H - TOP_INSET - SIDEBAR_INSET;
 const GITHUB_URL: &str = "https://github.com/koki/Asig";
 
 pub const ANIM_ORDER: [Anim; 3] = [Anim::Steady, Anim::Pulse, Anim::Ripple];
-pub const COLOR_ORDER: [Color; 6] = [
+pub const COLOR_ORDER: [Color; 12] = [
     Color::LightBlue,
     Color::Green,
     Color::Yellow,
     Color::Amber,
     Color::Red,
     Color::Purple,
+    // —— 个性化扩展色(Tailwind,无默认状态映射)——
+    Color::Blue,
+    Color::Indigo,
+    Color::Teal,
+    Color::Cyan,
+    Color::Orange,
+    Color::Pink,
 ];
 /// 轮询间隔下拉的可选项(ms)。index ↔ 选中项。
 pub const POLL_PRESETS_MS: [u32; 6] = [1000, 2000, 3000, 5000, 10000, 15000];
@@ -76,10 +83,15 @@ pub const LANG_EN_TAG: i64 = 501;
 pub const LANG_ZH_TAG: i64 = 502;
 // General pane「浮窗灯大小」右侧 `xx px` 实时标签 tag(changeSize 时按它刷新)。
 pub const SIZE_LABEL_TAG: i64 = 503;
+// General pane「Theme」radio tag 基数(+0/1/2 = 跟随系统/深色/浅色)。
+pub const THEME_OFF: i64 = 600;
 
 pub const SPEED_MIN: f64 = 0.2;
 pub const SPEED_MAX: f64 = 5.0;
-const SWATCH_D: CGFloat = 24.0;
+const SWATCH_D: CGFloat = 28.0;
+/// 相邻色块之间的固定像素间距(恒定,不随宽度变);色块按此间距左对齐 flow,
+/// 放不下则换行(每行数量可不同),窗口拉到很宽时合并为 1 行。
+const COLOR_GAP: CGFloat = 16.0;
 
 // 右区内容布局:标题属于 content panel 的 header;卡片与标题左边缘对齐。
 const COL_W: CGFloat = CONTENT_W - CONTENT_PAD_X * 2.0;
@@ -106,8 +118,8 @@ fn row_center_y(top: CGFloat, i: usize) -> CGFloat {
     top - CARD_TOP_PAD - (i as CGFloat + 0.5) * ROW_H
 }
 
-/// 分组圆角卡片背景(NSBox custom:细边 + 圆角 + 浅填充),置于行后面。
-fn add_card(pane: &Retained<NSView>, frame: NSRect) {
+/// 分组圆角卡片背景(NSBox custom:细边 + 圆角 + 浅填充),置于行后面。返回卡片引用(layout 重排用)。
+fn add_card(pane: &Retained<NSView>, frame: NSRect) -> Retained<NSBox> {
     let b: Retained<NSBox> = unsafe { msg_send![class!(NSBox), new] };
     unsafe {
         let _: () = msg_send![&b, setBoxType: 4u64]; // NSBoxCustom
@@ -120,8 +132,10 @@ fn add_card(pane: &Retained<NSView>, frame: NSRect) {
         let _: () = msg_send![&b, setWantsLayer: Bool::YES];
         let layer: Retained<NSObject> = msg_send![&b, layer];
         let _: () = msg_send![&layer, setCornerCurve: &*NSString::from_str("continuous")];
+        let _: () = msg_send![&b, setAutoresizingMask: 2u64]; // 宽度随 pane(state 卡片高度由 layout 重排覆盖)
         let _: () = msg_send![&**pane, addSubview: &*b];
     }
+    b
 }
 
 /// 运行时是否存在真·液态玻璃类(macOS 26+)。minos=11.0,旧系统无此类,须回退 vibrancy。
@@ -150,6 +164,8 @@ fn glass_pane(frame: NSRect, corner_radius: CGFloat, fallback_material: i64) -> 
             let _: () = msg_send![&g, setFrame: frame];
             let _: () = msg_send![&g, setCornerRadius: corner_radius];
             let _: () = msg_send![&g, setContentView: Some(&*content)];
+            // contentView 宽+高 随玻璃视图缩放(承载的右区 content_area 据此自适应窗宽)。
+            let _: () = msg_send![&content, setAutoresizingMask: 18u64];
         }
         GlassPane { view: g, content }
     } else {
@@ -215,9 +231,13 @@ fn set_tab_title(button: &Retained<NSView>, label: &str, selected: bool) {
 
 /// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
 pub struct StateControls {
+    pub card: Retained<NSBox>,
     pub color: Vec<Retained<NSButton>>,
+    pub color_lbl: Retained<NSTextField>,
     pub anim: Vec<Retained<NSButton>>,
+    pub anim_lbl: Retained<NSTextField>,
     pub speed: Retained<NSSlider>,
+    pub speed_lbl: Retained<NSTextField>,
     pub speed_label: Retained<NSTextField>,
 }
 
@@ -230,6 +250,8 @@ struct Strings {
     poll_interval: &'static str,
     launch_login: &'static str,
     language: &'static str,
+    theme: &'static str,
+    theme_opts: [&'static str; 3],
     reset: &'static str,
     reset_all: &'static str,
     color: &'static str,
@@ -266,6 +288,8 @@ fn strings_for(l: Lang) -> Strings {
             poll_interval: "Agent状态轮询间隔",
             launch_login: "开机自启动(待实现)",
             language: "语言",
+            theme: "主题",
+            theme_opts: ["跟随系统", "深色", "浅色"],
             reset: "重置",
             reset_all: "重置所有",
             color: "颜色",
@@ -288,6 +312,8 @@ fn strings_for(l: Lang) -> Strings {
             poll_interval: "Agent poll interval",
             launch_login: "Launch at login (TBD)",
             language: "Language",
+            theme: "Theme",
+            theme_opts: ["Auto", "Dark", "Light"],
             reset: "Reset",
             reset_all: "Reset All",
             color: "Color",
@@ -341,6 +367,15 @@ fn poll_preset_index(ms: u32) -> usize {
     POLL_PRESETS_MS.iter().position(|&p| p == ms).unwrap_or(2)
 }
 
+/// Theme 下拉的选中索引(FollowSystem=0 / Dark=1 / Light=2)。
+fn theme_index(theme: Theme) -> usize {
+    match theme {
+        Theme::FollowSystem => 0,
+        Theme::Dark => 1,
+        Theme::Light => 2,
+    }
+}
+
 /// 单色 SF Symbol 图标(底栏用,template 渲染跟随明暗)。
 fn sf_symbol(name: &str) -> Retained<NSImage> {
     NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
@@ -374,6 +409,8 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         let _: () = msg_send![&window, setTitlebarSeparatorStyle: 1i64]; // none — 玻璃贯穿标题栏,无顶部分隔线
         let _: () = msg_send![&window, setMovable: true];
         let _: () = msg_send![&window, setMinSize: NSSize::new(W, H)];
+        // AppDelegate 兼作窗口 delegate:windowDidResize: 触发 state pane 色块按新宽度重排。
+        let _: () = msg_send![&window, setDelegate: delegate];
     }
 
     // 右区:透明 NSView,8 pane 叠在其上。origin 在 SIDEBAR_W,铺在主玻璃上(无外框)。
@@ -381,6 +418,10 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         NSPoint::new(SIDEBAR_W, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
+    unsafe {
+        // 宽+高 随窗口缩放(左侧栏固定宽,故右区宽度 = 窗宽 − SIDEBAR_W)。
+        let _: () = msg_send![&content_area, setAutoresizingMask: 18u64];
+    }
     // 8 pane:General + 6 状态(各带 StateControls)+ About。按 pane id(=索引)排。
     let mut panes: Vec<Retained<NSView>> = Vec::with_capacity(8);
     let mut controls_map: HashMap<StyleKey, StateControls> = HashMap::new();
@@ -394,6 +435,8 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     for (i, pane) in panes.iter().enumerate() {
         unsafe {
             let _: () = msg_send![pane, setHidden: Bool::new(i != 0)];
+            // 每个 pane 宽+高 随右区缩放;pane 内的卡片/滑块各自按 autoresizing 适配。
+            let _: () = msg_send![pane, setAutoresizingMask: 18u64];
             let _: () = msg_send![&content_area, addSubview: &**pane];
         }
     }
@@ -697,7 +740,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     y -= card_height(2) + CARD_GAP;
 
     // —— Group-2:浮窗灯大小 / 点击穿透 / Agent状态轮询间隔 / 开机自启动 ——
-    add_card(&pane, card_frame(x0, y, 4));
+    add_card(&pane, card_frame(x0, y, 5));
     // Light size(标签 + 滑块 + 右侧 `xx px` 实时标签)
     add_text(
         &pane,
@@ -710,7 +753,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         false,
     );
     let dot = delegate.ivars().settings.borrow().dot_size;
-    add_slider(
+    let size_slider = add_slider(
         &pane,
         NSRect::new(
             NSPoint::new(cx, row_center_y(y, 0) - 11.0),
@@ -733,6 +776,11 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         false,
     );
     set_tag(&size_label, SIZE_LABEL_TAG);
+    unsafe {
+        // 滑块宽度随 pane 拉伸,右侧 `xx px` 标签贴右(MinXMargin);两者间距恒定。
+        let _: () = msg_send![&size_slider, setAutoresizingMask: 2u64];
+        let _: () = msg_send![&size_label, setAutoresizingMask: 1u64];
+    }
     // Click-through(标签 + 开关;与 Drop-down「锁定」同步同一开关)
     add_text(
         &pane,
@@ -802,6 +850,43 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     unsafe {
         let _: () = msg_send![&launch, setEnabled: Bool::NO];
     }
+    // Theme(标签 + 下拉:跟随系统 / 深色 / 浅色)
+    add_text(
+        &pane,
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 4) - 10.0),
+            NSSize::new(lw, 20.0),
+        ),
+        st.theme,
+        false,
+        false,
+    );
+    // Theme(标签 + 横向 radio:跟随系统 / 深色 / 浅色;与「效果」同款单选)。
+    // radio 宽度按标题 sizeToFit 自适应并横向累计,避免长标题(「跟随系统」)被截断。
+    let theme_idx = theme_index(delegate.ivars().settings.borrow().theme);
+    let mut rx = cx;
+    for (i, &opt) in st.theme_opts.iter().enumerate() {
+        let btn = add_radio_button(
+            &pane,
+            NSRect::new(
+                NSPoint::new(rx, row_center_y(y, 4) - 11.0),
+                NSSize::new(100.0, 22.0),
+            ),
+            opt,
+            THEME_OFF + i as i64,
+            delegate,
+            sel!(changeTheme:),
+        );
+        unsafe {
+            let sz: NSSize = msg_send![&btn, sizeToFit];
+            let w = sz.width + 2.0;
+            let _: () = msg_send![&btn, setFrameSize: NSSize::new(w, 22.0)];
+            if i == theme_idx {
+                let _: () = msg_send![&btn, setState: 1i64];
+            }
+            rx += w + 28.0;
+        }
+    }
 
     pane
 }
@@ -816,26 +901,24 @@ fn build_state_pane(
         NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
-    let x0 = CONTENT_PAD_X;
-    let lx = x0 + 16.0;
-    let cx = x0 + 200.0;
-    let cw = COL_W - 200.0 - 16.0;
-    let lw = cx - lx;
     let base = tab_of_key(key) * 1000;
-    let mut y = H - CONTENT_PAD_X - TOP_INSET;
+    let y_hdr = H - CONTENT_PAD_X - TOP_INSET;
 
-    // 标题属于右侧内容 panel 的 header;Reset 对齐到同一 header 的尾部。
-    add_text(
+    // header:标题(宽随 pane autoresizing)+ Reset(贴右 autoresizing)。
+    let title = add_text(
         &pane,
-        NSRect::new(NSPoint::new(x0, y), NSSize::new(COL_W, CONTENT_HEADER_H)),
+        NSRect::new(
+            NSPoint::new(CONTENT_PAD_X, y_hdr),
+            NSSize::new(COL_W, CONTENT_HEADER_H),
+        ),
         name,
         false,
         true,
     );
-    let _ = add_plain_button(
+    let reset = add_plain_button(
         &pane,
         NSRect::new(
-            NSPoint::new(CONTENT_W - CONTENT_PAD_X - 70.0, y + 1.0),
+            NSPoint::new(CONTENT_W - CONTENT_PAD_X - 70.0, y_hdr + 1.0),
             NSSize::new(70.0, 24.0),
         ),
         st.reset,
@@ -843,42 +926,36 @@ fn build_state_pane(
         sel!(resetStateStyle:),
         delegate,
     );
-    y -= HEADER_GAP;
+    unsafe {
+        let _: () = msg_send![&title, setAutoresizingMask: 2u64]; // width 随 pane
+        let _: () = msg_send![&reset, setAutoresizingMask: 1u64]; // 贴右(MinXMargin)
+    }
 
-    // —— Card:状态(3 行)——
-    add_card(&pane, card_frame(x0, y, 3));
-    // Color(标签 + 横向色块;都对齐 row 0 中心)
-    add_text(
+    // card + 控件:先占位创建(frame 由 layout_state_pane 按 pane 宽设)。
+    let card = add_card(
         &pane,
-        NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 0) - 10.0),
-            NSSize::new(lw, 20.0),
-        ),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+    );
+    let color_lbl = add_text(
+        &pane,
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
         st.color,
         false,
         false,
     );
-    let mut color_btns: Vec<Retained<NSButton>> = Vec::with_capacity(6);
+    let mut color_btns: Vec<Retained<NSButton>> = Vec::with_capacity(COLOR_ORDER.len());
     for (i, &color) in COLOR_ORDER.iter().enumerate() {
-        let sx = cx + i as CGFloat * 32.0;
         color_btns.push(add_swatch_button(
             &pane,
-            NSRect::new(
-                NSPoint::new(sx, row_center_y(y, 0) - 12.0),
-                NSSize::new(SWATCH_D, SWATCH_D),
-            ),
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(SWATCH_D, SWATCH_D)),
             color,
             base + COLOR_OFF + i as i64,
             delegate,
         ));
     }
-    // Animation(标签 + 3 单选;都对齐 row 1 中心)
-    add_text(
+    let anim_lbl = add_text(
         &pane,
-        NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 1) - 10.0),
-            NSSize::new(lw, 20.0),
-        ),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
         st.animation,
         false,
         false,
@@ -887,33 +964,23 @@ fn build_state_pane(
     for (i, &nm) in st.anim.iter().enumerate() {
         anim_btns.push(add_radio_button(
             &pane,
-            NSRect::new(
-                NSPoint::new(cx + i as CGFloat * 76.0, row_center_y(y, 1) - 11.0),
-                NSSize::new(72.0, 22.0),
-            ),
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(72.0, 22.0)),
             nm,
             base + ANIM_OFF + i as i64,
             delegate,
             sel!(changeAnim:),
         ));
     }
-    // Speed(标签 + 滑块 + Hz;都对齐 row 2 中心)
-    add_text(
+    let speed_lbl = add_text(
         &pane,
-        NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 2) - 10.0),
-            NSSize::new(lw, 20.0),
-        ),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
         st.speed,
         false,
         false,
     );
     let speed = add_slider(
         &pane,
-        NSRect::new(
-            NSPoint::new(cx, row_center_y(y, 2) - 11.0),
-            NSSize::new(cw - 64.0, 22.0),
-        ),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
         SPEED_MIN,
         SPEED_MAX,
         1.0,
@@ -923,10 +990,7 @@ fn build_state_pane(
     set_tag(&speed, base + SPEED_OFF);
     let speed_label = add_text(
         &pane,
-        NSRect::new(
-            NSPoint::new(cx + cw - 56.0, row_center_y(y, 2) - 10.0),
-            NSSize::new(56.0, 20.0),
-        ),
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
         "—",
         false,
         false,
@@ -934,14 +998,95 @@ fn build_state_pane(
     set_tag(&speed_label, base + SPEED_LABEL_OFF);
 
     let controls = StateControls {
+        card,
         color: color_btns,
+        color_lbl,
         anim: anim_btns,
+        anim_lbl,
         speed,
+        speed_lbl,
         speed_label,
     };
+    layout_state_pane(&controls, CONTENT_W); // 初始布局(默认宽度)
     let style = delegate.ivars().settings.borrow().style_for(key);
     refresh_state_controls(&controls, style);
     (pane, controls)
+}
+
+/// 按 pane 宽度重排 state pane:card + 色块(固定间距 flow,行数随宽度)+ Anim/Speed/label。
+/// build 与 windowDidResize 都调 —— 宽度变时色块自动换行 / 合并到 1 行,间距始终固定。
+pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
+    let col_w = pane_w - CONTENT_PAD_X * 2.0;
+    let x0 = CONTENT_PAD_X;
+    let lx = x0 + 16.0;
+    let cx = x0 + 96.0;
+    let cw = col_w - 96.0 - 16.0;
+    let lw = cx - lx;
+    let step = SWATCH_D + COLOR_GAP; // 色块固定间距(恒定,不随宽度变)
+    // 每行可容纳数:首块 + 后续 (step) 量出;放不下就换行(每行数量可不同)。
+    let per_row = (((cw + COLOR_GAP) / step).floor() as usize).max(1);
+    let color_rows = COLOR_ORDER.len().div_ceil(per_row);
+    let color_h = color_rows as CGFloat * step;
+    let card_h = CARD_TOP_PAD + color_h + ROW_H * 2.0 + CARD_BOT_PAD;
+    let y_top = H - CONTENT_PAD_X - TOP_INSET - HEADER_GAP; // card 顶
+    let color_top = y_top - CARD_TOP_PAD;
+    let anim_top = color_top - color_h;
+    let anim_mid = anim_top - ROW_H / 2.0;
+    let speed_mid = anim_top - ROW_H - ROW_H / 2.0;
+    unsafe {
+        let _: () = msg_send![
+            &c.card,
+            setFrame: NSRect::new(NSPoint::new(x0, y_top - card_h), NSSize::new(col_w, card_h))
+        ];
+        let _: () = msg_send![
+            &c.color_lbl,
+            setFrame: NSRect::new(
+                NSPoint::new(lx, color_top - color_h / 2.0 - 10.0),
+                NSSize::new(lw, 20.0)
+            )
+        ];
+        for (i, btn) in c.color.iter().enumerate() {
+            let r = i / per_row;
+            let cc = i % per_row;
+            let sx = cx + cc as CGFloat * step;
+            let row_mid = color_top - (r as CGFloat + 0.5) * step;
+            let _: () = msg_send![
+                btn,
+                setFrame: NSRect::new(
+                    NSPoint::new(sx, row_mid - SWATCH_D / 2.0),
+                    NSSize::new(SWATCH_D, SWATCH_D)
+                )
+            ];
+        }
+        let _: () = msg_send![
+            &c.anim_lbl,
+            setFrame: NSRect::new(NSPoint::new(lx, anim_mid - 10.0), NSSize::new(lw, 20.0))
+        ];
+        for (i, btn) in c.anim.iter().enumerate() {
+            let _: () = msg_send![
+                btn,
+                setFrame: NSRect::new(
+                    NSPoint::new(cx + i as CGFloat * 76.0, anim_mid - 11.0),
+                    NSSize::new(72.0, 22.0)
+                )
+            ];
+        }
+        let _: () = msg_send![
+            &c.speed_lbl,
+            setFrame: NSRect::new(NSPoint::new(lx, speed_mid - 10.0), NSSize::new(lw, 20.0))
+        ];
+        let _: () = msg_send![
+            &c.speed,
+            setFrame: NSRect::new(NSPoint::new(cx, speed_mid - 11.0), NSSize::new(cw - 64.0, 22.0))
+        ];
+        let _: () = msg_send![
+            &c.speed_label,
+            setFrame: NSRect::new(
+                NSPoint::new(cx + cw - 56.0, speed_mid - 10.0),
+                NSSize::new(56.0, 20.0)
+            )
+        ];
+    }
 }
 
 /// 按某状态当前样式,刷新其 pane 的色块(选中带环)/ radio 选中 / 速度滑块+标签。
@@ -1167,9 +1312,20 @@ fn add_text(
     center: bool,
     bold: bool,
 ) -> Retained<NSTextField> {
-    let label: Retained<NSTextField> =
-        unsafe { msg_send![class!(NSTextField), labelWithString: &*NSString::from_str(text)] };
+    // 用 alloc/initWithFrame 构造(而非 labelWithString:)—— 后者创建的 label 不响应
+    // setAlignment(实测右对齐不生效),标准 NSTextField 才能可靠设对齐。
+    let label: Retained<NSTextField> = unsafe {
+        let alloc: Allocated<NSTextField> = msg_send![class!(NSTextField), alloc];
+        msg_send![alloc, initWithFrame: frame]
+    };
     unsafe {
+        let _: () = msg_send![&label, setStringValue: &*NSString::from_str(text)];
+        let _: () = msg_send![&label, setBezeled: Bool::NO];
+        let _: () = msg_send![&label, setDrawsBackground: Bool::NO];
+        let _: () = msg_send![&label, setEditable: Bool::NO];
+        let _: () = msg_send![&label, setSelectable: Bool::NO];
+        let color: Retained<NSColor> = msg_send![class!(NSColor), labelColor];
+        let _: () = msg_send![&label, setTextColor: &*color];
         if bold {
             let font: Retained<NSFont> = msg_send![class!(NSFont), boldSystemFontOfSize: 14.0f64];
             let _: () = msg_send![&label, setFont: &*font];
@@ -1177,7 +1333,6 @@ fn add_text(
         if center {
             let _: () = msg_send![&label, setAlignment: 2i64];
         }
-        let _: () = msg_send![&label, setFrame: frame];
         let _: () = msg_send![&**pane, addSubview: &*label];
     }
     label

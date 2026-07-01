@@ -14,6 +14,7 @@ agent-light-core = { path = "../core" }
 # objc2 生态:保持在最新发布线(0.6 / framework 0.3)。define_class! 新宏语法。
 # ⚠️ 类型/协议默认藏在 cargo feature 后,必须按需开启。
 objc2            = "0.6"
+block2           = "0.6" # NSColor colorWithDynamicProvider 的 ObjC block 闭包(匹配 objc2-app-kit 0.3 的 block2)
 objc2-core-foundation = "0.3" # CGFloat(NSRect/NSPoint 用)在 0.6 起搬到这里
 objc2-foundation = { version = "0.3", features = [
     "NSString", "NSTimer", "NSObject", "NSNotification",
@@ -51,6 +52,8 @@ objc2-app-kit = { version = "0.3", features = [
     "NSFont",
     "NSSlider",
     "NSPopUpButton",
+    "NSAppearance", # Theme setAppearance + NSColor dynamicProvider
+    "NSColorList",  # NSColor colorWithName:dynamicProvider: 需此 feature
 ] }
 # CoreAnimation:CALayer 透明度脉冲(交 render server 驱动,app CPU ~0%)。
 objc2-quartz-core = { version = "0.3", features = [

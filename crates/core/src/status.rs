@@ -66,6 +66,13 @@ pub enum Color {
     Amber,  // NeedsDeci
     Red,    // Error
     Purple, // Offline
+    // —— 个性化扩展色(无默认状态映射,仅 Settings 可选;Tailwind 源,见 overlay.rs)——
+    Blue,
+    Indigo,
+    Teal,
+    Cyan,
+    Orange,
+    Pink,
 }
 
 /// 灯效规格(平台无关)。app 层翻译成 CoreAnimation。
@@ -200,5 +207,29 @@ mod tests {
             transition(AgentStatus::Error, AgentStatus::NeedsDeci),
             AgentStatus::Error
         );
+    }
+
+    #[test]
+    fn color_serde_roundtrip_all_12() {
+        // 12 色 serde rename snake_case 往返(含新增 6 个性化色)。
+        let cases = [
+            ("green", Color::Green),
+            ("light_blue", Color::LightBlue),
+            ("yellow", Color::Yellow),
+            ("amber", Color::Amber),
+            ("red", Color::Red),
+            ("purple", Color::Purple),
+            ("blue", Color::Blue),
+            ("indigo", Color::Indigo),
+            ("teal", Color::Teal),
+            ("cyan", Color::Cyan),
+            ("orange", Color::Orange),
+            ("pink", Color::Pink),
+        ];
+        for (name, c) in cases {
+            let s = serde_json::to_string(&c).unwrap();
+            assert_eq!(s, format!("\"{name}\""));
+            assert_eq!(serde_json::from_str::<Color>(&s).unwrap(), c);
+        }
     }
 }

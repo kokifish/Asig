@@ -21,8 +21,9 @@ fn main() {
     let app: Retained<NSApplication> =
         unsafe { msg_send![class!(NSApplication), sharedApplication] };
 
-    // 启动即加载用户设置(灯大小 + 各状态样式)。
+    // 启动即加载用户设置(灯大小 + 各状态样式 + 主题)。
     let settings = agent_light_core::Settings::load();
+    let theme = settings.theme; // 在 settings 移入 delegate 前取出
 
     // Phase 2:置顶透明药丸浮窗(按设置里的圆点大小 + 上次记忆的位置初始化)。
     let (overlay_window, overlay_view) = overlay::build(settings.dot_size, settings.light_pos);
@@ -46,6 +47,8 @@ fn main() {
         state_controls: RefCell::new(HashMap::new()),
     });
     // popover / 设置窗改为首次点击时懒创建(省常驻内存,压到 <60MB 预算内)。
+
+    overlay::apply_theme(theme); // 应用主题外观(跟随系统 / 深 / 浅)
 
     tray::build(&delegate); // 状态栏 Signal Icon(点击弹 Drop-down)
     tray::schedule_tick(&delegate); // NSTimer 每 3s 轮询内核

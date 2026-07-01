@@ -78,6 +78,17 @@ pub enum Lang {
     En,
 }
 
+/// 界面外观主题(跟随系统 / 深色 / 浅色)。默认跟随系统。serde 持久化;
+/// 切换后 app 层立即设 `NSApp.appearance` 并触发重绘。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    #[default]
+    FollowSystem,
+    Dark,
+    Light,
+}
+
 /// 可配置灯效的键:5 个真实 `AgentStatus` + Done-Notification(派生态,非真实状态)。
 /// 用它统一做 `Settings` 的键 + Settings Panel 的行,避免给 Done-Notification 特判。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -167,6 +178,9 @@ pub struct Settings {
     /// 界面语言。默认中文。
     #[serde(default)]
     pub lang: Lang,
+    /// 界面外观主题。默认跟随系统。
+    #[serde(default)]
+    pub theme: Theme,
 }
 
 fn default_poll_interval_ms() -> u32 {
@@ -180,11 +194,12 @@ impl Default for Settings {
             .map(|&k| (k, k.default_style()))
             .collect();
         Self {
-            dot_size: 16,
+            dot_size: 25,
             styles,
             light_pos: None,
             poll_interval_ms: default_poll_interval_ms(),
             lang: Lang::default(),
+            theme: Theme::default(),
         }
     }
 }
@@ -337,8 +352,9 @@ mod tests {
         let s = Settings::default();
         let text = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&text).unwrap();
-        assert_eq!(back.dot_size, 16);
+        assert_eq!(back.dot_size, 25);
         assert_eq!(back.poll_interval_ms, 3000);
+        assert_eq!(back.theme, Theme::FollowSystem); // 默认主题序列化往返
         assert!(back.styles.contains_key(&StyleKey::Done));
         assert!(back.styles.contains_key(&StyleKey::DoneNotif)); // 新增键也序列化
     }
@@ -350,6 +366,7 @@ mod tests {
         let s: Settings = serde_json::from_str(old).unwrap();
         assert_eq!(s.dot_size, 20);
         assert_eq!(s.poll_interval_ms, 3000); // 旧配置无该字段 → 默认 3s
+        assert_eq!(s.theme, Theme::FollowSystem); // 旧配置无 theme → 默认跟随系统
         assert!(matches!(
             s.light_for(AgentStatus::Done),
             LightAnim::Ripple { .. }

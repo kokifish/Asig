@@ -10,7 +10,7 @@ pub mod openclaw;
 pub mod source;
 pub mod status;
 
-pub use config::{Anim, Lang, LightPosition, Settings, StateStyle, StyleKey};
+pub use config::{Anim, Lang, LightPosition, Settings, StateStyle, StyleKey, Theme};
 pub use source::{AgentKind, AgentSession, AgentSource};
 pub use status::{AgentStatus, Color, LightAnim, transition};
 

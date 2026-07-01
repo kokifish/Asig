@@ -12,12 +12,16 @@
 //! 浮窗位置跨启动记忆(见 `build` 的 `saved` 参数 + `app_delegate::persist_light_pos`)。
 
 use std::cell::RefCell;
+use std::ptr::NonNull;
 
-use agent_light_core::{Color, LightAnim, LightPosition};
-use objc2::rc::{Allocated, Retained};
+use agent_light_core::{Color, LightAnim, LightPosition, Theme};
+use block2::RcBlock;
+use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{Bool, NSObject};
 use objc2::{ClassType, DefinedClass, MainThreadOnly, class, define_class, msg_send};
-use objc2_app_kit::{NSBezierPath, NSColor, NSImage, NSScreen, NSView, NSWindow};
+use objc2_app_kit::{
+    NSAppearance, NSApplication, NSBezierPath, NSColor, NSImage, NSScreen, NSView, NSWindow,
+};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{
     NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue,
@@ -27,16 +31,82 @@ use objc2_quartz_core::{CABasicAnimation, CALayer, CATransform3D, NSValueCATrans
 /// 固定窗口尺寸(透明,容得下最大圆点 + 波纹扩散)。
 const WIN: CGFloat = 120.0;
 
-// ---- Color -> NSColor ----
+// ---- Color -> NSColor(Tailwind 12 色,浅/深档随 NSAppearance 自适应)----
+/// Tailwind 色板:`[浅档 500, 深档 400]`(深档更亮,深色外观下更醒目)。前 6 = 默认
+/// 状态映射的语义相近档;后 6 = 个性化扩展色(无默认映射)。
+fn tailwind_rgb(c: Color) -> [(CGFloat, CGFloat, CGFloat); 2] {
+    match c {
+        Color::Green => [(0.133, 0.773, 0.369), (0.290, 0.871, 0.502)], // 22C55E / 4ADE80
+        Color::LightBlue => [(0.055, 0.647, 0.914), (0.220, 0.741, 0.973)], // 0EA5E9 / 38BDF8
+        Color::Yellow => [(0.918, 0.702, 0.031), (0.980, 0.800, 0.082)], // EAB308 / FACC15
+        Color::Amber => [(0.961, 0.620, 0.043), (0.984, 0.749, 0.141)], // F59E0B / FBBF24
+        Color::Red => [(0.937, 0.267, 0.267), (0.973, 0.443, 0.443)],   // EF4444 / F87171
+        Color::Purple => [(0.659, 0.333, 0.969), (0.753, 0.518, 0.988)], // A855F7 / C084FC
+        Color::Blue => [(0.231, 0.510, 0.965), (0.376, 0.647, 0.980)],  // 3B82F6 / 60A5FA
+        Color::Indigo => [(0.388, 0.400, 0.945), (0.506, 0.549, 0.973)], // 6366F1 / 818CF8
+        Color::Teal => [(0.078, 0.722, 0.651), (0.176, 0.831, 0.749)],  // 14B8A6 / 2DD4BF
+        Color::Cyan => [(0.024, 0.714, 0.831), (0.133, 0.827, 0.933)],  // 06B6D4 / 22D3EE
+        Color::Orange => [(0.976, 0.451, 0.086), (0.984, 0.573, 0.235)], // F97316 / FB923C
+        Color::Pink => [(0.925, 0.282, 0.600), (0.957, 0.447, 0.714)],  // EC4899 / F472B6
+    }
+}
+
+/// 该 NSAppearance 是否为深色(name 含 "Dark":darkAqua / vibrantDark / …)。
+unsafe fn appearance_is_dark(appearance: &NSAppearance) -> bool {
+    let name: Retained<NSString> = msg_send![appearance, name];
+    autoreleasepool(|pool| unsafe { name.to_str(pool) }.contains("Dark"))
+}
+
+/// 当前 app 外观是否深色(读 `NSApp.effectiveAppearance`)。
+pub fn is_dark_appearance() -> bool {
+    unsafe {
+        let app: Retained<NSObject> = msg_send![class!(NSApplication), sharedApplication];
+        let appearance: Retained<NSAppearance> = msg_send![&app, effectiveAppearance];
+        appearance_is_dark(&appearance)
+    }
+}
+
+/// 据 Theme 设 `NSApp.appearance`(FollowSystem→nil 继承系统;Dark/Light→对应固定外观)。
+pub fn apply_theme(theme: Theme) {
+    unsafe {
+        let app: Retained<NSApplication> = msg_send![class!(NSApplication), sharedApplication];
+        let appearance = match theme {
+            Theme::FollowSystem => None,
+            Theme::Dark => {
+                NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameVibrantDark"))
+            }
+            Theme::Light => {
+                NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameAqua"))
+            }
+        };
+        app.setAppearance(appearance.as_deref());
+    }
+}
+
+/// `c` 色的**动态** NSColor:浮窗自绘 `drawRect` 每次重绘按当前绘图外观取浅/深档。
+/// (栅格化场景如 swatch 位图请用 `swatch_solid_nscolor`,否则动态色会被冻结。)
 pub fn nscolor(c: Color) -> Retained<NSColor> {
-    let (r, g, b): (CGFloat, CGFloat, CGFloat) = match c {
-        Color::Green => (0.20, 0.80, 0.30),     // Done
-        Color::LightBlue => (0.30, 0.64, 0.96), // Done Notification(浅蓝)
-        Color::Yellow => (0.95, 0.80, 0.15),    // Working
-        Color::Amber => (0.95, 0.55, 0.10),     // NeedsDeci(橙)
-        Color::Red => (0.92, 0.22, 0.22),       // Error
-        Color::Purple => (0.62, 0.36, 0.90),    // Offline
-    };
+    let [light, dark] = tailwind_rgb(c);
+    let block: RcBlock<dyn Fn(NonNull<NSAppearance>) -> NonNull<NSColor>> = RcBlock::new(
+        move |appearance: NonNull<NSAppearance>| -> NonNull<NSColor> {
+            let (r, g, b) = if unsafe { appearance_is_dark(appearance.as_ref()) } {
+                dark
+            } else {
+                light
+            };
+            let color = NSColor::colorWithCalibratedRed_green_blue_alpha(r, g, b, 1.0);
+            // block 返回约定 +1 retained:into_raw 转移所有权给调用方,不 release。
+            unsafe { NonNull::new_unchecked(Retained::into_raw(color)) }
+        },
+    );
+    unsafe { NSColor::colorWithName_dynamicProvider(None, &block) }
+}
+
+/// `c` 色的**当前外观**静态 NSColor —— 给 swatch 位图栅格化用(`lockFocus` 会冻结
+/// dynamicProvider,故色块 / 菜单栏图标必须取当下具体值;外观变化时由上层重生成)。
+pub fn swatch_solid_nscolor(c: Color) -> Retained<NSColor> {
+    let [light, dark] = tailwind_rgb(c);
+    let (r, g, b) = if is_dark_appearance() { dark } else { light };
     NSColor::colorWithCalibratedRed_green_blue_alpha(r, g, b, 1.0)
 }
 
@@ -56,7 +126,7 @@ pub fn swatch_image(c: Color, diameter: CGFloat, selected: bool) -> Retained<NSI
         let fill_rect = NSRect::new(NSPoint::new(inset, inset), NSSize::new(d, d));
         let fill_path: Retained<NSBezierPath> =
             msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: fill_rect];
-        let fill = nscolor(c);
+        let fill = swatch_solid_nscolor(c);
         let _: () = msg_send![&fill, set];
         fill_path.fill();
         // 选中:外环
@@ -223,6 +293,12 @@ define_class!(
             let _: () = unsafe { msg_send![color, set] };
             path.fill();
         }
+
+        /// 外观变化 → 重绘(drawRect 按当前外观重新解析动态色)。
+        #[unsafe(method(viewDidChangeEffectiveAppearance))]
+        fn view_did_change_effective_appearance(&self) {
+            unsafe { let _: () = msg_send![self, setNeedsDisplay: Bool::YES]; }
+        }
     }
 );
 
@@ -263,6 +339,12 @@ define_class!(
             let _: () = unsafe { msg_send![&path, setLineWidth: lw] };
             let _: () = unsafe { msg_send![color, set] };
             let _: () = unsafe { msg_send![&path, stroke] };
+        }
+
+        /// 外观变化 → 重绘(描边色按当前外观重新解析动态色)。
+        #[unsafe(method(viewDidChangeEffectiveAppearance))]
+        fn view_did_change_effective_appearance(&self) {
+            unsafe { let _: () = msg_send![self, setNeedsDisplay: Bool::YES]; }
         }
     }
 );

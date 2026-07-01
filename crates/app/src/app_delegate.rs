@@ -3,7 +3,8 @@
 use std::cell::RefCell;
 
 use agent_light_core::{
-    AgentStatus, Anim, Color, Lang, LightAnim, LightPosition, Monitor, Settings, Snapshot, StyleKey,
+    AgentStatus, Anim, Color, Lang, LightAnim, LightPosition, Monitor, Settings, Snapshot,
+    StyleKey, Theme,
 };
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
@@ -11,7 +12,7 @@ use objc2::{
     ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send,
 };
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSApplicationDelegate, NSStatusItem, NSView, NSWindow,
+    NSAlert, NSApplication, NSApplicationDelegate, NSStatusItem, NSView, NSWindow, NSWindowDelegate,
 };
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString, NSTimer};
 use std::collections::HashMap;
@@ -71,10 +72,13 @@ define_class!(
             let snap = self.ivars().monitor.poll();
             // 把 Reduce Motion 并入签名:用户在系统设置里切该开关时,签名变化 → 立即重渲染,
             // set_light 据 reduce_motion_on 把动画降级为常亮(无需常驻渲染,不损 CPU)。
+            // 签名并入 reduce_motion + 外观(app):系统深浅 / Theme 切换时签名变化 → 下次
+            // tick 重绘(浮窗自绘 drawRect 已实时适配;菜单栏/色块借此 ≤ 轮询周期内刷新)。
             let sig = format!(
-                "{}|rm={}",
+                "{}|rm={}|app={}",
                 signature(&snap),
-                crate::overlay::reduce_motion_on()
+                crate::overlay::reduce_motion_on(),
+                crate::overlay::is_dark_appearance()
             );
             let same = {
                 let last = self.ivars().last_sig.borrow();
@@ -350,14 +354,56 @@ define_class!(
             crate::tray::reschedule(self, ms as f64 / 1000.0);
         }
 
+        /// General「Theme」radio action。sender tag − THEME_OFF = 0/1/2 = 跟随系统/深/浅。
+        /// 设 NSApp.appearance + 存盘 + 重建(radio 选中态据新 theme 重设)+ 重绘。
+        #[unsafe(method(changeTheme:))]
+        fn change_theme(&self, sender: *mut NSObject) {
+            let tag: i64 = unsafe { msg_send![sender, tag] };
+            let theme = match tag - crate::settings::THEME_OFF {
+                1 => Theme::Dark,
+                2 => Theme::Light,
+                _ => Theme::FollowSystem,
+            };
+            self.ivars().settings.borrow_mut().theme = theme;
+            self.ivars().settings.borrow().save();
+            crate::overlay::apply_theme(theme);
+            self.rebuild_settings();
+            let snap = self.ivars().monitor.poll();
+            self.render(&snap);
+        }
+
         /// 占位 action(禁用的「开机启动」等无操作控件的兜底,实际不会触发)。
         #[unsafe(method(noop:))]
         fn noop(&self, _sender: *mut NSObject) {}
+
+        /// Settings 窗口尺寸变化:按右区新宽度重排所有 state pane 的色块
+        /// (固定间距 flow——宽度变时自动换行 / 很宽时合并为 1 行,色块间距恒定;
+        /// card 高度也随之按行数重算)。其余 pane 靠 autoresizing 自适应宽度。
+        #[unsafe(method(windowDidResize:))]
+        fn window_did_resize(&self, _notif: *mut NSObject) {
+            let pane_w = self
+                .ivars()
+                .settings_content
+                .borrow()
+                .as_ref()
+                .map(|c| {
+                    let f: NSRect = unsafe { msg_send![&**c, frame] };
+                    f.size.width
+                })
+                .filter(|w| *w > 0.0)
+                .unwrap_or(crate::settings::CONTENT_W);
+            let controls = self.ivars().state_controls.borrow();
+            for c in controls.values() {
+                crate::settings::layout_state_pane(c, pane_w);
+            }
+        }
     }
 
     unsafe impl NSObjectProtocol for AppDelegate {}
 
     unsafe impl NSApplicationDelegate for AppDelegate {}
+
+    unsafe impl NSWindowDelegate for AppDelegate {}
 );
 
 impl AppDelegate {
