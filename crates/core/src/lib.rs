@@ -10,7 +10,10 @@ pub mod openclaw;
 pub mod source;
 pub mod status;
 
-pub use config::{Anim, Lang, LightPosition, Settings, StateStyle, StyleKey, Theme};
+pub use config::{
+    Anim, DONE_NOTIF_DURATION_DEFAULT_S, DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S,
+    Lang, LightPosition, Settings, StateStyle, StyleKey, Theme,
+};
 pub use source::{AgentKind, AgentSession, AgentSource};
 pub use status::{AgentStatus, Color, LightAnim, transition};
 
@@ -24,8 +27,8 @@ pub struct Snapshot {
     pub sessions: Vec<AgentSession>,
     /// 全局灯态(多会话聚合)。
     pub global: AgentStatus,
-    /// 刚转入 Done 的 30 秒内为 true —— app 层据此用 Done-Notification 灯效覆盖
-    /// `global` 的默认灯效;过期或离开 Done 后回退 `global`。
+    /// 刚转入 Done 的 `done_notif_duration` 内为 true —— app 层据此用 Done-Notification
+    /// 灯效覆盖 `global` 的默认灯效;过期或离开 Done 后回退 `global`。时长由 `poll()` 入参给。
     pub done_notif: bool,
 }
 
@@ -36,7 +39,7 @@ pub struct Monitor {
     latched: RefCell<HashMap<String, AgentStatus>>,
     /// 上一轮的全局态。用于检测「转入 Done」的边沿。
     prev_global: RefCell<AgentStatus>,
-    /// 最近一次「全局态转入 Done」的时刻。Done Notification 30 秒窗口用。
+    /// 最近一次「全局态转入 Done」的时刻。Done Notification 窗口期由 `poll()` 入参决定。
     done_since: RefCell<Option<Instant>>,
 }
 
@@ -73,8 +76,9 @@ impl Monitor {
         }
     }
 
-    /// 扫描所有 source,跑 sticky 状态机,返回快照。
-    pub fn poll(&self) -> Snapshot {
+    /// 扫描所有 source,跑 sticky 状态机,返回快照。`done_notif_duration` = Done-Notification
+    /// 窗口时长(app 层从设置喂入;内核不持有用户设置,保持纯净)。
+    pub fn poll(&self, done_notif_duration: Duration) -> Snapshot {
         // 1) 收集本轮原始观测
         let mut raw: Vec<AgentSession> = Vec::new();
         for src in &self.sources {
@@ -101,8 +105,8 @@ impl Monitor {
         let global = aggregate::global_status(&sessions);
 
         // 5) Done Notification 边沿检测:全局态从「非 Done」转入「Done」时
-        //    记下时刻;在随后 30 秒内 done_notif=true。离开 Done 即清零,
-        //    下次再进重新计时。
+        //    记下时刻;在随后 done_notif_duration 内 done_notif=true。离开 Done 即
+        //    清零,下次再进重新计时。
         let now = Instant::now();
         let entered_done =
             { *self.prev_global.borrow() != AgentStatus::Done && global == AgentStatus::Done };
@@ -116,9 +120,7 @@ impl Monitor {
             }
         }
         let done_notif = match *self.done_since.borrow() {
-            Some(t) => {
-                global == AgentStatus::Done && now.duration_since(t) < Duration::from_secs(30)
-            }
+            Some(t) => global == AgentStatus::Done && now.duration_since(t) < done_notif_duration,
             None => false,
         };
         *self.prev_global.borrow_mut() = global;
@@ -186,23 +188,23 @@ mod tests {
             ],
         })]);
 
-        let s = m.poll();
+        let s = m.poll(Duration::from_secs(30));
         assert_eq!(s.global, AgentStatus::Working);
         assert!(!s.done_notif);
 
-        let s = m.poll();
+        let s = m.poll(Duration::from_secs(30));
         assert_eq!(s.global, AgentStatus::Done);
         assert!(s.done_notif, "转入 Done 应触发 Done Notification");
 
-        let s = m.poll();
+        let s = m.poll(Duration::from_secs(30));
         assert_eq!(s.global, AgentStatus::Done);
         assert!(s.done_notif, "30s 窗口内继续 Done,notif 保持");
 
-        let s = m.poll();
+        let s = m.poll(Duration::from_secs(30));
         assert_eq!(s.global, AgentStatus::Working);
         assert!(!s.done_notif, "离开 Done 后 notif 应灭");
 
-        let s = m.poll();
+        let s = m.poll(Duration::from_secs(30));
         assert_eq!(s.global, AgentStatus::Done);
         assert!(s.done_notif, "再次转入 Done 应重新触发");
     }

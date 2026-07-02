@@ -173,6 +173,6 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 ##### DoneNotif Pane
 
-相比普通 State Pane 新增：
+继承普通 State Pane 的全部行,仅额外多一行:
 
-- 持续时间：左右拉杆调整，范围5s-60s。默认30s
+- Duration/持续时间: 左右拉杆调整,范围 5–60s,默认 30s;右侧实时显示 `xx s`。控制别的状态转入 `Done` 后 DoneNotif 灯效持续的窗口时长(内核 `poll` 据此判定,改完下一轮 tick 即生效)。独立占一行,不受 Animation 类型影响(即便常亮也显示并可调,与 Speed 不同)。持久化在 `settings.json` 的 `done_notif_duration_s` 字段。

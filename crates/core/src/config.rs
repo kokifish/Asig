@@ -162,6 +162,12 @@ pub struct LightPosition {
     pub screen_id: u32,
 }
 
+/// Done-Notification 持续时间(秒)的合法范围与默认。app 层 slider 与内核读取共用同一组
+/// 常量:slider 以 MIN/MAX 为边界,内核 poll 据 DEFAULT 兜底、读取时 clamp 到此范围。
+pub const DONE_NOTIF_DURATION_MIN_S: u32 = 5;
+pub const DONE_NOTIF_DURATION_MAX_S: u32 = 60;
+pub const DONE_NOTIF_DURATION_DEFAULT_S: u32 = 30;
+
 /// 全部设置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -181,10 +187,18 @@ pub struct Settings {
     /// 界面外观主题。默认跟随系统。
     #[serde(default)]
     pub theme: Theme,
+    /// Done-Notification 持续时间(秒)。别的态转入 Done 后,该秒数内显示 DoneNotif 灯效。
+    /// 默认 30(`DONE_NOTIF_DURATION_DEFAULT_S`),合法范围 5–60。serde 持久化。
+    #[serde(default = "default_done_notif_duration_s")]
+    pub done_notif_duration_s: u32,
 }
 
 fn default_poll_interval_ms() -> u32 {
     3000
+}
+
+fn default_done_notif_duration_s() -> u32 {
+    DONE_NOTIF_DURATION_DEFAULT_S
 }
 
 impl Default for Settings {
@@ -200,6 +214,7 @@ impl Default for Settings {
             poll_interval_ms: default_poll_interval_ms(),
             lang: Lang::default(),
             theme: Theme::default(),
+            done_notif_duration_s: default_done_notif_duration_s(),
         }
     }
 }
@@ -355,6 +370,7 @@ mod tests {
         assert_eq!(back.dot_size, 25);
         assert_eq!(back.poll_interval_ms, 3000);
         assert_eq!(back.theme, Theme::FollowSystem); // 默认主题序列化往返
+        assert_eq!(back.done_notif_duration_s, 30); // 默认持续时间往返
         assert!(back.styles.contains_key(&StyleKey::Done));
         assert!(back.styles.contains_key(&StyleKey::DoneNotif)); // 新增键也序列化
     }
@@ -367,6 +383,7 @@ mod tests {
         assert_eq!(s.dot_size, 20);
         assert_eq!(s.poll_interval_ms, 3000); // 旧配置无该字段 → 默认 3s
         assert_eq!(s.theme, Theme::FollowSystem); // 旧配置无 theme → 默认跟随系统
+        assert_eq!(s.done_notif_duration_s, 30); // 旧配置无该字段 → 默认 30s
         assert!(matches!(
             s.light_for(AgentStatus::Done),
             LightAnim::Ripple { .. }

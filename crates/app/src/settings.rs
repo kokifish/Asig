@@ -17,7 +17,10 @@ use objc2_app_kit::{
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use agent_light_core::{Anim, Color, Lang, StateStyle, StyleKey, Theme};
+use agent_light_core::{
+    Anim, Color, DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S, Lang, StateStyle, StyleKey,
+    Theme,
+};
 
 use crate::app_delegate::AppDelegate;
 use crate::overlay::swatch_image;
@@ -232,6 +235,7 @@ fn set_tab_title(button: &Retained<NSView>, label: &str, selected: bool) {
 
 /// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
 pub struct StateControls {
+    pub key: StyleKey,
     pub card: Retained<NSBox>,
     pub color: Vec<Retained<NSButton>>,
     pub color_lbl: Retained<NSTextField>,
@@ -240,6 +244,10 @@ pub struct StateControls {
     pub speed: Retained<NSSlider>,
     pub speed_lbl: Retained<NSTextField>,
     pub speed_label: Retained<NSTextField>,
+    /// DoneNotif 专属:持续时间(秒)拉杆 + 标签 + 右侧 `xx s` 实时值。其余状态为 None。
+    pub duration: Option<Retained<NSSlider>>,
+    pub duration_lbl: Option<Retained<NSTextField>>,
+    pub duration_label: Option<Retained<NSTextField>>,
 }
 
 /// 当前语言的全部界面文案。
@@ -258,6 +266,7 @@ struct Strings {
     color: &'static str,
     animation: &'static str,
     speed: &'static str,
+    duration: &'static str,
     version: &'static str,
     state: [&'static str; 6], // 与 STATE_KEYS 同序
     anim: [&'static str; 3],
@@ -296,6 +305,7 @@ fn strings_for(l: Lang) -> Strings {
             color: "颜色",
             animation: "效果",
             speed: "速度",
+            duration: "持续时间",
             version: "版本 ",
             state: ["完成通知", "已完成", "运行中", "待决策", "错误", "异常"],
             anim: ["常亮", "呼吸", "波纹"],
@@ -320,6 +330,7 @@ fn strings_for(l: Lang) -> Strings {
             color: "Color",
             animation: "Animation",
             speed: "Speed",
+            duration: "Duration",
             version: "Version ",
             state: ["Notify", "Done", "Working", "Pending", "Error", "Offline"],
             anim: ["Steady", "Pulse", "Ripple"],
@@ -1016,7 +1027,39 @@ fn build_state_pane(
     );
     set_tag(&speed_label, base + SPEED_LABEL_OFF);
 
+    // DoneNotif 专属:持续时间(秒)拉杆 + 标签 + 右侧 `xx s` 实时值。其余状态 None。
+    let (duration, duration_lbl, duration_label) = if key == StyleKey::DoneNotif {
+        let dlbl = add_text(
+            &pane,
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+            st.duration,
+            false,
+            false,
+        );
+        let secs = delegate.ivars().settings.borrow().done_notif_duration_s;
+        let dur = add_slider(
+            &pane,
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+            DONE_NOTIF_DURATION_MIN_S as f64,
+            DONE_NOTIF_DURATION_MAX_S as f64,
+            secs as f64,
+            sel!(changeDuration:),
+            delegate,
+        );
+        let dval = add_text(
+            &pane,
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+            &format!("{} s", secs),
+            false,
+            false,
+        );
+        (Some(dur), Some(dlbl), Some(dval))
+    } else {
+        (None, None, None)
+    };
+
     let controls = StateControls {
+        key,
         card,
         color: color_btns,
         color_lbl,
@@ -1025,10 +1068,17 @@ fn build_state_pane(
         speed,
         speed_lbl,
         speed_label,
+        duration,
+        duration_lbl,
+        duration_label,
     };
     layout_state_pane(&controls, CONTENT_W); // 初始布局(默认宽度)
     let style = delegate.ivars().settings.borrow().style_for(key);
     refresh_state_controls(&controls, style);
+    if key == StyleKey::DoneNotif {
+        let secs = delegate.ivars().settings.borrow().done_notif_duration_s;
+        refresh_duration(&controls, secs);
+    }
     (pane, controls)
 }
 
@@ -1046,7 +1096,12 @@ pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
     let per_row = (((cw + COLOR_GAP) / step).floor() as usize).max(1);
     let color_rows = COLOR_ORDER.len().div_ceil(per_row);
     let color_h = color_rows as CGFloat * step;
-    let card_h = CARD_TOP_PAD + color_h + ROW_H * 2.0 + CARD_BOT_PAD;
+    let extra = if c.key == StyleKey::DoneNotif {
+        ROW_H
+    } else {
+        0.0
+    };
+    let card_h = CARD_TOP_PAD + color_h + ROW_H * 2.0 + extra + CARD_BOT_PAD;
     let y_top = H - CONTENT_PAD_X - TOP_INSET - HEADER_GAP; // card 顶
     let color_top = y_top - CARD_TOP_PAD;
     let anim_top = color_top - color_h;
@@ -1105,6 +1160,30 @@ pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
                 NSSize::new(56.0, 20.0)
             )
         ];
+        // DoneNotif:持续时间行(speed 下一行)。
+        if let (Some(slider), Some(lbl), Some(vlabel)) =
+            (&c.duration, &c.duration_lbl, &c.duration_label)
+        {
+            let dur_mid = anim_top - ROW_H * 2.0 - ROW_H / 2.0;
+            let _: () = msg_send![
+                lbl,
+                setFrame: NSRect::new(NSPoint::new(lx, dur_mid - 10.0), NSSize::new(lw, 20.0))
+            ];
+            let _: () = msg_send![
+                slider,
+                setFrame: NSRect::new(
+                    NSPoint::new(cx, dur_mid - 11.0),
+                    NSSize::new(cw - 64.0, 22.0)
+                )
+            ];
+            let _: () = msg_send![
+                vlabel,
+                setFrame: NSRect::new(
+                    NSPoint::new(cx + cw - 56.0, dur_mid - 10.0),
+                    NSSize::new(56.0, 20.0)
+                )
+            ];
+        }
     }
 }
 
@@ -1137,6 +1216,19 @@ pub fn refresh_state_controls(c: &StateControls, style: StateStyle) {
         let _: () = msg_send![&c.speed, setEnabled: Bool::new(!steady)];
         let _: () = msg_send![&c.speed, setDoubleValue: hz];
         let _: () = msg_send![&c.speed_label, setStringValue: &*NSString::from_str(&text)];
+    }
+}
+
+/// 刷新 DoneNotif 持续时间拉杆的值 + 右侧 `xx s` 标签(其余状态无 duration 控件,空操作)。
+pub fn refresh_duration(c: &StateControls, secs: u32) {
+    if let (Some(slider), Some(label)) = (&c.duration, &c.duration_label) {
+        unsafe {
+            let _: () = msg_send![slider, setDoubleValue: secs as f64];
+            let _: () = msg_send![
+                label,
+                setStringValue: &*NSString::from_str(&format!("{} s", secs))
+            ];
+        }
     }
 }
 

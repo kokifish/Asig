@@ -69,7 +69,7 @@ define_class!(
                 return self.preview_tick();
             }
             self.persist_light_pos();
-            let snap = self.ivars().monitor.poll();
+            let snap = self.snap();
             // 把 Reduce Motion 并入签名:用户在系统设置里切该开关时,签名变化 → 立即重渲染,
             // set_light 据 reduce_motion_on 把动画降级为常亮(无需常驻渲染,不损 CPU)。
             // 签名并入 reduce_motion + 外观(app):系统深浅 / Theme 切换时签名变化 → 下次
@@ -138,7 +138,7 @@ define_class!(
                 crate::panel::show(&p, &button);
             }
             *self.ivars().popover.borrow_mut() = Some(p);
-            let snap = self.ivars().monitor.poll();
+            let snap = self.snap();
             self.render(&snap);
         }
 
@@ -259,6 +259,26 @@ define_class!(
             self.settings_changed();
         }
 
+        /// DoneNotif pane「持续时间」滑块 action(秒)。改完存盘;下一轮 tick 按新时长判窗口。
+        #[unsafe(method(changeDuration:))]
+        fn change_duration(&self, sender: *mut NSObject) {
+            let v: f64 = unsafe { msg_send![sender, doubleValue] };
+            let secs = v.round().clamp(
+                agent_light_core::DONE_NOTIF_DURATION_MIN_S as f64,
+                agent_light_core::DONE_NOTIF_DURATION_MAX_S as f64,
+            ) as u32;
+            self.ivars().settings.borrow_mut().done_notif_duration_s = secs;
+            if let Some(c) = self
+                .ivars()
+                .state_controls
+                .borrow()
+                .get(&StyleKey::DoneNotif)
+            {
+                crate::settings::refresh_duration(c, secs);
+            }
+            self.settings_changed();
+        }
+
         /// 状态 pane「Reset」action:恢复该状态默认样式并刷新控件。
         #[unsafe(method(resetStateStyle:))]
         fn reset_state(&self, sender: *mut NSObject) {
@@ -269,6 +289,10 @@ define_class!(
             {
                 let mut s = self.ivars().settings.borrow_mut();
                 s.styles.insert(key, key.default_style());
+                // DoneNotif 的「持续时间」也是该状态配置,reset 一并回默认。
+                if key == StyleKey::DoneNotif {
+                    s.done_notif_duration_s = agent_light_core::DONE_NOTIF_DURATION_DEFAULT_S;
+                }
             }
             self.refresh_state(key);
             self.settings_changed();
@@ -316,7 +340,7 @@ define_class!(
             self.apply_click_through();
             let ms = self.ivars().settings.borrow().poll_interval_ms;
             crate::tray::reschedule(self, ms as f64 / 1000.0);
-            let snap = self.ivars().monitor.poll();
+            let snap = self.snap();
             self.render(&snap);
             self.rebuild_settings();
         }
@@ -368,7 +392,7 @@ define_class!(
             self.ivars().settings.borrow().save();
             crate::overlay::apply_theme(theme);
             self.rebuild_settings();
-            let snap = self.ivars().monitor.poll();
+            let snap = self.snap();
             self.render(&snap);
         }
 
@@ -418,8 +442,14 @@ impl AppDelegate {
     /// 用某状态当前 settings 刷新其 pane 控件(色块选中环 / radio / 速度滑块+标签)。
     fn refresh_state(&self, key: StyleKey) {
         let style = self.ivars().settings.borrow().style_for(key);
-        if let Some(c) = self.ivars().state_controls.borrow().get(&key) {
+        let controls = self.ivars().state_controls.borrow();
+        if let Some(c) = controls.get(&key) {
             crate::settings::refresh_state_controls(c, style);
+            // DoneNotif 的持续时间滑块/标签也随刷新(reset 后回默认)。
+            if key == StyleKey::DoneNotif {
+                let secs = self.ivars().settings.borrow().done_notif_duration_s;
+                crate::settings::refresh_duration(c, secs);
+            }
         }
     }
 
@@ -458,6 +488,18 @@ impl AppDelegate {
         }
     }
 
+    /// 取一次快照:把 settings 里的 DoneNotif 持续时间 clamp 到合法范围后喂给内核 poll。
+    /// 内核 poll 不持有用户设置(保持纯净),故时长由 app 层每次喂入。
+    fn snap(&self) -> Snapshot {
+        let secs = self.ivars().settings.borrow().done_notif_duration_s.clamp(
+            agent_light_core::DONE_NOTIF_DURATION_MIN_S,
+            agent_light_core::DONE_NOTIF_DURATION_MAX_S,
+        );
+        self.ivars()
+            .monitor
+            .poll(std::time::Duration::from_secs(secs as u64))
+    }
+
     /// 设置改动后:存盘 + 立即重应用(圆点大小 + 灯效),不等下一轮 tick。
     fn settings_changed(&self) {
         self.ivars().settings.borrow().save();
@@ -465,7 +507,7 @@ impl AppDelegate {
         if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
             crate::overlay::set_size(view, dot);
         }
-        let snap = self.ivars().monitor.poll();
+        let snap = self.snap();
         self.render(&snap);
     }
 
