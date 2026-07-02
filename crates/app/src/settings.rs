@@ -18,8 +18,8 @@ use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use agent_light_core::{
-    Anim, Color, DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S, Lang, StateStyle, StyleKey,
-    Theme,
+    Anim, Color, DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S, DOT_SIZE_MAX_PX,
+    DOT_SIZE_MIN_PX, Lang, StateStyle, StyleKey, Theme,
 };
 
 use crate::app_delegate::AppDelegate;
@@ -785,8 +785,8 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
             NSPoint::new(cx, row_center_y(y, 0) - 11.0),
             NSSize::new(cw - 60.0, 22.0),
         ),
-        8.0,
-        40.0,
+        DOT_SIZE_MIN_PX as f64,
+        DOT_SIZE_MAX_PX as f64,
         dot as f64,
         sel!(changeSize:),
         delegate,

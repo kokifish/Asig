@@ -175,7 +175,10 @@ define_class!(
         #[unsafe(method(changeSize:))]
         fn change_size(&self, sender: *mut NSObject) {
             let v: f64 = unsafe { msg_send![sender, doubleValue] };
-            let dot = v.round().max(6.0) as u32;
+            let dot = v.round().clamp(
+                agent_light_core::DOT_SIZE_MIN_PX as f64,
+                agent_light_core::DOT_SIZE_MAX_PX as f64,
+            ) as u32;
             self.ivars().settings.borrow_mut().dot_size = dot;
             if let Some(content) = self.ivars().settings_content.borrow().as_ref() {
                 if let Some(label) =
@@ -500,7 +503,11 @@ impl AppDelegate {
             .poll(std::time::Duration::from_secs(secs as u64))
     }
 
-    /// 设置改动后:存盘 + 立即重应用(圆点大小 + 灯效),不等下一轮 tick。
+    /// 设置改动后的【轻量重渲染】路径:存盘 + 立即重应用(圆点大小 + 灯效),不等下一轮 tick。
+    ///
+    /// 三条落盘路径分工:本函数 = 颜色/动效/速度/时长/大小/轮询(只需重渲染);
+    /// 语言/主题/ResetAll 因需整面板重建 / 设 `NSApp.appearance`,走直接 `settings.save()`;
+    /// 浮窗位置由 `persist_light_pos()` 每轮 tick 节流写(仅变化时落盘)。
     fn settings_changed(&self) {
         self.ivars().settings.borrow().save();
         let dot = self.ivars().settings.borrow().dot_size;
