@@ -74,7 +74,7 @@ cp -R build/Asig.app /Applications/ # 安装
 
 | Agent | 支持 | 怎么读状态 |
 |---|---|---|
-| Claude Code | ✅ | `~/.claude/sessions/<pid>.json`(`busy`/`idle`) |
+| Claude Code | ✅ | `~/.claude/sessions/<pid>.json`(`busy`/`idle`) + transcript 尾部 `stop_reason`(判 🟠 待决策) |
 | CodeBuddy | ✅ | `~/.codebuddy/sessions/<pid>.json` |
 | OpenClaw | ✅(基础) | `~/.openclaw/state/openclaw.sqlite` |
 | Trae | ⏳ 暂未 | (闭源,需 Accessibility,见 DEV.md) |
@@ -86,8 +86,8 @@ cp -R build/Asig.app /Applications/ # 安装
 ## 已知限制
 
 - 药丸浮窗默认点击穿透;想用鼠标拖动浮窗,可在 **Drop-down 的「锁定」** 或 **设置 → 浮窗点击穿透** 任一处取消勾选(两处同步同一开关)。
-- 🟣(异常 / 不可观测):所有会话都消失时自然出现;另外 **Asig 见过的 Claude 进程若崩溃/被杀**(残留 session 文件)也会标 🟣。🟠(需决策)与 🔴(报错)Claude Code 的状态文件不提供,需接 hook 才能精准触发(详见 DEV.md)。
+- 🟣(异常 / 不可观测):所有会话都消失时自然出现;另外 **Asig 见过的 Claude 进程若崩溃/被杀**(残留 session 文件)也会标 🟣。🟠(需决策)Claude Code 已支持:读 transcript 尾部 `stop_reason`(`end_turn`→🟠、`tool_use`→🟡),无需 hook;🔴(报错)Claude Code 状态文件不提供,仍需 hook 精准触发(详见 DEV.md)。
 - OpenClaw 的「需决策」态还不够准(待补 trajectory 解析)。
-- 设置面板(菜单栏灯 → 设置…):**浮窗大小**滑块、**浮窗点击穿透**勾选、以及**各状态样式**(每个状态可独立选动画 常亮/呼吸/波纹 + 颜色)。改动即时生效并持久化到 `~/Library/Application Support/Asig/settings.json`。启用 Agent / 轮询间隔 等待补。
+- 设置面板(菜单栏灯 → 设置…):浮窗外观(大小/颜色/动画/速度)、轮询间隔、主题、完成通知等均可配;界面随系统无障碍开关自适应。改动即时生效并持久化到 `~/Library/Application Support/Asig/settings.json`。开机自启动等待补。
 
 更多信息见 [DEV.md](./DEV.md)。

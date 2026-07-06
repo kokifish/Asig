@@ -13,7 +13,7 @@ Asig = macOS 多 Agent 状态监控灯(菜单栏灯 + 全局置顶浮窗 + 弹�
 
 ## objc2 生态(改前必读)
 - 当前在**最新发布线**:`objc2` 0.6 + `-foundation`/`-app-kit`/`-quartz-core` 0.3。升版前先看 objc2 CHANGELOG —— 宏和 API 会漂(从 0.5 `declare_class!` 升 0.6 `define_class!` 就是大改)。
-- 用 **0.6 的 `define_class!` 宏**(属性式:`#[unsafe(super(...))]`、`#[thread_kind = MainThreadOnly]`、`#[name = "..."]`、`#[ivars = ...]`;方法标注 `#[unsafe(method(sel:))]` / `#[unsafe(method_id(sel:))]`)。新增 ObjC 类照着 `AppDelegate` / `PillView` / `KeyPanel` 抄。`.ivars()` 来自 `DefinedClass` trait(用到它的文件都要 import)。
+- 用 **0.6 的 `define_class!` 宏**(属性式:`#[unsafe(super(...))]`、`#[thread_kind = MainThreadOnly]`、`#[name = "..."]`、`#[ivars = ...]`;方法标注 `#[unsafe(method(sel:))]` / `#[unsafe(method_id(sel:))]`)。新增 ObjC 类照着 `AppDelegate` / `PillView` / `RingView` 抄。`.ivars()` 来自 `DefinedClass` trait(用到它的文件都要 import)。
 - **类型/协议默认藏在 cargo feature 后**:`Cargo.toml` 按需开(如 `NSWindow`、`NSScreen`、`CATransform3D`)。编译报某类型 "not found" → 八成是漏开 feature。
 - `msg_send!` 在 0.6 统管对象/基本类型返回(`msg_send_id!` 已废弃)。多参数选择子参数间要**逗号**:`addAnimation:x, forKey:y`。
 - 0.6 起 **`CGFloat` / CG 类型搬到 `objc2-core-foundation`**(已加为依赖);`NSRect`/`NSPoint`/`NSSize` 仍在 `objc2-foundation`(NSGeometry feature)。框架自带方法(如 `NSBezierPath::...`、`path.fill()`)在 0.6 多为**安全**调用,别再套 `unsafe {}`(clippy 会报 `unused_unsafe`)。

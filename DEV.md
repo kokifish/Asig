@@ -38,12 +38,12 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 **UI 壳 `crates/app`（objc2/AppKit，纯 Rust，无 WebView）：**
 
 - `main.rs` — 入口：加载设置 → 建浮窗 → 建 `AppDelegate` → 状态栏 + tick 定时器
-- `app_delegate.rs` — `AppDelegate`（declare_class）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽
+- `app_delegate.rs` — `AppDelegate`（`define_class!`）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
 - `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
 - `settings.rs` — Settings Panel：左侧栏导航（常规 + 各状态 tab + 底部图标行）+ 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)
-- `palette.rs` — 颜色→NSColor/中文名、动效中文名、状态 emoji(下拉面板用)映射
+- `palette.rs` — 下拉面板会话列表用的状态 emoji(`status_emoji`)
 
 ## Build and Run
 
