@@ -18,7 +18,7 @@ use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use agent_light_core::{
-    Anim, Color, DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S, DOT_SIZE_MAX_PX,
+    AgentKind, Anim, Color, DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S, DOT_SIZE_MAX_PX,
     DOT_SIZE_MIN_PX, Lang, StateStyle, StyleKey, Theme,
 };
 
@@ -271,6 +271,8 @@ struct Strings {
     state: [&'static str; 6], // 与 STATE_KEYS 同序
     anim: [&'static str; 3],
     poll_opts: [&'static str; 6],
+    agent_monitor: &'static str,
+    agent_opts: [&'static str; 4],
     reset_confirm_title: &'static str,
     reset_confirm_msg: &'static str,
     reset_yes: &'static str,
@@ -310,6 +312,8 @@ fn strings_for(l: Lang) -> Strings {
             state: ["完成通知", "已完成", "运行中", "待决策", "错误", "异常"],
             anim: ["常亮", "呼吸", "波纹"],
             poll_opts: ["1 秒", "2 秒", "3 秒", "5 秒", "10 秒", "15 秒"],
+            agent_monitor: "监控的 Agent",
+            agent_opts: ["全部", "Claude Code", "CodeBuddy", "OpenClaw"],
             reset_confirm_title: "重置全部设置",
             reset_confirm_msg: "将所有自定义(语言 + 各状态灯效)恢复为默认值。确认?",
             reset_yes: "重置",
@@ -335,6 +339,8 @@ fn strings_for(l: Lang) -> Strings {
             state: ["Notify", "Done", "Working", "Pending", "Error", "Offline"],
             anim: ["Steady", "Pulse", "Ripple"],
             poll_opts: ["1 s", "2 s", "3 s", "5 s", "10 s", "15 s"],
+            agent_monitor: "Agent to monitor",
+            agent_opts: ["All", "Claude Code", "CodeBuddy", "OpenClaw"],
             reset_confirm_title: "Reset all settings",
             reset_confirm_msg: "Restore all custom settings (language + per-state styles) to defaults?",
             reset_yes: "Reset",
@@ -370,6 +376,39 @@ fn hz_of(period_ms: u32) -> f64 {
 
 fn poll_preset_index(ms: u32) -> usize {
     POLL_PRESETS_MS.iter().position(|&p| p == ms).unwrap_or(2)
+}
+
+/// 「监控的 Agent」下拉索引 → 启用列表。0=全部,1/2/3=单 Claude/CodeBuddy/OpenClaw。
+/// 单选互斥(数据结构是 Vec,预留后续多选)。顺序与 `Strings.agent_opts` 一致。
+pub fn enabled_agents_for_index(idx: i64) -> Option<Vec<AgentKind>> {
+    match idx {
+        0 => Some(vec![
+            AgentKind::Claude,
+            AgentKind::CodeBuddy,
+            AgentKind::OpenClaw,
+        ]),
+        1 => Some(vec![AgentKind::Claude]),
+        2 => Some(vec![AgentKind::CodeBuddy]),
+        3 => Some(vec![AgentKind::OpenClaw]),
+        _ => None,
+    }
+}
+
+/// 启用列表 → 下拉选中索引(回填)。三都开 → 0;正好单个 → 1/2/3;
+/// 其他组合 → 0「全部」(单选 UI 取最接近项;后续放开多选时此处随之调整)。
+fn index_of_enabled_agents(kinds: &[AgentKind]) -> i64 {
+    let has = |k: AgentKind| kinds.contains(&k);
+    match (
+        has(AgentKind::Claude),
+        has(AgentKind::CodeBuddy),
+        has(AgentKind::OpenClaw),
+    ) {
+        (true, true, true) => 0,
+        (true, false, false) => 1,
+        (false, true, false) => 2,
+        (false, false, true) => 3,
+        _ => 0,
+    }
 }
 
 /// Theme 下拉的选中索引(FollowSystem=0 / Dark=1 / Light=2)。
@@ -766,7 +805,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     y -= card_height(2) + CARD_GAP;
 
     // —— Group-2:浮窗灯大小 / 点击穿透 / Agent状态轮询间隔 / 开机自启动 ——
-    add_card(&pane, card_frame(x0, y, 5));
+    add_card(&pane, card_frame(x0, y, 6));
     // Light size(标签 + 滑块 + 右侧 `xx px` 实时标签)
     add_text(
         &pane,
@@ -852,11 +891,35 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         delegate,
         0,
     );
-    // Launch at login(标签 + 开关,占位禁用)
+    // Agent to monitor(标签 + 下拉:全部 / Claude Code / CodeBuddy / OpenClaw;单选互斥,预留多选)
     add_text(
         &pane,
         NSRect::new(
             NSPoint::new(lx, row_center_y(y, 3) - 10.0),
+            NSSize::new(lw, 20.0),
+        ),
+        st.agent_monitor,
+        false,
+        false,
+    );
+    let agent_idx = index_of_enabled_agents(&delegate.ivars().settings.borrow().enabled_agents);
+    add_popup(
+        &pane,
+        NSRect::new(
+            NSPoint::new(cx, row_center_y(y, 3) - 13.0),
+            NSSize::new(150.0, 26.0),
+        ),
+        &st.agent_opts,
+        agent_idx as usize,
+        sel!(changeEnabledAgents:),
+        delegate,
+        0,
+    );
+    // Launch at login(标签 + 开关,占位禁用)
+    add_text(
+        &pane,
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, 4) - 10.0),
             NSSize::new(lw, 20.0),
         ),
         st.launch_login,
@@ -866,7 +929,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     let launch = add_switch(
         &pane,
         NSRect::new(
-            NSPoint::new(cx, row_center_y(y, 3) - 11.0),
+            NSPoint::new(cx, row_center_y(y, 4) - 11.0),
             NSSize::new(40.0, 22.0),
         ),
         false,
@@ -880,7 +943,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 4) - 10.0),
+            NSPoint::new(lx, row_center_y(y, 5) - 10.0),
             NSSize::new(lw, 20.0),
         ),
         st.theme,
@@ -895,7 +958,7 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         let btn = add_radio_button(
             &pane,
             NSRect::new(
-                NSPoint::new(rx, row_center_y(y, 4) - 11.0),
+                NSPoint::new(rx, row_center_y(y, 5) - 11.0),
                 NSSize::new(100.0, 22.0),
             ),
             opt,

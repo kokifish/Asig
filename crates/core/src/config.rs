@@ -5,6 +5,7 @@
 //! 改读 `Settings::light(&snap)`,不再用硬编码。
 
 use crate::Snapshot;
+use crate::source::AgentKind;
 use crate::status::{AgentStatus, Color, LightAnim};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -197,6 +198,10 @@ pub struct Settings {
     /// 默认 30(`DONE_NOTIF_DURATION_DEFAULT_S`),合法范围 5–60。serde 持久化。
     #[serde(default = "default_done_notif_duration_s")]
     pub done_notif_duration_s: u32,
+    /// 启用的 agent 列表(General 单选下拉;数据结构是 Vec,预留后续多选)。默认全部启用 ——
+    /// 旧配置无此字段 → 全开,保持现有行为不变。
+    #[serde(default = "default_enabled_agents")]
+    pub enabled_agents: Vec<AgentKind>,
 }
 
 fn default_poll_interval_ms() -> u32 {
@@ -205,6 +210,10 @@ fn default_poll_interval_ms() -> u32 {
 
 fn default_done_notif_duration_s() -> u32 {
     DONE_NOTIF_DURATION_DEFAULT_S
+}
+
+fn default_enabled_agents() -> Vec<AgentKind> {
+    vec![AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw]
 }
 
 impl Default for Settings {
@@ -221,6 +230,7 @@ impl Default for Settings {
             lang: Lang::default(),
             theme: Theme::default(),
             done_notif_duration_s: default_done_notif_duration_s(),
+            enabled_agents: default_enabled_agents(),
         }
     }
 }
@@ -471,5 +481,36 @@ mod tests {
                 screen_id: 7
             })
         );
+    }
+
+    #[test]
+    fn enabled_agents_default_and_roundtrip() {
+        let s = Settings::default();
+        assert_eq!(
+            s.enabled_agents,
+            vec![AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw]
+        );
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.enabled_agents, s.enabled_agents);
+    }
+
+    #[test]
+    fn enabled_agents_backward_compat_absent() {
+        // 旧配置无 enabled_agents → 默认全部(现有行为不变)
+        let old = r#"{"dot_size":16,"styles":{}}"#;
+        let s: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!(
+            s.enabled_agents,
+            vec![AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw]
+        );
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn enabled_agents_single_persists() {
+        let mut s = Settings::default();
+        s.enabled_agents = vec![AgentKind::OpenClaw];
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.enabled_agents, vec![AgentKind::OpenClaw]);
     }
 }

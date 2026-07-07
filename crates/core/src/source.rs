@@ -1,10 +1,12 @@
 //! Source 层:每个 agent 工具实现一个 AgentSource。UI 无关、可移植。
 
 use crate::status::AgentStatus;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// 被监控的 agent 种类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// 被监控的 agent 种类。serde 序列化(存 `Settings.enabled_agents`)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     Claude,
     CodeBuddy,

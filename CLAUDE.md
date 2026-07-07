@@ -18,7 +18,7 @@ Asig = macOS 多 Agent 状态监控灯(菜单栏灯 + 全局置顶浮窗 + 弹�
 - `msg_send!` 在 0.6 统管对象/基本类型返回(`msg_send_id!` 已废弃)。多参数选择子参数间要**逗号**:`addAnimation:x, forKey:y`。
 - 0.6 起 **`CGFloat` / CG 类型搬到 `objc2-core-foundation`**(已加为依赖);`NSRect`/`NSPoint`/`NSSize` 仍在 `objc2-foundation`(NSGeometry feature)。框架自带方法(如 `NSBezierPath::...`、`path.fill()`)在 0.6 多为**安全**调用,别再套 `unsafe {}`(clippy 会报 `unused_unsafe`)。
 - **`NSView` 只有 `tag()`/`viewWithTag:`,没有 `setTag:`**(给纯 `NSView` 实例打 tag 会 debug panic「method not found」;release 因关校验能跑,但别依赖)。`NSControl` 子类(`NSSlider`/`NSTextField`/`NSPopUpButton`/`NSButton`)才有 `setTag/tag`。所以**纯 `NSView`(如设置窗 pane)按 `Vec` 索引切、别打 tag**;控件才能打 tag + 用 `viewWithTag:` 反查。
-- **NeedsDeci(待决策)检测**:Claude session 文件 `status` 只有 `busy`/`idle`(问问题时仍 `busy`),单看它永远到不了 NeedsDeci。真信号在会话 transcript(`~/.claude/projects/*/<sessionId>.jsonl`)尾部最后一条 `stop_reason`:`busy + end_turn`→NeedsDeci(等你回)、`busy + tool_use`→Working(跑工具)、`idle`→Done。`claude.rs::classify` 据此判定,只读尾部 ~16KB。
+- **NeedsDeci(待决策)检测**:Claude session 文件 `status` 只有 `busy`/`idle`(问问题时仍 `busy`),单看它永远到不了 NeedsDeci。真信号在会话 transcript(`~/.claude/projects/*/<sessionId>.jsonl`)尾部最后一条 `stop_reason`:`busy + end_turn`→NeedsDeci(等你回)、`busy + tool_use`→Working(跑工具)、`idle`→Done。`claude.rs::classify` 据此判定,只读尾部 ~16KB。OpenClaw 的 NeedsDeci 来自状态库 `~/.openclaw/state/openclaw.sqlite` 的 `flow_runs.status='blocked' 且 ended_at IS NULL`(已结束的 blocked 投递失败终态不计;准度有限,见 README),实现见 `openclaw.rs`。
 
 ## macOS / AppKit 坑(都踩过)
 - **layer-backed NSView 的 `anchorPoint`/`position` 由 AppKit 托管,运行时改会被重置**。要「绕中心缩放」别动 anchorPoint,改用绕圆心的 `CATransform3D`(`overlay::scale_about`)做 `transform` 动画。波纹居中就是这么修的(曾因改 anchorPoint 无效、环偏到圆点左下角)。

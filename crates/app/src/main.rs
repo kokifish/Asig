@@ -29,7 +29,9 @@ fn main() {
     let (overlay_window, overlay_view) = overlay::build(settings.dot_size, settings.light_pos);
     // Phase 2.5:详情 popover + 设置窗口。
     let delegate = AppDelegate::new(AppIvars {
-        monitor: agent_light_core::Monitor::default(),
+        monitor: RefCell::new(agent_light_core::Monitor::with_enabled(
+            &settings.enabled_agents,
+        )),
         status_item: RefCell::new(None),
         overlay_window: RefCell::new(Some(overlay_window)),
         overlay_view: RefCell::new(Some(overlay_view)),

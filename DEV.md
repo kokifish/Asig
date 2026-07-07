@@ -29,7 +29,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 
 - `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
 - `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）；读 session 文件 + pid 存活判定做 Offline 检测；busy 时读 transcript 尾部 `stop_reason`（`end_turn`→NeedsDeci / `tool_use`→Working）做可靠的待决策检测
-- `openclaw.rs` — `OpenClawSource`：SQLite 状态库（Phase 3 补全，当前占位）
+- `openclaw.rs` — `OpenClawSource`：两套数据源 —— ① 只读 `~/.openclaw/state/openclaw.sqlite`（单一事实源、升级迁移目标），按 `agent_databases` 聚合 task/flow/subagent runs（ended_at NULL→Working、blocked 且 ended_at NULL→NeedsDeci、近期 failed→Error）；② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working）—— **不进主库，故单读**。否则 Done
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
 - `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
 - `config.rs` — `Settings` / `StyleKey` / `StateStyle` / `LightPosition`：可配置灯效 + 浮窗位置，serde 持久化
@@ -54,6 +54,22 @@ cargo build -p agent-light-core          # 只验内核(纯 Rust,快)
 ```
 
 Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
+
+## 测试
+
+分两层：一层锁代码逻辑（纯函数，不碰真实 openclaw），一层锁真实 openclaw 最新版（实机）。
+
+**代码单测（针对分析逻辑）**：`cargo test -p agent-light-core openclaw` —— 覆盖 `OpenClawSource` 的状态归并（task/flow/subagent 跨表 + 交互式 `message.stopReason`）、字段解析、边界（ended/未 ended、近期 failed 窗口、toolUse 跳闸门等）。改 `openclaw.rs` 后必跑；改判定逻辑时同步改对应单测断言。
+
+**真实 openclaw 实测（针对本机最新版）**：`./scripts/probe-openclaw.sh` 对真实状态库 + 各 agent 会话 jsonl 跑 Asig 同款判定，打印每 agent 应判状态（与 `openclaw.rs` 逐行对齐，改那边时务必同步改本脚本）。配合 `openclaw agent --agent <id> -m "..."` 触发各场景：
+
+| 目标状态 | prompt | 期望 |
+|---|---|---|
+| Working（工具链）| `用 bash 执行 'ls ~/git_space/Asig/crates' 然后逐个解释` | 🟡，toolUse 期间不抖 |
+| 长工具（>30s）| `用 bash 执行 'sleep 40' 然后说完成` | 🟡 持续，不闪蓝 |
+| 完成 | （上一条跑完）| 转 🟢，转绿瞬间闪浅蓝（完成通知）|
+
+跑法：`watch -n2 ./scripts/probe-openclaw.sh`，另开终端触发 openclaw 任务，对照 Asig 浮窗/面板。openclaw 升级后先跑此脚本回归（字段/表若变了，会先于 Asig 暴露不一致）。
 
 ## Design
 
@@ -161,6 +177,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
   - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围5-50px，默认25px
   - Click-through/点击穿透(取消则可拖动): 开关。默认开
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
+  - Agent to monitor/监控的 Agent: 单选下拉(全部 / Claude Code / CodeBuddy / OpenClaw)。默认全部；数据结构 `enabled_agents` 预留多选，后续放开只需改 UI
   - Launch at login/开机自启动(待实现): 开关。默认开
   - Theme/主题: 横向单选按钮组 "跟随系统", "深色", "浅色"。默认"跟随系统"
 

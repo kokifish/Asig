@@ -2,7 +2,7 @@
 //! (设置 / 锁定 / 退出)+ 会话列表。NSPopover 自带圆角 + 箭头 + vibrancy 材质 + 失焦自动关
 //! (behavior=.transient),故不再自绘 borderless 窗 / CardView / 手算定位。
 
-use agent_light_core::Snapshot;
+use agent_light_core::{AgentKind, AgentSession, Snapshot};
 use objc2::rc::Retained;
 use objc2::runtime::Bool;
 use objc2::{DefinedClass, MainThreadMarker, class, msg_send, sel};
@@ -147,7 +147,7 @@ pub fn update_label(p: &Popover, snap: &Snapshot) {
                     "{} {:?} · {}",
                     status_emoji(s.status),
                     s.kind,
-                    s.project.as_deref().unwrap_or("-")
+                    session_id_label(s)
                 )
             })
             .collect::<Vec<_>>()
@@ -155,6 +155,21 @@ pub fn update_label(p: &Popover, snap: &Snapshot) {
     };
     unsafe {
         let _: () = msg_send![&p.label, setStringValue: &*NSString::from_str(&text)];
+    }
+}
+
+/// 会话列表每行的标识:OpenClaw 显示 agent 名(main/munger/kotomi);
+/// Claude/CodeBuddy 显示工作目录名(比 session UUID 易读)。
+fn session_id_label(s: &AgentSession) -> String {
+    match s.kind {
+        AgentKind::OpenClaw => s.label.clone().unwrap_or_else(|| "-".into()),
+        _ => s
+            .cwd
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("-")
+            .to_string(),
     }
 }
 

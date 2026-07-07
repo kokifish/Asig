@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# 对真实 openclaw 跑 Asig(OpenClawSource)同款状态判定,打印每个 agent 应被 Asig 判成的状态。
+# 用途:openclaw 升级后快速回归 Asig 的真实数据判定;或对照 Asig 浮窗/面板核对一致。
+#
+# 用法:
+#   ./scripts/probe-openclaw.sh                          # 打印一次快照
+#   watch -n2 ./scripts/probe-openclaw.sh                # 每 2s 刷新(观察状态流转)
+#   while sleep 2; do clear; ./scripts/probe-openclaw.sh; done   # 无 watch 时
+#
+# 配合触发:另开终端 `openclaw agent --agent <id> -m "..."`,看本脚本 → 状态是否与
+# Asig 面板/灯一致。prompt 集(Working/工具链/长工具/完成)见 DEV.md「测试」。
+#
+# 判定逻辑与 crates/core/src/openclaw.rs 保持一致 —— 改 openclaw.rs 时务必同步改本脚本:
+#   近期(30s)任意表 failed/lost/subagent-error          → Error 🔴
+#   else flow_runs blocked 且 ended_at IS NULL            → NeedsDeci 🟠
+#   else 任意 running(主库 ended_at NULL 或 交互式在跑)  → Working 🟡
+#   else                                                   → Done 🟢
+# 交互式「在跑」:尾部 message stopReason='toolUse' 或 (role∈{user,toolResult} 且近 5min);
+# toolUse 跳过 5min 闸门(工具执行长间隙不算完成)。
+set -euo pipefail
+
+DB="${OPENCLAW_DB:-$HOME/.openclaw/state/openclaw.sqlite}"
+ROOT="${OPENCLAW_ROOT:-$HOME/.openclaw}"
+NOW_S=$(date +%s)
+NOW_MS=$((NOW_S * 1000))
+ERR_MS=30000          # ERROR_RECENT_MS
+SESSION_RECENT_S=300  # SESSION_RECENT_MS(5min)
+AGENT_RECENT_S=$((30 * 86400))
+
+[ -f "$DB" ] || { echo "找不到 $DB(openclaw 未安装或未运行?)"; exit 0; }
+command -v jq >/dev/null || { echo "需要 jq(读 jsonl 尾部)"; exit 1; }
+
+echo "now: $(date '+%H:%M:%S')  db=$DB"
+
+# 近期 agent 集合(30 天 last_seen,与 Asig AGENT_RECENT_MS 一致)
+agents=$(sqlite3 -readonly "$DB" \
+  "SELECT DISTINCT agent_id FROM agent_databases WHERE last_seen_at >= $((NOW_S - AGENT_RECENT_S)) * 1000 ORDER BY agent_id;")
+
+for aid in $agents; do
+  # task_runs(干净 agent_id 列):running / 近期 failed+lost
+  read -r tr_run tr_err <<< "$(sqlite3 -separator ' ' -readonly "$DB" "
+    SELECT COALESCE(SUM(ended_at IS NULL),0),
+           COALESCE(SUM(ended_at IS NOT NULL AND ended_at > $((NOW_MS - ERR_MS)) AND status IN ('failed','lost')),0)
+    FROM task_runs WHERE agent_id = '$aid';")" || true
+
+  # flow_runs(owner_key 前缀 或 纯 id):running / blocked+NULL / 近期 failed
+  read -r fr_run fr_blk fr_err <<< "$(sqlite3 -separator ' ' -readonly "$DB" "
+    SELECT COALESCE(SUM(ended_at IS NULL AND status != 'blocked'),0),
+           COALESCE(SUM(status = 'blocked' AND ended_at IS NULL),0),
+           COALESCE(SUM(ended_at IS NOT NULL AND ended_at > $((NOW_MS - ERR_MS)) AND status = 'failed'),0)
+    FROM flow_runs WHERE owner_key LIKE 'agent:$aid:%' OR owner_key = '$aid';")" || true
+
+  # subagent_runs(requester_display_key 同前缀/纯 id):running / 近期 subagent-error
+  read -r sr_run sr_err <<< "$(sqlite3 -separator ' ' -readonly "$DB" "
+    SELECT COALESCE(SUM(ended_at IS NULL),0),
+           COALESCE(SUM(ended_at IS NOT NULL AND ended_at > $((NOW_MS - ERR_MS)) AND ended_reason = 'subagent-error'),0)
+    FROM subagent_runs WHERE requester_display_key LIKE 'agent:$aid:%' OR requester_display_key = '$aid';")" || true
+
+  # 交互式会话:agents/<aid>/sessions/ 下 mtime 最新的活跃 jsonl,读尾部 message 的 role + stopReason
+  role="-"; stop="-"; age="-"
+  F=$(ls -t "$ROOT/agents/$aid/sessions/"*.jsonl 2>/dev/null \
+        | grep -v -e '\.trajectory\.' -e '\.deleted' -e '\.bak' -e '\.reset' | head -1 || true)
+  if [ -n "$F" ]; then
+    mt=$(stat -f '%m' "$F"); age=$((NOW_S - mt))
+    line=$(grep '"type":"message"' "$F" 2>/dev/null | tail -1 \
+            | jq -r '[.message.role // "-", (.message.stopReason // "-")] | @tsv' 2>/dev/null || true)
+    role=$(echo "$line" | cut -f1); stop=$(echo "$line" | cut -f2)
+  fi
+
+  # session_running(role,stop) && (fresh || stop==toolUse) —— 与 openclaw.rs 一致
+  sess=0
+  if [ "$stop" = "toolUse" ]; then
+    sess=1                                            # toolUse 跳 mtime 闸门
+  elif { [ "$role" = "user" ] || [ "$role" = "toolResult" ]; } \
+       && [ "$age" != "-" ] && [ "$age" -lt "$SESSION_RECENT_S" ]; then
+    sess=1
+  fi
+
+  # classify_agent:Error > NeedsDeci > Working > Done
+  err=$((tr_err + fr_err + sr_err))
+  run=$((tr_run + fr_run + sr_run + sess))
+  st="Done 🟢"
+  [ "$err" -gt 0 ] && st="Error 🔴"
+  { [ "$err" -eq 0 ] && [ "$fr_blk" -gt 0 ]; } && st="NeedsDeci 🟠"
+  { [ "$err" -eq 0 ] && [ "$fr_blk" -eq 0 ] && [ "$run" -gt 0 ]; } && st="Working 🟡"
+
+  printf '%-8s task_r=%-2s flow_r=%-2s flow_blk=%-2s sub_r=%-2s sess=%s | role=%-10s stop=%-7s age=%-3s → %s\n' \
+    "$aid" "${tr_run:-0}" "${fr_run:-0}" "${fr_blk:-0}" "${sr_run:-0}" "$sess" "$role" "$stop" "$age" "$st"
+done

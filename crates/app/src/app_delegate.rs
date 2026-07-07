@@ -22,7 +22,7 @@ use crate::panel::Popover;
 
 /// AppDelegate 的实例变量(方法只能拿 &self,故用 RefCell)。
 pub struct AppIvars {
-    pub monitor: Monitor,
+    pub monitor: RefCell<Monitor>,
     pub status_item: RefCell<Option<Retained<NSStatusItem>>>,
     /// 浮窗窗口;保活 + 切换点击穿透时读。
     pub overlay_window: RefCell<Option<Retained<NSWindow>>>,
@@ -381,6 +381,22 @@ define_class!(
             crate::tray::reschedule(self, ms as f64 / 1000.0);
         }
 
+        /// General「监控的 Agent」下拉 action。选「全部」=三都开,选单个=只开那个
+        /// (数据结构是 Vec,预留后续多选)。改完重建 Monitor(latched 清零)+ 重渲染。
+        #[unsafe(method(changeEnabledAgents:))]
+        fn change_enabled_agents(&self, sender: *mut NSObject) {
+            let idx: i64 = unsafe { msg_send![sender, indexOfSelectedItem] };
+            let Some(kinds) = crate::settings::enabled_agents_for_index(idx) else {
+                return;
+            };
+            self.ivars().settings.borrow_mut().enabled_agents = kinds.clone();
+            // 先重建 Monitor(切走的 agent 的 latched 锁定态不应残留),再 settings_changed():
+            // 后者 snap()+render() 才基于新 Monitor 画出切换后的真实状态;若反过来,首帧会
+            // 用旧 Monitor(被取消的 agent 仍显示)直到下一轮 tick(~3s)。
+            *self.ivars().monitor.borrow_mut() = agent_light_core::Monitor::with_enabled(&kinds);
+            self.settings_changed();
+        }
+
         /// General「Theme」radio action。sender tag − THEME_OFF = 0/1/2 = 跟随系统/深/浅。
         /// 设 NSApp.appearance + 存盘 + 重建(radio 选中态据新 theme 重设)+ 重绘。
         #[unsafe(method(changeTheme:))]
@@ -500,6 +516,7 @@ impl AppDelegate {
         );
         self.ivars()
             .monitor
+            .borrow()
             .poll(std::time::Duration::from_secs(secs as u64))
     }
 

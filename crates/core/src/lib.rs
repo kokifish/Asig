@@ -46,16 +46,30 @@ pub struct Monitor {
 
 impl Default for Monitor {
     fn default() -> Self {
-        // 启用的工具。Trae 暂未实现,先不放进来。
+        // 默认全部启用(Trae 暂未实现,不入列表)。
+        Self::with_enabled(&[AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw])
+    }
+}
+
+impl Monitor {
+    /// 按启用的 agent 列表构造 source —— General「监控的 Agent」下拉切换时重建 Monitor 用。
+    /// Trae 暂未实现,即便在列表里也不装配。某工具没装(`new()` 返回 None)→ 自然跳过。
+    pub fn with_enabled(kinds: &[AgentKind]) -> Self {
         let mut sources: Vec<Box<dyn AgentSource>> = Vec::new();
-        if let Some(s) = claude::ClaudeLikeSource::claude() {
-            sources.push(Box::new(s));
+        if kinds.contains(&AgentKind::Claude) {
+            if let Some(s) = claude::ClaudeLikeSource::claude() {
+                sources.push(Box::new(s));
+            }
         }
-        if let Some(s) = claude::ClaudeLikeSource::codebuddy() {
-            sources.push(Box::new(s));
+        if kinds.contains(&AgentKind::CodeBuddy) {
+            if let Some(s) = claude::ClaudeLikeSource::codebuddy() {
+                sources.push(Box::new(s));
+            }
         }
-        if let Some(s) = openclaw::OpenClawSource::new() {
-            sources.push(Box::new(s));
+        if kinds.contains(&AgentKind::OpenClaw) {
+            if let Some(s) = openclaw::OpenClawSource::new() {
+                sources.push(Box::new(s));
+            }
         }
         Self {
             sources,
@@ -64,9 +78,7 @@ impl Default for Monitor {
             done_since: RefCell::new(None),
         }
     }
-}
 
-impl Monitor {
     /// 用给定 source 构造(测试用;生产走 `Default`)。
     pub fn with_sources(sources: Vec<Box<dyn AgentSource>>) -> Self {
         Self {
