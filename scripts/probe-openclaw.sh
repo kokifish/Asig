@@ -16,7 +16,10 @@
 #   else 任意 running(主库 ended_at NULL 或 交互式在跑)  → Working 🟡
 #   else                                                   → Done 🟢
 # 交互式「在跑」:尾部 message stopReason='toolUse' 或 (role∈{user,toolResult} 且近 5min);
-# toolUse 跳过 5min 闸门(工具执行长间隙不算完成)。
+# toolUse 跳过 5min 闸门(工具执行长间隙不算完成);
+# 或 主 agent sessions_yield 让出 + 文件以 leaf 结尾(协调后台子 agent,子 agent 走独立
+# trajectory 不进 subagent_runs 表):子 agent 全 ended 或协调态超 30min → 卡死 → Error 🔴;
+# 子 agent 在跑 → Working 🟡。
 set -euo pipefail
 
 DB="${OPENCLAW_DB:-$HOME/.openclaw/state/openclaw.sqlite}"
@@ -25,6 +28,7 @@ NOW_S=$(date +%s)
 NOW_MS=$((NOW_S * 1000))
 ERR_MS=30000          # ERROR_RECENT_MS
 SESSION_RECENT_S=300  # SESSION_RECENT_MS(5min)
+SUBAGENT_WAIT_S=1800  # SUBAGENT_WAIT_MS(30min):sessions_yield 协调态宽窗
 AGENT_RECENT_S=$((30 * 86400))
 
 [ -f "$DB" ] || { echo "找不到 $DB(openclaw 未安装或未运行?)"; exit 0; }
@@ -57,7 +61,8 @@ for aid in $agents; do
     FROM subagent_runs WHERE requester_display_key LIKE 'agent:$aid:%' OR requester_display_key = '$aid';")" || true
 
   # 交互式会话:agents/<aid>/sessions/ 下 mtime 最新的活跃 jsonl,读尾部 message 的 role + stopReason
-  role="-"; stop="-"; age="-"
+  # + 文件末事件类型(leaf?) + 尾部 6 条是否含 sessions_yield/spawn(协调态)
+  role="-"; stop="-"; age="-"; last_event="-"; tail6_coord=0
   F=$(ls -t "$ROOT/agents/$aid/sessions/"*.jsonl 2>/dev/null \
         | grep -v -e '\.trajectory\.' -e '\.deleted' -e '\.bak' -e '\.reset' | head -1 || true)
   if [ -n "$F" ]; then
@@ -65,9 +70,12 @@ for aid in $agents; do
     line=$(grep '"type":"message"' "$F" 2>/dev/null | tail -1 \
             | jq -r '[.message.role // "-", (.message.stopReason // "-")] | @tsv' 2>/dev/null || true)
     role=$(echo "$line" | cut -f1); stop=$(echo "$line" | cut -f2)
+    last_event=$(tail -1 "$F" 2>/dev/null | jq -r '.type // "-"' 2>/dev/null || true)
+    tail6_coord=$(tail -6 "$F" 2>/dev/null | grep -cE 'sessions_yield|sessions_spawn' || true)
+    [ -z "$tail6_coord" ] && tail6_coord=0
   fi
 
-  # session_running(role,stop) && (fresh || stop==toolUse) —— 与 openclaw.rs 一致
+  # 普通「在跑」(与 openclaw.rs session_running 一致):toolUse 跳闸门 / user|toolResult 需 fresh
   sess=0
   if [ "$stop" = "toolUse" ]; then
     sess=1                                            # toolUse 跳 mtime 闸门
@@ -75,15 +83,25 @@ for aid in $agents; do
        && [ "$age" != "-" ] && [ "$age" -lt "$SESSION_RECENT_S" ]; then
     sess=1
   fi
+  # 协调态:leaf 结尾 ∧ 尾部含 yield/spawn(主 agent sessions_yield 等后台子 agent)
+  if [ "$last_event" = "leaf" ] && [ "${tail6_coord:-0}" -gt 0 ]; then yl="Y"; else yl="-"; fi
+  coord=0; [ "$yl" = "Y" ] && coord=1
+  stale=0
+  { [ "$age" != "-" ] && [ "$age" -ge "$SUBAGENT_WAIT_S" ]; } && stale=1
+  runs=$((tr_run + fr_run + sr_run))   # run 表 running(子 agent 在跑)
 
-  # classify_agent:Error > NeedsDeci > Working > Done
+  # classify:Error > NeedsDeci > Working > Done;协调态卡死 → Error
   err=$((tr_err + fr_err + sr_err))
-  run=$((tr_run + fr_run + sr_run + sess))
+  stuck=0
+  if [ "$coord" -eq 1 ] && { [ "$runs" -eq 0 ] || [ "$stale" -eq 1 ]; }; then
+    stuck=1                                          # B 子 agent 全 ended / A 超 30min 兜底
+  fi
   st="Done 🟢"
   [ "$err" -gt 0 ] && st="Error 🔴"
   { [ "$err" -eq 0 ] && [ "$fr_blk" -gt 0 ]; } && st="NeedsDeci 🟠"
-  { [ "$err" -eq 0 ] && [ "$fr_blk" -eq 0 ] && [ "$run" -gt 0 ]; } && st="Working 🟡"
+  { [ "$err" -eq 0 ] && [ "$stuck" -eq 1 ]; } && st="Error 🔴"
+  { [ "$err" -eq 0 ] && [ "$stuck" -eq 0 ] && [ "$fr_blk" -eq 0 ] && [ "$((runs + sess))" -gt 0 ]; } && st="Working 🟡"
 
-  printf '%-8s task_r=%-2s flow_r=%-2s flow_blk=%-2s sub_r=%-2s sess=%s | role=%-10s stop=%-7s age=%-3s → %s\n' \
-    "$aid" "${tr_run:-0}" "${fr_run:-0}" "${fr_blk:-0}" "${sr_run:-0}" "$sess" "$role" "$stop" "$age" "$st"
+  printf '%-8s task_r=%-2s flow_r=%-2s flow_blk=%-2s sub_r=%-2s sess=%s | role=%-10s stop=%-7s yl=%-2s age=%-3s → %s\n' \
+    "$aid" "${tr_run:-0}" "${fr_run:-0}" "${fr_blk:-0}" "${sr_run:-0}" "$sess" "$role" "$stop" "$yl" "$age" "$st"
 done

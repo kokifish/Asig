@@ -32,6 +32,11 @@ const AGENT_RECENT_MS: u64 = 30 * 24 * 3600 * 1000; // 30 天
 /// 交互式会话「近此窗口内活跃过」才看其尾部判在跑(防历史会话尾部 toolUse 永远 Working)。
 /// 取 5 分钟:覆盖工具链内任意长间隙;turn 真完成后过窗即转 Done(完成通知略延后)。
 const SESSION_RECENT_MS: u64 = 5 * 60 * 1000;
+/// `sessions_yield` 协调态宽窗口:主 agent 用 `sessions_spawn` 派发的后台子 agent 走独立
+/// trajectory、**不进 `subagent_runs` 表**,主 session 在 yield 等待期间尾部停在 `assistant
+/// stop="stop"`+`leaf`(GLM 暂歇语义,非完成)。靠「文件以 `leaf` 结尾 ∧ 尾部含 yield/spawn」
+/// 识别协调态 → Working。30 分钟覆盖 Deep 研究(announce 频繁刷新 mtime);过窗回落 Done 防异常卡死。
+const SUBAGENT_WAIT_MS: u64 = 30 * 60 * 1000;
 
 pub struct OpenClawSource {
     root: PathBuf,
@@ -110,7 +115,7 @@ fn discover_from(
                 if let Some(aid) = row.0.as_ref() {
                     if let Some(a) = acc.get_mut(aid.as_str()) {
                         if row.1 > 0 {
-                            a.running = true;
+                            a.run_active = true;
                         }
                         if row.2 > 0 {
                             a.recent_err = true;
@@ -151,7 +156,7 @@ fn discover_from(
                 } else if row.1 == "failed" {
                     a.recent_err = true; // 任意 ended_at:近期 failed 或 NULL 撕裂
                 } else if row.2.is_none() {
-                    a.running = true;
+                    a.run_active = true;
                 }
             }
         }
@@ -176,7 +181,7 @@ fn discover_from(
                 };
                 let Some(a) = acc.get_mut(aid) else { continue };
                 if row.1.is_none() {
-                    a.running = true;
+                    a.run_active = true;
                 } else if row.2.as_deref() == Some("subagent-error") {
                     a.recent_err = true; // WHERE 已限定 ended_at > cutoff
                 }
@@ -188,14 +193,23 @@ fn discover_from(
     // user/toolResult 需 mtime 近 SESSION_RECENT_MS(防历史会话尾部永远 Working);
     // stopReason='toolUse' 是「模型已发工具调用、工具正在执行」的权威在跑信号 —— 工具可能
     // 很久不写 jsonl,故 toolUse 跳过 mtime 闸门(否则 >5min 的工具会误判完成闪蓝)。
+    // 协调态(sessions_yield 让出 + leaf 结尾):主 agent 在等后台子 agent。GLM 下此期间尾部是
+    // `assistant stop="stop"`(暂歇)会被上面判「不在跑」。靠 leaf+yield 信号识别,但需区分:
+    //   子 agent 全 ended(!run_active:sessions_spawn 子 agent 进 task/flow_runs)→ 主 agent 等不到
+    //     announce → 卡死 → Error(B);或协调态超 SUBAGENT_WAIT_MS 仍无进展 → Error(A 兜底);
+    //   子 agent 在跑(run_active)→ 正常 Working(由 classify 的 run_active 分支判)。
     for aid in &agents {
         if let Some(sig) = session_signals.get(aid) {
             let stop = sig.stop.as_deref();
             let fresh = now.saturating_sub(sig.mtime_ms) < SESSION_RECENT_MS;
+            let stale = now.saturating_sub(sig.mtime_ms) >= SUBAGENT_WAIT_MS;
+            let Some(a) = acc.get_mut(aid.as_str()) else {
+                continue;
+            };
             if session_running(&sig.role, stop) && (fresh || stop == Some("toolUse")) {
-                if let Some(a) = acc.get_mut(aid.as_str()) {
-                    a.running = true;
-                }
+                a.running = true;
+            } else if sig.ends_with_leaf && sig.coordinating && (!a.run_active || stale) {
+                a.stuck = true; // 协调态卡死(B 子 agent 全 ended / A 超 30min)→ Error
             }
         }
     }
@@ -218,18 +232,25 @@ fn discover_from(
 /// 单 agent 的状态累加器。
 #[derive(Default, Clone, Copy)]
 struct AgentAcc {
+    /// 最终判 Working 的「在跑」(普通 session 在跑)。
     running: bool,
+    /// run 表(task/flow/subagent)有 running —— 协调态区分「子 agent 在跑」vs「卡死」用;
+    /// classify 也算 Working(有后台 run 在跑)。
+    run_active: bool,
     blocked: bool,
     recent_err: bool,
+    /// 协调态卡死:主 agent sessions_yield 等子 agent,但子 agent 全 ended(B)或协调态超时(A)。
+    stuck: bool,
 }
 
 /// 纯函数:单 agent 观测态(优先级 Error > NeedsDeci > Working > Done)。
+/// Error 同时覆盖「近期 failed」(recent_err)与「协调态卡死」(stuck)。
 fn classify_agent(a: AgentAcc) -> AgentStatus {
-    if a.recent_err {
+    if a.recent_err || a.stuck {
         AgentStatus::Error
     } else if a.blocked {
         AgentStatus::NeedsDeci
-    } else if a.running {
+    } else if a.running || a.run_active {
         AgentStatus::Working
     } else {
         AgentStatus::Done
@@ -247,11 +268,16 @@ fn agent_of(key: &str) -> Option<&str> {
     (!key.is_empty() && !key.contains(':')).then_some(key)
 }
 
-/// 一个 agent 最新交互式会话的尾部信号(mtime + 最后一条 message 的 role + stop_reason)。
+/// 一个 agent 最新交互式会话的尾部信号(mtime + 最后一条 message 的 role + stop_reason
+/// + 文件是否以 `leaf` 结尾 + 尾部是否含 sessions_yield/spawn 协调信号)。
 struct SessionSignal {
     mtime_ms: u64,
     role: String,
     stop: Option<String>,
+    /// 文件最后一条事件是否为 `leaf`(OpenClaw 回合 marker;yield 循环每回合以 leaf 收尾)。
+    ends_with_leaf: bool,
+    /// 尾部 6 条事件内是否含 `sessions_yield`/`sessions_spawn`(主 agent 在协调后台子 agent)。
+    coordinating: bool,
 }
 
 /// 交互式会话尾部判在跑:user(刚发)/ toolResult(工具结果,模型继续)/ stop='toolUse'(模型
@@ -261,9 +287,12 @@ fn session_running(role: &str, stop: Option<&str>) -> bool {
     role == "user" || role == "toolResult" || stop == Some("toolUse")
 }
 
-/// 读 jsonl 尾部(末 ~32KB),反序找最后一条 `type=message` 事件的 (role, stop_reason)。
-/// `message.stopReason`(如 "toolUse"/"end_turn");首行可能被截断故丢弃。
-fn read_tail_last_message(path: &Path) -> Option<(String, Option<String>)> {
+/// 读 jsonl 尾部(末 ~32KB),一次性算出:(最后一条 message 的 role+stop_reason,
+/// 文件是否以 `leaf` 结尾, 尾部是否含 sessions_yield/spawn)。首行可能被截断故丢弃。
+///
+/// 始终返回 `Some`(空文件 → role 空 + 全 false),让上游协调态分支(leaf+coordinating,
+/// 不依赖 role)即使无 message 也能判。`message.stopReason` 如 "toolUse"/"stop"。
+fn read_tail_signals(path: &Path) -> Option<(String, Option<String>, bool, bool)> {
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path).ok()?;
     let size = f.metadata().ok()?.len();
@@ -277,14 +306,49 @@ fn read_tail_last_message(path: &Path) -> Option<(String, Option<String>)> {
     if start > 0 {
         lines.remove(0); // 起点非文件首 → 首行多半被截断,丢弃
     }
-    for line in lines.iter().rev() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+
+    // 解析每行为事件(跳过空行/解析失败),保留顺序。
+    let events: Vec<serde_json::Value> = lines
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .collect();
+
+    // 文件最后一条事件是否为 `leaf`(OpenClaw 回合 marker)。
+    let ends_with_leaf = events
+        .last()
+        .and_then(|v| v.get("type").and_then(|t| t.as_str()))
+        == Some("leaf");
+
+    // 尾部 6 条事件内是否含「主 agent 协调后台子 agent」信号:
+    //   - custom_message:`message.customType == "openclaw.sessions_yield"`
+    //   - assistant 工具调用:`message.content[].toolCall.name ∈ {sessions_yield, sessions_spawn}`
+    // (89c26b75 实测两种形式并存;倒序取末 6 条覆盖一个完整 yield 循环。)
+    let coordinating = events.iter().rev().take(6).any(|v| {
+        if v.get("message")
+            .and_then(|m| m.get("customType"))
+            .and_then(|c| c.as_str())
+            == Some("openclaw.sessions_yield")
+        {
+            return true;
         }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
+        v.get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(|c| c.as_array())
+            .is_some_and(|content| {
+                content.iter().any(|b| {
+                    b.get("type").and_then(|t| t.as_str()) == Some("toolCall")
+                        && matches!(
+                            b.get("name").and_then(|n| n.as_str()),
+                            Some("sessions_yield") | Some("sessions_spawn")
+                        )
+                })
+            })
+    });
+
+    // 反序找最后一条 type=message → (role, stopReason);无 message 则 role 空。
+    for v in events.iter().rev() {
         if v.get("type").and_then(|t| t.as_str()) == Some("message") {
             let role = v
                 .get("message")
@@ -297,10 +361,10 @@ fn read_tail_last_message(path: &Path) -> Option<(String, Option<String>)> {
                 .and_then(|m| m.get("stopReason"))
                 .and_then(|s| s.as_str())
                 .map(String::from);
-            return Some((role, stop));
+            return Some((role, stop, ends_with_leaf, coordinating));
         }
     }
-    None
+    Some((String::new(), None, ends_with_leaf, coordinating))
 }
 
 /// 扫 `agents/<aid>/sessions/*.jsonl`,每 agent 取 mtime 最新的会话尾部信号。
@@ -340,13 +404,16 @@ fn latest_session_signals(root: &Path) -> HashMap<String, SessionSignal> {
             }
         }
         if let Some((mt, path)) = best {
-            let (role, stop) = read_tail_last_message(&path).unwrap_or_default();
+            let (role, stop, ends_with_leaf, coordinating) =
+                read_tail_signals(&path).unwrap_or_default();
             out.insert(
                 aid,
                 SessionSignal {
                     mtime_ms: mt,
                     role,
                     stop,
+                    ends_with_leaf,
+                    coordinating,
                 },
             );
         }
@@ -422,30 +489,48 @@ mod tests {
 
     #[test]
     fn classify_priority() {
-        // Error > NeedsDeci > Working > Done
+        // Error(含 stuck 卡死) > NeedsDeci > Working(含 run_active) > Done
         assert_eq!(
             classify_agent(AgentAcc {
                 running: true,
+                run_active: true,
                 blocked: true,
-                recent_err: true
+                recent_err: true,
+                stuck: true
             }),
             AgentStatus::Error
         );
         assert_eq!(
             classify_agent(AgentAcc {
                 running: true,
+                run_active: true,
                 blocked: true,
-                recent_err: false
+                recent_err: false,
+                stuck: false
             }),
             AgentStatus::NeedsDeci
         );
+        // run_active(后台 run 在跑)也算 Working。
         assert_eq!(
             classify_agent(AgentAcc {
-                running: true,
+                running: false,
+                run_active: true,
                 blocked: false,
-                recent_err: false
+                recent_err: false,
+                stuck: false
             }),
             AgentStatus::Working
+        );
+        // stuck(协调态卡死)→ Error。
+        assert_eq!(
+            classify_agent(AgentAcc {
+                running: false,
+                run_active: false,
+                blocked: false,
+                recent_err: false,
+                stuck: true
+            }),
+            AgentStatus::Error
         );
         assert_eq!(classify_agent(AgentAcc::default()), AgentStatus::Done);
     }
@@ -477,7 +562,7 @@ mod tests {
 
     #[test]
     fn read_tail_reads_stopreason() {
-        // 端到端:写一个临时 jsonl,确认 read_tail_last_message 读到 message.stopReason
+        // 端到端:写一个临时 jsonl,确认 read_tail_signals 读到 message.stopReason
         // (字段是 message.stopReason 驼峰,非顶层 stop_reason —— 读错会永远空 → 工具链误判)。
         use std::io::Write;
         let p = std::env::temp_dir().join("asig_openclaw_tail_test.jsonl");
@@ -494,20 +579,73 @@ mod tests {
         .unwrap();
         writeln!(f, r#"{{"type":"custom","customType":"model-snapshot"}}"#).unwrap();
         drop(f);
-        let (role, stop) = read_tail_last_message(&p).unwrap();
+        let (role, stop, ends_with_leaf, coordinating) = read_tail_signals(&p).unwrap();
         assert_eq!(role, "assistant");
         assert_eq!(stop.as_deref(), Some("toolUse"));
+        assert!(!ends_with_leaf, "末行是 custom,非 leaf");
+        assert!(!coordinating, "无 yield/spawn");
         std::fs::remove_file(&p).ok();
     }
 
-    /// 构造一个交互式会话尾部信号(agent=kotomi,mtime 默认近期)。
+    #[test]
+    fn read_tail_detects_yield_leaf() {
+        // 端到端:yield 中断态文件(sessions_spawn → sessions_yield → cache-ttl → assistant
+        // stop="stop" → leaf),read_tail_signals 必须同时报 coordinating=true + ends_with_leaf=true,
+        // 否则派发子 agent 期间会误判 Done。两种 yield 表达(custom_message + assistant toolCall)都测。
+        use std::io::Write;
+        let p = std::env::temp_dir().join("asig_openclaw_yield_test.jsonl");
+        let mut f = std::fs::File::create(&p).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","message":{{"role":"assistant","content":[{{"type":"toolCall","name":"sessions_spawn"}}]}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"custom_message","message":{{"customType":"openclaw.sessions_yield"}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"custom","customType":"openclaw.cache-ttl"}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","message":{{"role":"assistant","stopReason":"stop"}}}}"#
+        )
+        .unwrap();
+        writeln!(f, r#"{{"type":"leaf"}}"#).unwrap();
+        drop(f);
+        let (role, stop, ends_with_leaf, coordinating) = read_tail_signals(&p).unwrap();
+        assert_eq!(role, "assistant");
+        assert_eq!(stop.as_deref(), Some("stop"));
+        assert!(ends_with_leaf, "应以 leaf 结尾");
+        assert!(coordinating, "尾部应检出 sessions_yield/spawn");
+        std::fs::remove_file(&p).ok();
+    }
+
+    /// 构造一个交互式会话尾部信号(agent=kotomi,mtime 默认近期,普通会话:非 leaf、非协调态)。
     fn sig(role: &str, stop: Option<&str>, age_ms: u64) -> (String, SessionSignal) {
+        sig_ext(role, stop, age_ms, false, false)
+    }
+
+    /// 同上,但可指定 ends_with_leaf + coordinating(用于 sessions_yield 协调态测试)。
+    fn sig_ext(
+        role: &str,
+        stop: Option<&str>,
+        age_ms: u64,
+        leaf: bool,
+        coord: bool,
+    ) -> (String, SessionSignal) {
         (
             "kotomi".into(),
             SessionSignal {
                 mtime_ms: NOW - age_ms,
                 role: role.into(),
                 stop: stop.map(String::from),
+                ends_with_leaf: leaf,
+                coordinating: coord,
             },
         )
     }
@@ -589,6 +727,72 @@ mod tests {
             &HashMap::from([sig("assistant", Some("toolUse"), 6 * 60 * 1000)]),
         );
         assert_eq!(s[0].status, AgentStatus::Working);
+    }
+
+    #[test]
+    fn session_yield_leaf_subagents_running_is_working() {
+        // 协调态 + 子 agent 在跑(task_runs running → run_active)→ 正常 Working。
+        let conn = db(|c| {
+            agent(c, "kotomi", NOW as i64);
+            task(c, "kotomi", "running", None); // sessions_spawn 子 agent 在 task_runs running
+        });
+        let s = discover_from(
+            &conn,
+            NOW,
+            &HashMap::from([sig_ext("assistant", Some("stop"), 60_000, true, true)]),
+        );
+        assert_eq!(s[0].status, AgentStatus::Working);
+    }
+
+    #[test]
+    fn session_yield_leaf_subagents_ended_is_error() {
+        // 协调态 + 子 agent 全 ended(!run_active)→ 主 agent 等不到 announce → 卡死 → Error(B)。
+        // (实测:7 子 agent 全 succeeded,主 session 停 leaf+yield 无最终输出。)
+        let conn = db(|c| {
+            agent(c, "kotomi", NOW as i64);
+        });
+        let s = discover_from(
+            &conn,
+            NOW,
+            &HashMap::from([sig_ext("assistant", Some("stop"), 60_000, true, true)]),
+        );
+        assert_eq!(s[0].status, AgentStatus::Error);
+    }
+
+    #[test]
+    fn session_yield_leaf_stale_is_error() {
+        // 协调态超 SUBAGENT_WAIT_MS(30min)→ 即使子 agent 在跑也判卡死 → Error(A 兜底)。
+        // (用 running task 让 run_active=true,避开 B,纯测 A 超时兜底。)
+        let conn = db(|c| {
+            agent(c, "kotomi", NOW as i64);
+            task(c, "kotomi", "running", None);
+        });
+        let s = discover_from(
+            &conn,
+            NOW,
+            &HashMap::from([sig_ext(
+                "assistant",
+                Some("stop"),
+                31 * 60 * 1000,
+                true,
+                true,
+            )]),
+        );
+        assert_eq!(s[0].status, AgentStatus::Error);
+    }
+
+    #[test]
+    fn session_leaf_without_yield_is_done() {
+        // leaf 结尾但尾部无 yield/spawn(普通回合结束,非协调态)→ 不算在跑 → Done。
+        let conn = db(|c| {
+            agent(c, "kotomi", NOW as i64);
+        });
+        let s = discover_from(
+            &conn,
+            NOW,
+            &HashMap::from([sig_ext("assistant", Some("stop"), 60_000, true, false)]),
+        );
+        assert_eq!(s[0].status, AgentStatus::Done);
     }
 
     #[test]

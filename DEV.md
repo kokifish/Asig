@@ -29,7 +29,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 
 - `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
 - `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）；读 session 文件 + pid 存活判定做 Offline 检测；busy 时读 transcript 尾部 `stop_reason`（`end_turn`→NeedsDeci / `tool_use`→Working）做可靠的待决策检测
-- `openclaw.rs` — `OpenClawSource`：两套数据源 —— ① 只读 `~/.openclaw/state/openclaw.sqlite`（单一事实源、升级迁移目标），按 `agent_databases` 聚合 task/flow/subagent runs（ended_at NULL→Working、blocked 且 ended_at NULL→NeedsDeci、近期 failed→Error）；② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working）—— **不进主库，故单读**。否则 Done
+- `openclaw.rs` — `OpenClawSource`：两套数据源 —— ① 只读 `~/.openclaw/state/openclaw.sqlite`（单一事实源、升级迁移目标），按 `agent_databases` 聚合 task/flow/subagent runs（ended_at NULL→Working、blocked 且 ended_at NULL→NeedsDeci、近期 failed→Error）；② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working）；主 agent `sessions_yield` 让出 + 文件以 `leaf` 结尾 = 协调后台子 agent：子 agent 在跑 → Working，子 agent 全 ended 或协调态超 30min → 卡死 → Error —— 子 agent 走 sessions 机制（`.trajectory.jsonl`）不进 `subagent_runs` 表，靠 leaf+yield 信号识别（GLM 下 yield 期间尾部 `assistant stop="stop"` 否则误判 Done）—— **不进主库，故单读**。否则 Done
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
 - `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
 - `config.rs` — `Settings` / `StyleKey` / `StateStyle` / `LightPosition`：可配置灯效 + 浮窗位置，serde 持久化
