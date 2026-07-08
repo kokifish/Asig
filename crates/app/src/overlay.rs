@@ -18,7 +18,9 @@ use agent_light_core::{Color, LightAnim, LightPosition, Theme};
 use block2::RcBlock;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::{Bool, NSObject};
-use objc2::{ClassType, DefinedClass, MainThreadOnly, class, define_class, msg_send};
+use objc2::{
+    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send,
+};
 use objc2_app_kit::{
     NSAppearance, NSApplication, NSBezierPath, NSColor, NSImage, NSScreen, NSView, NSWindow,
 };
@@ -59,28 +61,24 @@ unsafe fn appearance_is_dark(appearance: &NSAppearance) -> bool {
 
 /// 当前 app 外观是否深色(读 `NSApp.effectiveAppearance`)。
 pub fn is_dark_appearance() -> bool {
-    unsafe {
-        let app: Retained<NSObject> = msg_send![class!(NSApplication), sharedApplication];
-        let appearance: Retained<NSAppearance> = msg_send![&app, effectiveAppearance];
-        appearance_is_dark(&appearance)
-    }
+    let mtm = MainThreadMarker::new().expect("is_dark_appearance 须在主线程");
+    let app = NSApplication::sharedApplication(mtm);
+    let appearance = app.effectiveAppearance();
+    unsafe { appearance_is_dark(&appearance) }
 }
 
 /// 据 Theme 设 `NSApp.appearance`(FollowSystem→nil 继承系统;Dark/Light→对应固定外观)。
 pub fn apply_theme(theme: Theme) {
-    unsafe {
-        let app: Retained<NSApplication> = msg_send![class!(NSApplication), sharedApplication];
-        let appearance = match theme {
-            Theme::FollowSystem => None,
-            Theme::Dark => {
-                NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameVibrantDark"))
-            }
-            Theme::Light => {
-                NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameAqua"))
-            }
-        };
-        app.setAppearance(appearance.as_deref());
-    }
+    let mtm = MainThreadMarker::new().expect("apply_theme 须在主线程");
+    let app = NSApplication::sharedApplication(mtm);
+    let appearance = match theme {
+        Theme::FollowSystem => None,
+        Theme::Dark => {
+            NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameVibrantDark"))
+        }
+        Theme::Light => NSAppearance::appearanceNamed(&NSString::from_str("NSAppearanceNameAqua")),
+    };
+    app.setAppearance(appearance.as_deref());
 }
 
 /// `c` 色的**动态** NSColor:浮窗自绘 `drawRect` 每次重绘按当前绘图外观取浅/深档。
@@ -113,38 +111,33 @@ pub fn swatch_solid_nscolor(c: Color) -> Retained<NSColor> {
 /// 画一个 `c` 色的实心圆 NSImage(菜单栏图标 / 设置页色块用)。`selected` 时描一圈
 /// `controlAccentColor` 外环表示选中。`setTemplate:NO` 保留真彩(否则菜单栏/按钮按
 /// 模板渲染成单色)。
+#[allow(deprecated)] // lockFocus/unlockFocus 栅格化(换 imageWithSize:flipped:drawingHandler: 收益不值)
 pub fn swatch_image(c: Color, diameter: CGFloat, selected: bool) -> Retained<NSImage> {
     let alloc: Allocated<NSImage> = unsafe { msg_send![class!(NSImage), alloc] };
-    let img: Retained<NSImage> =
-        unsafe { msg_send![alloc, initWithSize: NSSize::new(diameter, diameter)] };
-    unsafe {
-        let _: () = msg_send![&img, setTemplate: Bool::NO];
-        let _: () = msg_send![&img, lockFocus];
-        // 实心填充圆
-        let inset: CGFloat = if selected { 3.0 } else { 2.0 };
-        let d = diameter - inset * 2.0;
-        let fill_rect = NSRect::new(NSPoint::new(inset, inset), NSSize::new(d, d));
-        let fill_path: Retained<NSBezierPath> =
-            msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: fill_rect];
-        let fill = swatch_solid_nscolor(c);
-        let _: () = msg_send![&fill, set];
-        fill_path.fill();
-        // 选中:外环
-        if selected {
-            let lw: CGFloat = 2.0;
-            let ring_rect = NSRect::new(
-                NSPoint::new(lw / 2.0, lw / 2.0),
-                NSSize::new(diameter - lw, diameter - lw),
-            );
-            let ring: Retained<NSBezierPath> =
-                msg_send![class!(NSBezierPath), bezierPathWithOvalInRect: ring_rect];
-            let accent: Retained<NSColor> = msg_send![class!(NSColor), controlAccentColor];
-            let _: () = msg_send![&ring, setLineWidth: lw];
-            let _: () = msg_send![&accent, set];
-            let _: () = msg_send![&ring, stroke];
-        }
-        let _: () = msg_send![&img, unlockFocus];
+    let img = NSImage::initWithSize(alloc, NSSize::new(diameter, diameter));
+    img.setTemplate(false);
+    img.lockFocus();
+    // 实心填充圆
+    let inset: CGFloat = if selected { 3.0 } else { 2.0 };
+    let d = diameter - inset * 2.0;
+    let fill_rect = NSRect::new(NSPoint::new(inset, inset), NSSize::new(d, d));
+    let fill_path = NSBezierPath::bezierPathWithOvalInRect(fill_rect);
+    swatch_solid_nscolor(c).set();
+    fill_path.fill();
+    // 选中:外环
+    if selected {
+        let lw: CGFloat = 2.0;
+        let ring_rect = NSRect::new(
+            NSPoint::new(lw / 2.0, lw / 2.0),
+            NSSize::new(diameter - lw, diameter - lw),
+        );
+        let ring = NSBezierPath::bezierPathWithOvalInRect(ring_rect);
+        let accent = NSColor::controlAccentColor();
+        ring.setLineWidth(lw);
+        accent.set();
+        ring.stroke();
     }
+    img.unlockFocus();
     img
 }
 
@@ -289,15 +282,15 @@ define_class!(
             let dot = b.dot;
             let o = dot_origin(dot);
             let rect = NSRect::new(NSPoint::new(o, o), NSSize::new(dot, dot));
-            let path: Retained<NSBezierPath> = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, dot / 2.0, dot / 2.0);
-            let _: () = unsafe { msg_send![color, set] };
+            let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, dot / 2.0, dot / 2.0);
+            color.set();
             path.fill();
         }
 
         /// 外观变化 → 重绘(drawRect 按当前外观重新解析动态色)。
         #[unsafe(method(viewDidChangeEffectiveAppearance))]
         fn view_did_change_effective_appearance(&self) {
-            unsafe { let _: () = msg_send![self, setNeedsDisplay: Bool::YES]; }
+            self.setNeedsDisplay(true);
         }
     }
 );
@@ -328,23 +321,23 @@ define_class!(
         fn draw_rect(&self, _dirty: NSRect) {
             let b = self.ivars().borrow();
             let color: &NSColor = &b;
-            let bounds: NSRect = unsafe { msg_send![self, bounds] };
+            let bounds = self.bounds();
             let lw: CGFloat = 1.5;
             let inset = NSRect::new(
                 NSPoint::new(lw / 2.0, lw / 2.0),
                 NSSize::new(bounds.size.width - lw, bounds.size.height - lw),
             );
             let r = inset.size.height / 2.0;
-            let path: Retained<NSBezierPath> = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(inset, r, r);
-            let _: () = unsafe { msg_send![&path, setLineWidth: lw] };
-            let _: () = unsafe { msg_send![color, set] };
-            let _: () = unsafe { msg_send![&path, stroke] };
+            let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(inset, r, r);
+            path.setLineWidth(lw);
+            color.set();
+            path.stroke();
         }
 
         /// 外观变化 → 重绘(描边色按当前外观重新解析动态色)。
         #[unsafe(method(viewDidChangeEffectiveAppearance))]
         fn view_did_change_effective_appearance(&self) {
-            unsafe { let _: () = msg_send![self, setNeedsDisplay: Bool::YES]; }
+            self.setNeedsDisplay(true);
         }
     }
 );
@@ -379,12 +372,13 @@ pub fn build(
 
     let clear = NSColor::clearColor();
     unsafe {
-        let _: () = msg_send![&window, setOpaque: Bool::NO];
-        let _: () = msg_send![&window, setBackgroundColor: &*clear];
-        let _: () = msg_send![&window, setHasShadow: Bool::NO];
-        let _: () = msg_send![&window, setIgnoresMouseEvents: Bool::YES]; // 默认点击穿透
-        let _: () = msg_send![&window, setMovableByWindowBackground: Bool::YES]; // 关穿透时可拖
-        let _: () = msg_send![&window, setLevel: 3i64]; // NSFloatingWindowLevel
+        window.setOpaque(false);
+        window.setBackgroundColor(Some(&*clear));
+        window.setHasShadow(false);
+        window.setIgnoresMouseEvents(true); // 默认点击穿透
+        window.setMovableByWindowBackground(true); // 关穿透时可拖
+        window.setLevel(3); // NSFloatingWindowLevel(NSWindowLevel = NSInteger)
+        // setCollectionBehavior 常量 + setReleasedWhenClosed(unsafe: 手动 release)走 msg_send:
         let _: () = msg_send![&window, setCollectionBehavior: 1u64]; // canJoinAllSpaces
         let _: () = msg_send![&window, setReleasedWhenClosed: Bool::NO];
     }
@@ -395,15 +389,16 @@ pub fn build(
         NSRect::new(NSPoint::new(0.0, 0.0), frame.size),
         dot,
     );
-    let _: () = unsafe { msg_send![&view, setWantsLayer: Bool::YES] };
+    view.setWantsLayer(true);
+    // view=PillView(NSView 子类),setContentView 的 Option<&NSView> coercion 不确定,用 msg_send 透传。
     let _: () = unsafe { msg_send![&window, setContentView: &*view] };
-    let _: () = unsafe { msg_send![&window, orderFrontRegardless] };
+    window.orderFrontRegardless();
     (window, view)
 }
 
 /// 切换浮窗是否点击穿透。on=true → 忽略鼠标(穿透);on=false → 接收鼠标,可拖动。
 pub fn set_click_through(window: &NSWindow, on: bool) {
-    let _: () = unsafe { msg_send![window, setIgnoresMouseEvents: Bool::new(on)] };
+    window.setIgnoresMouseEvents(on);
 }
 
 /// 改圆点大小:更新 dot、拆掉按旧尺寸建的波纹环(下次 set_light 重建)、重绘。
@@ -412,10 +407,10 @@ pub fn set_size(view: &PillView, dot_size: u32) {
         let mut st = view.ivars().borrow_mut();
         st.dot = dot_size as CGFloat;
         for ring in st.rings.drain(..) {
-            let _: () = unsafe { msg_send![&*ring, removeFromSuperview] };
+            ring.removeFromSuperview();
         }
     }
-    let _: () = unsafe { msg_send![view, setNeedsDisplay: Bool::YES] };
+    view.setNeedsDisplay(true);
 }
 
 // ---- 按灯效更新颜色 + 动画 ----
@@ -430,14 +425,15 @@ pub fn set_light(view: &PillView, anim: LightAnim) {
     };
     view.rust_set_color(nscolor(anim_color(anim)));
 
-    let layer: Retained<CALayer> = unsafe { msg_send![view, layer] };
-    // 先清掉旧的:opacity 动画 + 波纹环子视图。
+    let layer = view.layer().expect("PillView 须 layer-backed");
+    // 先清掉旧的:opacity 动画 + 波纹环子视图。(removeAnimationForKey/setOpacity 是 CALayer 方法,
+    // quartz-core 强类型未确认,保留 msg_send。)
     let _: () = unsafe { msg_send![&layer, removeAnimationForKey: &*NSString::from_str("pulse")] };
     let _: () = unsafe { msg_send![&layer, setOpacity: 1.0f32] };
     {
         let mut st = view.ivars().borrow_mut();
         for ring in st.rings.drain(..) {
-            let _: () = unsafe { msg_send![&*ring, removeFromSuperview] };
+            ring.removeFromSuperview();
         }
     }
 
@@ -451,7 +447,7 @@ pub fn set_light(view: &PillView, anim: LightAnim) {
 impl PillView {
     fn rust_set_color(&self, color: Retained<NSColor>) {
         self.ivars().borrow_mut().color = color;
-        let _: () = unsafe { msg_send![self, setNeedsDisplay: Bool::YES] };
+        self.setNeedsDisplay(true);
     }
 }
 
@@ -502,11 +498,9 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
     let mut rings = Vec::with_capacity(RIPPLE_RINGS);
     for i in 0..RIPPLE_RINGS {
         let ring = RingView::new(nscolor(color), ring_frame);
-        unsafe {
-            let _: () = msg_send![&ring, setWantsLayer: Bool::YES];
-            let _: () = msg_send![view, addSubview: &*ring];
-        }
-        let layer: Retained<CALayer> = unsafe { msg_send![&ring, layer] };
+        ring.setWantsLayer(true);
+        view.addSubview(&ring);
+        let layer = ring.layer().expect("RingView 须 layer-backed");
         // 第 i 环偏移 i/N 个周期 → 多环均匀错相。
         let phase = i as f64 * duration / RIPPLE_RINGS as f64;
         ripple_anims(&layer, from_t, to_t, duration, phase);

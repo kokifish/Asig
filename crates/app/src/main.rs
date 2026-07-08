@@ -13,13 +13,13 @@ use std::collections::HashMap;
 use app_delegate::{AppDelegate, AppIvars};
 use objc2::rc::Retained;
 use objc2::runtime::{Bool, NSObject, Sel};
-use objc2::{class, msg_send, sel};
+use objc2::{MainThreadMarker, class, msg_send, sel};
 use objc2_app_kit::NSApplication;
 use objc2_foundation::NSTimer;
 
 fn main() {
-    let app: Retained<NSApplication> =
-        unsafe { msg_send![class!(NSApplication), sharedApplication] };
+    let mtm = MainThreadMarker::new().expect("main 须在主线程");
+    let app = NSApplication::sharedApplication(mtm);
 
     // 启动即加载用户设置(灯大小 + 各状态样式 + 主题)。
     let settings = agent_light_core::Settings::load();
@@ -80,6 +80,6 @@ fn main() {
 
     unsafe {
         let _: () = msg_send![&app, setDelegate: &**delegate];
-        let _: () = msg_send![&app, run];
+        app.run();
     }
 }

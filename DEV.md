@@ -42,7 +42,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
 - `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
-- `settings.rs` — Settings Panel：左侧栏导航（常规 + 各状态 tab + 底部图标行）+ 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)
+- `settings/` — Settings Panel（9 子模块）：`mod`（装配 build/show/view_with_tag + pub use 外部 API）、`strings`（本地化文案）、`tags`（几何/tag 常量 + helper）、`controls`（控件工厂 add_*）、`glass`（液态玻璃 GlassPane + 选中态药丸）、`layout`（StateControls + layout/refresh_*）、`pane_general`/`pane_state`/`pane_about`（各 pane builder）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)
 - `palette.rs` — 下拉面板会话列表用的状态 emoji(`status_emoji`)
 
 ## Build and Run

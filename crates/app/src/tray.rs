@@ -4,7 +4,7 @@
 
 use agent_light_core::{AgentStatus, Color, LightAnim};
 use objc2::rc::Retained;
-use objc2::{DefinedClass, MainThreadMarker, class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, msg_send, sel};
 use objc2_app_kit::{NSMenu, NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem};
 use objc2_foundation::{NSPoint, NSString, NSTimer};
 
@@ -38,9 +38,7 @@ pub fn set_light(item: &NSStatusItem, anim: &LightAnim, mtm: MainThreadMarker) {
     };
     let button = item.button(mtm).expect("状态栏按钮");
     let img = swatch_image(color, 18.0, false);
-    unsafe {
-        let _: () = msg_send![&button, setImage: &*img];
-    }
+    button.setImage(Some(&img));
 }
 
 /// 启动 tick 定时器:间隔取自设置(默认 3s)。timer 存 ivars,以便运行时按新间隔重排。
@@ -52,7 +50,7 @@ pub fn schedule_tick(delegate: &Retained<AppDelegate>) {
 /// 重排 tick 定时器:作废旧 timer、按新间隔建新的(轮询间隔改动后调用)。
 pub fn reschedule(delegate: &AppDelegate, interval: f64) {
     if let Some(old) = delegate.ivars().tick_timer.borrow_mut().take() {
-        let _: () = unsafe { msg_send![&old, invalidate] };
+        old.invalidate();
     }
     let timer = unsafe {
         NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(
@@ -70,22 +68,22 @@ pub fn reschedule(delegate: &AppDelegate, interval: f64) {
 pub fn show_status_menu(delegate: &AppDelegate, button: &NSStatusBarButton, mtm: MainThreadMarker) {
     let menu: Retained<NSMenu> = NSMenu::new(mtm);
     unsafe {
-        let s: Retained<NSMenuItem> = msg_send![
-            &menu,
-            addItemWithTitle: &*NSString::from_str("设置…"),
-            action: Some(sel!(openSettings:)),
-            keyEquivalent: &*NSString::from_str("")
-        ];
-        let _: () = msg_send![&s, setTarget: delegate];
-        let sep: Retained<NSMenuItem> = msg_send![class!(NSMenuItem), separatorItem];
-        let _: () = msg_send![&menu, addItem: &*sep];
-        let q: Retained<NSMenuItem> = msg_send![
-            &menu,
-            addItemWithTitle: &*NSString::from_str("退出 Asig"),
-            action: Some(sel!(quit:)),
-            keyEquivalent: &*NSString::from_str("")
-        ];
-        let _: () = msg_send![&q, setTarget: delegate];
+        let s = menu.addItemWithTitle_action_keyEquivalent(
+            &NSString::from_str("设置…"),
+            Some(sel!(openSettings:)),
+            &NSString::from_str(""),
+        );
+        s.setTarget(Some(delegate));
+        let sep = NSMenuItem::separatorItem(mtm);
+        menu.addItem(&sep);
+        let q = menu.addItemWithTitle_action_keyEquivalent(
+            &NSString::from_str("退出 Asig"),
+            Some(sel!(quit:)),
+            &NSString::from_str(""),
+        );
+        q.setTarget(Some(delegate));
+        // popUpMenu 的 view 参数要 &NSView,button 是 NSStatusBarButton 子类 —— 用 msg_send
+        // 透传避开子类→父类 upcast;返回 bool(是否弹出)。
         let _: bool = msg_send![
             &menu,
             popUpMenuPositioningItem: std::ptr::null::<NSMenuItem>(),
