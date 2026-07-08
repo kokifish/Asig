@@ -32,13 +32,13 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `openclaw.rs` — `OpenClawSource`：两套数据源 —— ① 只读 `~/.openclaw/state/openclaw.sqlite`（单一事实源、升级迁移目标），按 `agent_databases` 聚合 task/flow/subagent runs（ended_at NULL→Working、blocked 且 ended_at NULL→NeedsDeci、近期 failed→Error）；② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working）；主 agent `sessions_yield` 让出 + 文件以 `leaf` 结尾 = 协调后台子 agent：子 agent 在跑 → Working，子 agent 全 ended 或协调态超 30min → 卡死 → Error —— 子 agent 走 sessions 机制（`.trajectory.jsonl`）不进 `subagent_runs` 表，靠 leaf+yield 信号识别（GLM 下 yield 期间尾部 `assistant stop="stop"` 否则误判 Done）—— **不进主库，故单读**。否则 Done
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
 - `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
-- `config.rs` — `Settings` / `StyleKey` / `StateStyle` / `LightPosition`：可配置灯效 + 浮窗位置，serde 持久化
+- `config.rs` — `Settings` / `StyleKey` / `StateStyle` / `LightPosition`：可配置灯效 + 浮窗位置，serde 持久化（`load`/`save` 失败可见不静默：无文件静默默认、IO 错提示、JSON 损坏备份成 `settings.json.bad`，均回退默认绝不 panic）
 - `lib.rs` — `Monitor`（轮询编排 → `Snapshot`，含 DoneNotif 边沿检测）
 
 **UI 壳 `crates/app`（objc2/AppKit，纯 Rust，无 WebView）：**
 
 - `main.rs` — 入口：加载设置 → 建浮窗 → 建 `AppDelegate` → 状态栏 + tick 定时器
-- `app_delegate.rs` — `AppDelegate`（`define_class!`）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽
+- `app_delegate.rs` — `AppDelegate`（`define_class!`）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽（`persist_light_pos` 改字段与落盘拆两个独立 borrow scope，避免 RefCell 重入 panic）
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
 - `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
@@ -150,7 +150,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 - 材质：真·液态玻璃（macOS 26+ `NSGlassEffectView`，UI 必须放进其 `contentView`；旧系统回退 `NSVisualEffectView` vibrancy）。窗口 = 一整片主玻璃（透明标题栏，玻璃贯穿顶部）；**左侧栏是浮动玻璃面板**——独立一块 `NSGlassEffectView` 叠在主玻璃上，二次模糊自然更不透明，读作浮于内容之上的圆角玻璃块。刻意**不用** `NSGlassEffectContainerView`：它会合并重叠/相邻的玻璃成一次模糊，反而让浮动侧栏与主玻璃融为一体、失去「浮动」层次。**右侧内容区无外框、标题下无横线**；靠极淡连续圆角卡片（`quaternaryLabelColor`）分组（stats.app 式编排），用层级而非厚重描边区分。
 - Content:
   - 右侧内容区有自己的 **header**：标题固定在右侧内容区的左上方（State pane 的 Reset 按钮对齐到该 header 右侧），而不是漂在卡片列中央；标题下方不再有分隔线。
-  - General pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、开机启动（占位，待实现）。详见 General Settings Card。
+  - General pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、监控的 Agent（多选块；选中=监控,点击 toggle）、开机启动（占位，待实现）。详见 General Settings Card。
   - State pane(每状态一个): 颜色（12 色块,**固定像素间距(15px)、左对齐 flow**——随窗宽自动换行,每行数量可不同,很宽时合并为 1 行;间距始终恒定、换行后与第一行同间距左对齐;label 左对齐、控件区往左加宽;Tailwind 源、随主题深浅自适应）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
   - About pane: 版本号 + GitHub 链接（纯展示）。
   - 各状态可独立改 动画 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
@@ -177,7 +177,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
   - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围5-50px，默认25px
   - Click-through/点击穿透(取消则可拖动): 开关。默认开
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
-  - Agent to monitor/监控的 Agent: 单选下拉(全部 / Claude Code / CodeBuddy / OpenClaw)。默认全部；数据结构 `enabled_agents` 预留多选，后续放开只需改 UI
+  - Agent to monitor/监控的 Agent: 多选块(Claude Code / CodeBuddy / OpenClaw 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
   - Launch at login/开机自启动(待实现): 开关。默认开
   - Theme/主题: 横向单选按钮组 "跟随系统", "深色", "浅色"。默认"跟随系统"
 

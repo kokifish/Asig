@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, Bool, NSObject, Sel};
-use objc2::{DefinedClass, MainThreadMarker, class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, Message, class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSBox, NSButton, NSColor, NSFont, NSImage, NSPopUpButton, NSSlider, NSSwitch,
     NSTextField, NSView, NSWindow,
@@ -62,6 +62,13 @@ pub const COLOR_ORDER: [Color; 12] = [
 ];
 /// 轮询间隔下拉的可选项(ms)。index ↔ 选中项。
 pub const POLL_PRESETS_MS: [u32; 6] = [1000, 2000, 3000, 5000, 10000, 15000];
+
+/// General pane「监控的 Agent」多选 chip 的 tag 基数(+0/1/2 = Claude/CodeBuddy/OpenClaw)。
+/// 避让 LANG 50x / SIZE_LABEL 503 / THEME 600。
+pub const AGENT_OFF: i64 = 700;
+/// Agent chip 顺序(与 `default_enabled_agents` 一致);chip 排布 + tag 解码基准。
+pub const AGENT_KIND_ORDER: [AgentKind; 3] =
+    [AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw];
 
 pub const TAB_GENERAL: i64 = 0;
 pub const TAB_ABOUT: i64 = 7;
@@ -272,7 +279,7 @@ struct Strings {
     anim: [&'static str; 3],
     poll_opts: [&'static str; 6],
     agent_monitor: &'static str,
-    agent_opts: [&'static str; 4],
+    agent_opts: [&'static str; 3],
     reset_confirm_title: &'static str,
     reset_confirm_msg: &'static str,
     reset_yes: &'static str,
@@ -313,7 +320,7 @@ fn strings_for(l: Lang) -> Strings {
             anim: ["常亮", "呼吸", "波纹"],
             poll_opts: ["1 秒", "2 秒", "3 秒", "5 秒", "10 秒", "15 秒"],
             agent_monitor: "监控的 Agent",
-            agent_opts: ["全部", "Claude Code", "CodeBuddy", "OpenClaw"],
+            agent_opts: ["Claude Code", "CodeBuddy", "OpenClaw"],
             reset_confirm_title: "重置全部设置",
             reset_confirm_msg: "将所有自定义(语言 + 各状态灯效)恢复为默认值。确认?",
             reset_yes: "重置",
@@ -340,7 +347,7 @@ fn strings_for(l: Lang) -> Strings {
             anim: ["Steady", "Pulse", "Ripple"],
             poll_opts: ["1 s", "2 s", "3 s", "5 s", "10 s", "15 s"],
             agent_monitor: "Agent to monitor",
-            agent_opts: ["All", "Claude Code", "CodeBuddy", "OpenClaw"],
+            agent_opts: ["Claude Code", "CodeBuddy", "OpenClaw"],
             reset_confirm_title: "Reset all settings",
             reset_confirm_msg: "Restore all custom settings (language + per-state styles) to defaults?",
             reset_yes: "Reset",
@@ -376,39 +383,6 @@ fn hz_of(period_ms: u32) -> f64 {
 
 fn poll_preset_index(ms: u32) -> usize {
     POLL_PRESETS_MS.iter().position(|&p| p == ms).unwrap_or(2)
-}
-
-/// 「监控的 Agent」下拉索引 → 启用列表。0=全部,1/2/3=单 Claude/CodeBuddy/OpenClaw。
-/// 单选互斥(数据结构是 Vec,预留后续多选)。顺序与 `Strings.agent_opts` 一致。
-pub fn enabled_agents_for_index(idx: i64) -> Option<Vec<AgentKind>> {
-    match idx {
-        0 => Some(vec![
-            AgentKind::Claude,
-            AgentKind::CodeBuddy,
-            AgentKind::OpenClaw,
-        ]),
-        1 => Some(vec![AgentKind::Claude]),
-        2 => Some(vec![AgentKind::CodeBuddy]),
-        3 => Some(vec![AgentKind::OpenClaw]),
-        _ => None,
-    }
-}
-
-/// 启用列表 → 下拉选中索引(回填)。三都开 → 0;正好单个 → 1/2/3;
-/// 其他组合 → 0「全部」(单选 UI 取最接近项;后续放开多选时此处随之调整)。
-fn index_of_enabled_agents(kinds: &[AgentKind]) -> i64 {
-    let has = |k: AgentKind| kinds.contains(&k);
-    match (
-        has(AgentKind::Claude),
-        has(AgentKind::CodeBuddy),
-        has(AgentKind::OpenClaw),
-    ) {
-        (true, true, true) => 0,
-        (true, false, false) => 1,
-        (false, true, false) => 2,
-        (false, false, true) => 3,
-        _ => 0,
-    }
 }
 
 /// Theme 下拉的选中索引(FollowSystem=0 / Dark=1 / Light=2)。
@@ -891,7 +865,8 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         delegate,
         0,
     );
-    // Agent to monitor(标签 + 下拉:全部 / Claude Code / CodeBuddy / OpenClaw;单选互斥,预留多选)
+    // Agent to monitor(标签 + 3 个多选 chip:Claude Code / CodeBuddy / OpenClaw;
+    // 选中=监控该 Agent,点击 toggle。chip=圆角块,选中=强调色边框+浅底,未选=细边框。)
     add_text(
         &pane,
         NSRect::new(
@@ -902,19 +877,26 @@ fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> 
         false,
         false,
     );
-    let agent_idx = index_of_enabled_agents(&delegate.ivars().settings.borrow().enabled_agents);
-    add_popup(
-        &pane,
-        NSRect::new(
-            NSPoint::new(cx, row_center_y(y, 3) - 13.0),
-            NSSize::new(150.0, 26.0),
-        ),
-        &st.agent_opts,
-        agent_idx as usize,
-        sel!(changeEnabledAgents:),
-        delegate,
-        0,
-    );
+    let enabled = delegate.ivars().settings.borrow().enabled_agents.clone();
+    const CHIP_GAP: CGFloat = 10.0;
+    let mut ax = cx;
+    let cy = row_center_y(y, 3) - 11.0;
+    for (i, &name) in st.agent_opts.iter().enumerate() {
+        let btn = add_agent_chip(
+            &pane,
+            NSPoint::new(ax, cy),
+            name,
+            AGENT_OFF + i as i64,
+            delegate,
+        );
+        // 累计下一个 chip 的 x(读 NSBox 容器宽)
+        unsafe {
+            let cv: Retained<NSView> = msg_send![&btn, superview];
+            let cf: NSRect = msg_send![&cv, frame];
+            ax += cf.size.width + CHIP_GAP;
+        }
+        apply_chip_style(&btn, enabled.contains(&AGENT_KIND_ORDER[i]));
+    }
     // Launch at login(标签 + 开关,占位禁用)
     add_text(
         &pane,
@@ -1295,6 +1277,16 @@ pub fn refresh_duration(c: &StateControls, secs: u32) {
     }
 }
 
+/// 刷新 General pane「监控的 Agent」3 个 chip 的选中态(按 enabled_agents 当前值)。
+/// General pane 控件用 viewWithTag 反查(同 update_selection);chip tag = AGENT_OFF + i。
+pub fn refresh_agent_chips(content: &Retained<NSView>, enabled: &[AgentKind]) {
+    for (i, &kind) in AGENT_KIND_ORDER.iter().enumerate() {
+        if let Some(b) = view_with_tag(content, AGENT_OFF + i as i64) {
+            apply_chip_style(&b, enabled.contains(&kind));
+        }
+    }
+}
+
 fn build_about_pane(st: &Strings) -> Retained<NSView> {
     let pane = new_view(NSRect::new(
         NSPoint::new(0.0, 0.0),
@@ -1380,6 +1372,74 @@ fn add_plain_button(
         let _: () = msg_send![&**pane, addSubview: &*btn];
     }
     btn
+}
+
+/// Agent 多选 chip:NSBox 容器(custom:圆角+边框,样式由 apply_chip_style 设)+ 内嵌 borderless
+/// NSButton(文字 + action)。调用方只需给 chip 左下角 origin;宽度按文字 sizeToFit + 左右 padding
+/// 自适应。返回 button(tag = AGENT_OFF + i)。
+fn add_agent_chip(
+    pane: &Retained<NSView>,
+    origin: NSPoint,
+    title: &str,
+    tag: i64,
+    delegate: &AppDelegate,
+) -> Retained<NSButton> {
+    unsafe {
+        // chip 容器(圆角 + 边框 + 底色由 apply_chip_style 设)
+        let chip: Retained<NSBox> = msg_send![class!(NSBox), new];
+        let _: () = msg_send![&chip, setBoxType: 4u64]; // NSBoxCustom
+        let _: () = msg_send![&chip, setCornerRadius: 8.0f64];
+        let _: () = msg_send![&chip, setBorderWidth: 1.5f64];
+        let _: () = msg_send![&chip, setTitle: &*NSString::from_str("")];
+        let _: () = msg_send![&**pane, addSubview: &*chip];
+        // borderless button:sizeToFit 后居中放进 chip
+        let btn: Retained<NSButton> = msg_send![class!(NSButton), new];
+        let _: () = msg_send![&btn, setBordered: Bool::NO];
+        let _: () = msg_send![&btn, setTitle: &*NSString::from_str(title)];
+        let _: () = msg_send![&btn, setTag: tag];
+        let _: () = msg_send![&btn, setTarget: delegate];
+        let _: () = msg_send![&btn, setAction: sel!(changeEnabledAgents:)];
+        let _: () = msg_send![&btn, sizeToFit];
+        let fit: NSRect = msg_send![&btn, frame];
+        const CHIP_PAD: CGFloat = 8.0;
+        const CHIP_H: CGFloat = 22.0;
+        let chip_w = fit.size.width + 2.0 * CHIP_PAD;
+        let _: () = msg_send![&chip, setFrame: NSRect::new(origin, NSSize::new(chip_w, CHIP_H))];
+        let _: () = msg_send![
+            &btn,
+            setFrameOrigin: NSPoint::new(
+                (chip_w - fit.size.width) / 2.0,
+                (CHIP_H - fit.size.height) / 2.0
+            )
+        ];
+        let _: () = msg_send![&*chip, addSubview: &*btn];
+        btn
+    }
+}
+
+/// 按 selected 设 agent chip(= button 的 superview 链上的 NSBox)样式:选中=强调色边框+浅强调底,
+/// 未选=分隔线色细边框+透明底。用 NSBox 的 setBorderColor:/setFillColor:(NSColor 直传)——绕开
+/// layer.borderColor 要 CGColor(NSDynamicSystemColor/_NSTaggedPointerColor 等多类 NSColor 不响应
+/// cgColor,直取会运行时崩 NSInvalidArgumentException)。button 经 NSBox.contentView 承载,故
+/// chip = button.superview.superview。
+fn apply_chip_style(button: &Retained<impl Message>, selected: bool) {
+    unsafe {
+        let cv: Retained<NSView> = msg_send![button, superview]; // NSBox.contentView
+        let chip: Retained<NSView> = msg_send![&cv, superview]; // NSBox
+        let border: Retained<NSColor> = if selected {
+            msg_send![class!(NSColor), controlAccentColor]
+        } else {
+            msg_send![class!(NSColor), separatorColor]
+        };
+        let _: () = msg_send![&chip, setBorderColor: &*border];
+        let fill: Retained<NSColor> = if selected {
+            let accent: Retained<NSColor> = msg_send![class!(NSColor), controlAccentColor];
+            msg_send![&accent, colorWithAlphaComponent: 0.15f64]
+        } else {
+            msg_send![class!(NSColor), clearColor]
+        };
+        let _: () = msg_send![&chip, setFillColor: &*fill];
+    }
 }
 
 /// 侧栏 tab 按钮:无边框、左对齐;可选 image(状态色圆点)置于标题左侧。

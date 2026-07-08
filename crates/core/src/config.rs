@@ -198,7 +198,7 @@ pub struct Settings {
     /// 默认 30(`DONE_NOTIF_DURATION_DEFAULT_S`),合法范围 5–60。serde 持久化。
     #[serde(default = "default_done_notif_duration_s")]
     pub done_notif_duration_s: u32,
-    /// 启用的 agent 列表(General 单选下拉;数据结构是 Vec,预留后续多选)。默认全部启用 ——
+    /// 启用的 agent 列表(General 多选块,选中=监控该 Agent)。默认全部启用 ——
     /// 旧配置无此字段 → 全开,保持现有行为不变。
     #[serde(default = "default_enabled_agents")]
     pub enabled_agents: Vec<AgentKind>,
@@ -235,6 +235,12 @@ impl Default for Settings {
     }
 }
 
+/// 设置加载失败的原因(诊断用)。`Settings::load` 据此提示用户后回退默认,绝不 panic。
+enum LoadError {
+    Read(std::io::Error),
+    Parse(serde_json::Error),
+}
+
 impl Settings {
     /// 某个键对应的样式。配置缺失时回退到内置默认。
     pub fn style_for(&self, key: StyleKey) -> StateStyle {
@@ -262,23 +268,55 @@ impl Settings {
         Some(dirs::config_dir()?.join("Asig").join("settings.json"))
     }
 
-    /// 从 `~/Library/Application Support/Asig/settings.json` 读;读不到/损坏则用默认。
-    pub fn load() -> Self {
-        Self::path()
-            .and_then(|p| std::fs::read_to_string(&p).ok())
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+    /// 从指定路径加载,区分"读失败 / 解析失败"(无文件由 `load` 按 NotFound 判定)。
+    fn load_result(path: &std::path::Path) -> Result<Self, LoadError> {
+        let text = std::fs::read_to_string(path).map_err(LoadError::Read)?;
+        serde_json::from_str(&text).map_err(LoadError::Parse)
     }
 
-    /// 写回配置文件。失败静默(只读环境也不该崩)。
+    /// 从 `~/Library/Application Support/Asig/settings.json` 读。**不 panic**:
+    /// 无文件 → 静默默认(首次运行);权限/磁盘 IO 错 → eprintln 提示 + 默认;
+    /// JSON 损坏 → 把坏文件备份成 `settings.json.bad` + 提示 + 默认(避免下次还解析失败)。
+    pub fn load() -> Self {
+        let Some(path) = Self::path() else {
+            return Self::default();
+        };
+        match Self::load_result(&path) {
+            Ok(s) => s,
+            Err(LoadError::Read(e)) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(LoadError::Read(e)) => {
+                eprintln!("Asig: 读取设置失败({e}),使用默认值: {}", path.display());
+                Self::default()
+            }
+            Err(LoadError::Parse(e)) => {
+                eprintln!("Asig: settings.json 解析失败({e}),已备份为 .bad 并使用默认值");
+                let _ = std::fs::rename(&path, format!("{}.bad", path.display()));
+                Self::default()
+            }
+        }
+    }
+
+    /// 写回配置文件。**不 panic**(只读环境也不该崩),但失败 eprintln 提示 —— 磁盘满/权限错时
+    /// 改动"看似生效但不落盘"会害调试,需可见。
     pub fn save(&self) {
-        if let Some(p) = Self::path() {
-            if let Some(parent) = p.parent() {
-                let _ = std::fs::create_dir_all(parent);
+        let Some(path) = Self::path() else {
+            return;
+        };
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                eprintln!("Asig: 创建设置目录失败({e})");
+                return;
             }
-            if let Ok(text) = serde_json::to_string_pretty(self) {
-                let _ = std::fs::write(&p, text);
+        }
+        let text = match serde_json::to_string_pretty(self) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("Asig: 序列化设置失败({e})");
+                return;
             }
+        };
+        if let Err(e) = std::fs::write(&path, text) {
+            eprintln!("Asig: 写入设置失败({e}): {}", path.display());
         }
     }
 }
@@ -512,5 +550,17 @@ mod tests {
         s.enabled_agents = vec![AgentKind::OpenClaw];
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.enabled_agents, vec![AgentKind::OpenClaw]);
+    }
+
+    #[test]
+    fn load_result_rejects_corrupt_json() {
+        // 损坏的 settings.json 应被 load_result 判为 Parse 失败(load 据此备份 .bad + 回退默认)。
+        let path = std::env::temp_dir().join(format!("asig_corrupt_{}.json", std::process::id()));
+        std::fs::write(&path, "{ 这是损坏的 json").unwrap();
+        assert!(matches!(
+            Settings::load_result(&path),
+            Err(LoadError::Parse(_))
+        ));
+        let _ = std::fs::remove_file(&path);
     }
 }

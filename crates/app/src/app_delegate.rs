@@ -381,19 +381,30 @@ define_class!(
             crate::tray::reschedule(self, ms as f64 / 1000.0);
         }
 
-        /// General「监控的 Agent」下拉 action。选「全部」=三都开,选单个=只开那个
-        /// (数据结构是 Vec,预留后续多选)。改完重建 Monitor(latched 清零)+ 重渲染。
+        /// General「监控的 Agent」多选 chip action(点击 toggle)。tag = AGENT_OFF + i →
+        /// AGENT_KIND_ORDER[i]:已选→移除、未选→加入(允许全不选 = 不监控任何 agent)。
+        /// 改完重建 Monitor(latched 清零)+ 刷新 chip 视觉 + 重渲染。
         #[unsafe(method(changeEnabledAgents:))]
         fn change_enabled_agents(&self, sender: *mut NSObject) {
-            let idx: i64 = unsafe { msg_send![sender, indexOfSelectedItem] };
-            let Some(kinds) = crate::settings::enabled_agents_for_index(idx) else {
+            let tag: i64 = unsafe { msg_send![sender, tag] };
+            let i = (tag - crate::settings::AGENT_OFF) as usize;
+            let Some(&kind) = crate::settings::AGENT_KIND_ORDER.get(i) else {
                 return;
             };
+            let mut kinds = self.ivars().settings.borrow().enabled_agents.clone();
+            if let Some(pos) = kinds.iter().position(|k| *k == kind) {
+                kinds.remove(pos); // 已选 → 取消
+            } else {
+                kinds.push(kind); // 未选 → 加入
+            }
             self.ivars().settings.borrow_mut().enabled_agents = kinds.clone();
             // 先重建 Monitor(切走的 agent 的 latched 锁定态不应残留),再 settings_changed():
             // 后者 snap()+render() 才基于新 Monitor 画出切换后的真实状态;若反过来,首帧会
             // 用旧 Monitor(被取消的 agent 仍显示)直到下一轮 tick(~3s)。
             *self.ivars().monitor.borrow_mut() = agent_light_core::Monitor::with_enabled(&kinds);
+            if let Some(content) = self.ivars().settings_content.borrow().as_ref() {
+                crate::settings::refresh_agent_chips(content, &kinds);
+            }
             self.settings_changed();
         }
 
@@ -586,10 +597,18 @@ impl AppDelegate {
             y: frame.origin.y,
             screen_id: crate::overlay::screen_id_at(center),
         };
-        let mut s = self.ivars().settings.borrow_mut();
-        if s.light_pos != Some(pos) {
-            s.light_pos = Some(pos);
-            drop(s);
+        // 改字段与落盘用两个独立 borrow scope:borrow_mut 必须先结束再 borrow() 调 save()。
+        // 此前靠 `drop(s)` 顺序勉强安全 —— 重排或漏 drop 即 BorrowMutError panic(每 3s tick 跑)。
+        let changed = {
+            let mut s = self.ivars().settings.borrow_mut();
+            if s.light_pos != Some(pos) {
+                s.light_pos = Some(pos);
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
             self.ivars().settings.borrow().save();
         }
     }
