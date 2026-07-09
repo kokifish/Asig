@@ -13,7 +13,7 @@ use crate::app_delegate::AppDelegate;
 
 use super::controls::{
     add_agent_chip, add_card, add_header_icon, add_plain_button, add_popup, add_radio_button,
-    add_slider, add_switch, add_text, apply_chip_style, set_tag,
+    add_slider, add_switch, add_text, set_tag,
 };
 use super::strings::Strings;
 use super::tags::{
@@ -229,17 +229,17 @@ pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retain
         false,
     );
     let enabled = delegate.ivars().settings.borrow().enabled_agents.clone();
-    // chip flow:cx 起、固定间距,超出控件区右边界(cx+cw)换行。各 chip 宽不同(按文字自适应),
-    // 故按实际宽累计(不等宽 flow),放不下换到下一行。
+    // chip flow:cx 起、固定间距,超出控件区右边界(cx+cw)换行。recessed button 宽按 sizeToFit
+    // 自适应(各不同),故按实际宽累计(不等宽 flow),放不下换到下一行。
     const CHIP_GAP: CGFloat = 10.0;
     const CHIP_VGAP: CGFloat = 6.0;
-    const CHIP_H: CGFloat = 22.0;
     let chip_max_x = cx + cw;
     let row0_center = row_center_y(y, 3);
     let mut ax = cx;
     let mut chip_row: usize = 0;
+    let mut chip_h: CGFloat = 22.0;
     for (i, &name) in st.agent_opts.iter().enumerate() {
-        // 先以临时 origin 建好 chip 拿宽度,再按 flow 定位。
+        // 先以临时 origin 建好 chip 拿 sizeToFit 尺寸,再按 flow 定位 + 设初始选中态。
         let btn = add_agent_chip(
             &pane,
             NSPoint::new(0.0, 0.0),
@@ -247,16 +247,20 @@ pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retain
             AGENT_OFF + i as i64,
             delegate,
         );
-        let chip = super::controls::chip_of_button(&btn);
-        let chip_w = chip.frame().size.width;
-        if ax + chip_w > chip_max_x && ax > cx {
+        let bf = btn.frame();
+        chip_h = chip_h.max(bf.size.height);
+        let on = enabled.contains(&AGENT_KIND_ORDER[i]);
+        unsafe {
+            let _: () = msg_send![&btn, setState: if on { 1i64 } else { 0 }];
+        }
+        let bw = bf.size.width;
+        if ax + bw > chip_max_x && ax > cx {
             chip_row += 1;
             ax = cx;
         }
-        let row_center = row0_center - chip_row as CGFloat * (CHIP_H + CHIP_VGAP);
-        chip.setFrameOrigin(NSPoint::new(ax, row_center - CHIP_H / 2.0));
-        ax += chip_w + CHIP_GAP;
-        apply_chip_style(&btn, enabled.contains(&AGENT_KIND_ORDER[i]));
+        let row_center = row0_center - chip_row as CGFloat * (chip_h + CHIP_VGAP);
+        btn.setFrameOrigin(NSPoint::new(ax, row_center - bf.size.height / 2.0));
+        ax += bw + CHIP_GAP;
     }
     // agent chip 占 chip_row+1 行;超出 1 行(extra)让后续行(开机/主题)+ Group-2 卡片高度下移。
     let extra = chip_row;

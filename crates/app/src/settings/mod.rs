@@ -46,6 +46,8 @@ mod tags;
 
 // ---- 外部(crate::settings::)所需的 pub use 重导出 ----
 pub use glass::update_selection;
+#[allow(unused_imports)]
+// refresh_agent_chips 保留供 rebuild/reset 批量同步(当前 build 内已 setState)
 pub use layout::{
     StateControls, layout_state_pane, refresh_agent_chips, refresh_duration, refresh_state_controls,
 };

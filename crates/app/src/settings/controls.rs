@@ -10,8 +10,7 @@ use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBox, NSButton, NSColor, NSFont, NSImage, NSPopUpButton, NSSlider,
     NSSwitch, NSTextField, NSView,
 };
-use objc2_core_foundation::CGFloat;
-use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSPoint, NSRect, NSString};
 
 use agent_light_core::Color;
 
@@ -82,10 +81,10 @@ pub(crate) fn add_plain_button(
     btn
 }
 
-/// Agent 多选 chip:NSBox 容器(custom:圆角+边框,样式由 apply_chip_style 设)+ 内嵌 borderless
-/// NSButton(文字 + action)。调用方给 chip 左下角 origin;宽按文字 sizeToFit + 左右 padding 自适应。
-/// button 填满 chip、文字水平居中(NSButton 默认垂直居中)——避免手动按框中心居中导致的墨迹
-/// 错位(NSButton 墨迹低于框中心,同 General 标题的坑)。返回 button(tag = AGENT_OFF + i)。
+/// Agent 多选 chip:原生 NSButton + NSBezelStyleRecessed(AccessoryBar=13,Apple 专为 scope/chip
+/// toggle 设计的 bezel,如 Mail 文件夹切换)+ NSButtonTypePushOnPushOff(=1,点击 on↔off)。
+/// 选中态由系统绘制(accentColor 浅底),单层 button —— 无 NSBox contentView 内缩导致的文字
+/// 错位、无 layer.borderColor 的 CGColor 坑。宽按 sizeToFit 自适应。返回 button(tag=AGENT_OFF+i)。
 pub(crate) fn add_agent_chip(
     pane: &Retained<NSView>,
     origin: NSPoint,
@@ -94,16 +93,12 @@ pub(crate) fn add_agent_chip(
     delegate: &AppDelegate,
 ) -> Retained<NSButton> {
     let mtm = MainThreadMarker::new().expect("add_agent_chip 须主线程");
-    let chip = NSBox::new(mtm);
-    unsafe {
-        let _: () = msg_send![&chip, setBoxType: 4u64]; // NSBoxCustom(常量 feature 不确定,保留裸值)
-    }
-    chip.setCornerRadius(8.0);
-    chip.setBorderWidth(1.5);
-    chip.setTitle(&NSString::from_str(""));
-    pane.addSubview(&chip);
     let btn = NSButton::new(mtm);
-    btn.setBordered(false);
+    unsafe {
+        let _: () = msg_send![&btn, setBezelStyle: 13i64]; // NSBezelStyleRecessed/AccessoryBar(chip)
+        let _: () = msg_send![&btn, setButtonType: 1i64]; // NSButtonTypePushOnPushOff(toggle on↔off)
+    }
+    btn.setBordered(true);
     btn.setTitle(&NSString::from_str(title));
     btn.setTag(tag as isize);
     unsafe {
@@ -112,51 +107,9 @@ pub(crate) fn add_agent_chip(
     }
     btn.sizeToFit();
     let fit = btn.frame();
-    const CHIP_PAD: CGFloat = 10.0;
-    const CHIP_H: CGFloat = 22.0;
-    let chip_w = fit.size.width + 2.0 * CHIP_PAD;
-    chip.setFrame(NSRect::new(origin, NSSize::new(chip_w, CHIP_H)));
-    // button 填满 chip(button 加到 NSBox.contentView,frame = chip bounds),文字由 alignment 居中。
-    btn.setFrame(NSRect::new(
-        NSPoint::new(0.0, 0.0),
-        NSSize::new(chip_w, CHIP_H),
-    ));
-    unsafe {
-        let _: () = msg_send![&btn, setAlignment: 2i64]; // NSTextAlignmentCenter(enum 常量在 feature 后)
-    }
-    chip.addSubview(&btn);
+    btn.setFrame(NSRect::new(origin, fit.size));
+    pane.addSubview(&btn);
     btn
-}
-
-/// 取 chip 的 NSBox 容器。button 加到 NSBox.contentView,故 chip = button.superview.superview。
-/// flow 布局与样式刷新都通过它定位/设样,避免每处重写 superview 链。
-pub(crate) fn chip_of_button(button: &Retained<impl Message>) -> Retained<NSView> {
-    let cv: Retained<NSView> = unsafe { msg_send![button, superview] };
-    unsafe { msg_send![&cv, superview] }
-}
-
-/// 按 selected 设 agent chip(= button 的 superview 链上的 NSBox)样式:选中=强调色边框+浅强调底,
-/// 未选=分隔线色细边框+透明底。用 NSBox 的 setBorderColor:/setFillColor:(NSColor 直传)——绕开
-/// layer.borderColor 要 CGColor(NSDynamicSystemColor/_NSTaggedPointerColor 等多类 NSColor 不响应
-/// cgColor,直取会运行时崩 NSInvalidArgumentException)。button 经 NSBox.contentView 承载,故
-/// chip = button.superview.superview。
-pub(crate) fn apply_chip_style(button: &Retained<impl Message>, selected: bool) {
-    // chip = button.superview.superview(NSBox);NSBox 专属 setter 走 msg_send!(动态分发到 NSBox)。
-    let chip = chip_of_button(button);
-    let border = if selected {
-        NSColor::controlAccentColor()
-    } else {
-        NSColor::separatorColor()
-    };
-    let fill = if selected {
-        NSColor::controlAccentColor().colorWithAlphaComponent(0.15)
-    } else {
-        NSColor::clearColor()
-    };
-    unsafe {
-        let _: () = msg_send![&chip, setBorderColor: &*border];
-        let _: () = msg_send![&chip, setFillColor: &*fill];
-    }
 }
 
 /// 侧栏 tab 按钮:无边框、左对齐;可选 image(状态色圆点)置于标题左侧。

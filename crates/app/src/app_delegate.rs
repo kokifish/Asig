@@ -391,20 +391,21 @@ define_class!(
             let Some(&kind) = crate::settings::AGENT_KIND_ORDER.get(i) else {
                 return;
             };
+            // recessed toggle button:点击后系统已切 state(on=1 监控 / off=0 不监控),据此改 Vec。
+            let state: i64 = unsafe { msg_send![sender, state] };
             let mut kinds = self.ivars().settings.borrow().enabled_agents.clone();
-            if let Some(pos) = kinds.iter().position(|k| *k == kind) {
-                kinds.remove(pos); // 已选 → 取消
+            if state == 1 {
+                if !kinds.contains(&kind) {
+                    kinds.push(kind);
+                }
             } else {
-                kinds.push(kind); // 未选 → 加入
+                kinds.retain(|k| *k != kind);
             }
             self.ivars().settings.borrow_mut().enabled_agents = kinds.clone();
             // 先重建 Monitor(切走的 agent 的 latched 锁定态不应残留),再 settings_changed():
             // 后者 snap()+render() 才基于新 Monitor 画出切换后的真实状态;若反过来,首帧会
             // 用旧 Monitor(被取消的 agent 仍显示)直到下一轮 tick(~3s)。
             *self.ivars().monitor.borrow_mut() = agent_light_core::Monitor::with_enabled(&kinds);
-            if let Some(content) = self.ivars().settings_content.borrow().as_ref() {
-                crate::settings::refresh_agent_chips(content, &kinds);
-            }
             self.settings_changed();
         }
 
