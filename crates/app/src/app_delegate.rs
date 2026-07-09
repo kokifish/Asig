@@ -75,7 +75,7 @@ define_class!(
             // tick 重绘(浮窗自绘 drawRect 已实时适配;菜单栏/色块借此 ≤ 轮询周期内刷新)。
             let sig = format!(
                 "{}|rm={}|app={}",
-                signature(&snap),
+                snap.signature(),
                 crate::overlay::reduce_motion_on(),
                 crate::overlay::is_dark_appearance()
             );
@@ -609,14 +609,6 @@ impl AppDelegate {
 }
 
 /// 状态签名:全局态 + done_notif + 各会话(id + status)。相同则视为无变化,跳过渲染。
-fn signature(snap: &Snapshot) -> String {
-    let mut s = format!("{:?}|{}|", snap.global, snap.done_notif);
-    for sess in &snap.sessions {
-        s.push_str(&format!("{}:{:?};", sess.id, sess.status));
-    }
-    s
-}
-
 // 普通 Rust 构造器(非 ObjC 方法):alloc → set_ivars → super init。
 impl AppDelegate {
     pub fn new(ivars: AppIvars) -> Retained<Self> {

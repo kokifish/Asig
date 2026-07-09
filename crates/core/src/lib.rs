@@ -36,6 +36,18 @@ pub struct Snapshot {
     pub done_notif: bool,
 }
 
+impl Snapshot {
+    /// 压成字符串指纹:任一关键字段(全局态/done_notif/会话 id+status)变 → 指纹变。
+    /// app 层 tick 据此跳过无变化的 render(省 CPU,压到 ~0%)。
+    pub fn signature(&self) -> String {
+        let mut s = format!("{:?}|{}|", self.global, self.done_notif);
+        for sess in &self.sessions {
+            s.push_str(&format!("{}:{:?};", sess.id, sess.status));
+        }
+        s
+    }
+}
+
 /// 一个会话的锁定态 + 连续未观测到的轮数(宽限防短暂消失清掉锁定态)。
 struct Latched {
     status: AgentStatus,
