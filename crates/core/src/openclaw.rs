@@ -72,12 +72,14 @@ impl AgentSource for OpenClawSource {
     }
 }
 
-/// 查询 + 归并核心(纯函数:接连接 + 当前 ms + 各 agent 交互式会话尾部信号)。
-fn discover_from(
+/// 收集每 agent 的累加器 + 最新会话信号(复用于 `discover_from` 与 `probe`;SQL/session 逻辑
+/// 只此一处,杜绝 rs/sh 双实现漂移)。顺序同 `agent_databases` 返回顺序;无 run 的 agent 也含
+/// (acc 默认),让面板与探针都能看到。
+fn collect(
     conn: &Connection,
     now: u64,
     session_signals: &HashMap<String, SessionSignal>,
-) -> Vec<AgentSession> {
+) -> Vec<(String, AgentAcc, Option<SessionSignal>)> {
     let cutoff_err = now.saturating_sub(ERROR_RECENT_MS) as i64;
     let cutoff_agent = now.saturating_sub(AGENT_RECENT_MS) as i64;
 
@@ -189,42 +191,107 @@ fn discover_from(
         }
     }
 
-    // 交互式会话(TUI/webchat,不进主库):尾部 message 的 role + stopReason 判在跑。
+    // 交互式会话合并 + 收集输出(含 sig,供 probe 诊断)。
     // user/toolResult 需 mtime 近 SESSION_RECENT_MS(防历史会话尾部永远 Working);
-    // stopReason='toolUse' 是「模型已发工具调用、工具正在执行」的权威在跑信号 —— 工具可能
-    // 很久不写 jsonl,故 toolUse 跳过 mtime 闸门(否则 >5min 的工具会误判完成闪蓝)。
-    // 协调态(sessions_yield 让出 + leaf 结尾):主 agent 在等后台子 agent。GLM 下此期间尾部是
-    // `assistant stop="stop"`(暂歇)会被上面判「不在跑」。靠 leaf+yield 信号识别,但需区分:
-    //   子 agent 全 ended(!run_active:sessions_spawn 子 agent 进 task/flow_runs)→ 主 agent 等不到
-    //     announce → 卡死 → Error(B);或协调态超 SUBAGENT_WAIT_MS 仍无进展 → Error(A 兜底);
-    //   子 agent 在跑(run_active)→ 正常 Working(由 classify 的 run_active 分支判)。
+    // stopReason='toolUse' 跳过 mtime 闸门(工具长间隙不算完成)。协调态(leaf+yield):
+    //   子 agent 全 ended(!run_active)或协调态超 SUBAGENT_WAIT_MS → 卡死 → Error。
+    let mut out: Vec<(String, AgentAcc, Option<SessionSignal>)> = Vec::with_capacity(agents.len());
     for aid in &agents {
-        if let Some(sig) = session_signals.get(aid) {
-            let stop = sig.stop.as_deref();
-            let fresh = now.saturating_sub(sig.mtime_ms) < SESSION_RECENT_MS;
-            let stale = now.saturating_sub(sig.mtime_ms) >= SUBAGENT_WAIT_MS;
-            let Some(a) = acc.get_mut(aid.as_str()) else {
-                continue;
-            };
-            if session_running(&sig.role, stop) && (fresh || stop == Some("toolUse")) {
+        let sig = session_signals.get(aid).cloned();
+        let mut a = acc.remove(aid.as_str()).unwrap_or_default();
+        if let Some(s) = &sig {
+            let stop = s.stop.as_deref();
+            let fresh = now.saturating_sub(s.mtime_ms) < SESSION_RECENT_MS;
+            let stale = now.saturating_sub(s.mtime_ms) >= SUBAGENT_WAIT_MS;
+            if session_running(&s.role, stop) && (fresh || stop == Some("toolUse")) {
                 a.running = true;
-            } else if sig.ends_with_leaf && sig.coordinating && (!a.run_active || stale) {
+            } else if s.ends_with_leaf && s.coordinating && (!a.run_active || stale) {
                 a.stuck = true; // 协调态卡死(B 子 agent 全 ended / A 超 30min)→ Error
             }
         }
+        out.push((aid.clone(), a, sig));
     }
+    out
+}
 
-    // 3) 每 agent → AgentSession(无 run 的 agent 也输出 Done,让面板能看到)。
-    agents
-        .iter()
-        .map(|aid| AgentSession {
+/// 查询 + 归并核心(纯函数:接连接 + 当前 ms + 各 agent 交互式会话尾部信号)。
+fn discover_from(
+    conn: &Connection,
+    now: u64,
+    session_signals: &HashMap<String, SessionSignal>,
+) -> Vec<AgentSession> {
+    collect(conn, now, session_signals)
+        .into_iter()
+        .map(|(aid, acc, _)| AgentSession {
             kind: AgentKind::OpenClaw,
             id: format!("OpenClaw:{aid}"),
             native_id: aid.clone(),
             cwd: None,
             project: None,
-            status: classify_agent(acc.get(aid.as_str()).copied().unwrap_or_default()),
-            label: Some(aid.clone()),
+            status: classify_agent(acc),
+            label: Some(aid),
+        })
+        .collect()
+}
+
+/// 单 agent 诊断探针(CLI `probe-openclaw` 输出用;复用 `collect`,不另写判定)。
+pub struct AgentProbe {
+    pub aid: String,
+    pub status: AgentStatus,
+    /// 尾部最后一条 message 的 role / stopReason(无会话则空 / None)。
+    pub role: String,
+    pub stop: Option<String>,
+    /// 文件以 leaf 结尾 ∧ 尾部含 yield/spawn(协调态)。
+    pub coordinating: bool,
+    /// 最新会话 mtime 距 now 的秒数;无会话 = -1。
+    pub age_s: i64,
+    pub run_active: bool,
+    pub blocked: bool,
+    pub recent_err: bool,
+    pub stuck: bool,
+}
+
+/// 探针:读真实 openclaw(主库 + 各 agent session),返回每 agent 诊断 + 最终 status。
+/// 供 CLI `agent-light probe-openclaw` 用 —— 单一判定源,替代 scripts/probe-openclaw.sh 的
+/// bash 重新实现(消除 CLAUDE.md 强制 rs/sh 同步负担)。没装 openclaw / 打不开库 → 空。
+pub fn probe() -> Vec<AgentProbe> {
+    let Some(home) = dirs::home_dir() else {
+        return Vec::new();
+    };
+    let root = home.join(".openclaw");
+    let db = root.join("state").join("openclaw.sqlite");
+    let Ok(conn) = Connection::open_with_flags(
+        &db,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) else {
+        return Vec::new();
+    };
+    let signals = latest_session_signals(&root);
+    let now = now_ms();
+    collect(&conn, now, &signals)
+        .into_iter()
+        .map(|(aid, acc, sig)| {
+            let (role, stop, coordinating, age_s) = match &sig {
+                Some(s) => (
+                    s.role.clone(),
+                    s.stop.clone(),
+                    s.ends_with_leaf && s.coordinating,
+                    (now.saturating_sub(s.mtime_ms) / 1000) as i64,
+                ),
+                None => (String::new(), None, false, -1),
+            };
+            AgentProbe {
+                aid,
+                status: classify_agent(acc),
+                role,
+                stop,
+                coordinating,
+                age_s,
+                run_active: acc.run_active,
+                blocked: acc.blocked,
+                recent_err: acc.recent_err,
+                stuck: acc.stuck,
+            }
         })
         .collect()
 }
@@ -270,6 +337,7 @@ fn agent_of(key: &str) -> Option<&str> {
 
 /// 一个 agent 最新交互式会话的尾部信号(mtime + 最后一条 message 的 role + stop_reason
 /// + 文件是否以 `leaf` 结尾 + 尾部是否含 sessions_yield/spawn 协调信号)。
+#[derive(Clone)]
 struct SessionSignal {
     mtime_ms: u64,
     role: String,
@@ -288,32 +356,13 @@ fn session_running(role: &str, stop: Option<&str>) -> bool {
 }
 
 /// 读 jsonl 尾部(末 ~32KB),一次性算出:(最后一条 message 的 role+stop_reason,
-/// 文件是否以 `leaf` 结尾, 尾部是否含 sessions_yield/spawn)。首行可能被截断故丢弃。
+/// 文件是否以 `leaf` 结尾, 尾部是否含 sessions_yield/spawn)。
 ///
-/// 始终返回 `Some`(空文件 → role 空 + 全 false),让上游协调态分支(leaf+coordinating,
-/// 不依赖 role)即使无 message 也能判。`message.stopReason` 如 "toolUse"/"stop"。
+/// 尾部 I/O(seek+read+lossy+丢首行+解析)走共用 `jsonl_tail::read_tail_lines`;此处只做
+/// 字段提取。文件打不开 → None(上游 `unwrap_or_default` 回退空信号);空文件 → Some 空信号。
+/// `message.stopReason` 如 "toolUse"/"stop"。
 fn read_tail_signals(path: &Path) -> Option<(String, Option<String>, bool, bool)> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(path).ok()?;
-    let size = f.metadata().ok()?.len();
-    const TAIL: u64 = 32_768;
-    let start = size.saturating_sub(TAIL);
-    f.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines: Vec<&str> = text.lines().collect();
-    if start > 0 {
-        lines.remove(0); // 起点非文件首 → 首行多半被截断,丢弃
-    }
-
-    // 解析每行为事件(跳过空行/解析失败),保留顺序。
-    let events: Vec<serde_json::Value> = lines
-        .iter()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty())
-        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .collect();
+    let events = crate::jsonl_tail::read_tail_lines(path, 32_768)?;
 
     // 文件最后一条事件是否为 `leaf`(OpenClaw 回合 marker)。
     let ends_with_leaf = events

@@ -208,30 +208,11 @@ fn last_stop_reason(root: &Path, session_id: &str) -> Option<String> {
     None
 }
 
-/// 只读文件尾部 ~16KB(避免对大 transcript 全量读),反序找最后一条带 `stop_reason` 的行。
-/// 用 lossy 解码(尾部起点可能落在多字节字符中间),首行多半被截断故丢弃。
+/// 只读文件尾部 ~16KB,反序找最后一条带 `message.stop_reason` 的行。
+/// 尾部 I/O(seek+read+lossy+丢首行+解析)走共用 `jsonl_tail::read_tail_lines`。
 fn read_tail_stop_reason(path: &Path) -> Option<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(path).ok()?;
-    let size = f.metadata().ok()?.len();
-    const TAIL: u64 = 16_384;
-    let start = size.saturating_sub(TAIL);
-    f.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf).ok()?;
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines: Vec<&str> = text.lines().collect();
-    if start > 0 {
-        lines.remove(0); // 起点非文件首 → 首行多半被截断,丢弃
-    }
-    for line in lines.iter().rev() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
+    let events = crate::jsonl_tail::read_tail_lines(path, 16_384)?;
+    for v in events.iter().rev() {
         if let Some(sr) = v
             .get("message")
             .and_then(|m| m.get("stop_reason"))

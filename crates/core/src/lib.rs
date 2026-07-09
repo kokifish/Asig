@@ -10,6 +10,9 @@ pub mod openclaw;
 pub mod source;
 pub mod status;
 
+/// jsonl 尾部读取共用工具(claude/openclaw 复用,内部)。
+pub(crate) mod jsonl_tail;
+
 pub use config::{
     Anim, DONE_NOTIF_DURATION_DEFAULT_S, DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S,
     DOT_SIZE_DEFAULT_PX, DOT_SIZE_MAX_PX, DOT_SIZE_MIN_PX, Lang, LightPosition, Settings,
