@@ -6,8 +6,8 @@ use agent_light_core::{AgentKind, AgentSession, Snapshot};
 use objc2::rc::Retained;
 use objc2::{DefinedClass, MainThreadMarker, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSButton, NSFont, NSPopover, NSPopoverBehavior, NSStatusBarButton, NSTextField,
-    NSView, NSViewController,
+    NSApplication, NSButton, NSButtonType, NSControlStateValueOff, NSControlStateValueOn, NSFont,
+    NSPopover, NSPopoverBehavior, NSStatusBarButton, NSTextField, NSView, NSViewController,
 };
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -56,12 +56,12 @@ pub fn build(delegate: &AppDelegate) -> Popover {
         delegate,
         sel!(toggleClickThrough:),
     );
-    unsafe {
-        // NSButtonType/NSControlStateValue 常量在 NSButtonCell feature 后(未开),用裸值:
-        // 3 = NSSwitchButton(圆角勾);1/0 = NSOnState/NSOffState。
-        let _: () = msg_send![&btn_lock, setButtonType: 3u64];
-        let _: () = msg_send![&btn_lock, setState: if locked { 1i64 } else { 0 }];
-    }
+    btn_lock.setButtonType(NSButtonType::Switch); // 圆角勾形 toggle
+    btn_lock.setState(if locked {
+        NSControlStateValueOn
+    } else {
+        NSControlStateValueOff
+    });
     let _ = add_button(
         &content,
         NSRect::new(
@@ -109,8 +109,8 @@ pub fn show(p: &Popover, button: &NSStatusBarButton) {
     #[allow(deprecated)]
     app.activateIgnoringOtherApps(true);
     unsafe {
-        // showRelativeToRect 的 preferredEdge(NSRectEdge)用 msg_send 传裸值 NSMinYEdge=1,
-        // 避开 NSRectEdge 常量与 button 子类 upcast 的不确定性。
+        // showRelativeToRect 的 preferredEdge 取 NSRectEdge;此版本 bindings 未导出
+        // NSRectEdge 类型/NSMinYEdge 常量,保留 msg_send! 传裸值 1(=NSMinYEdge,下方)。
         let _: () = msg_send![
             &p.popover,
             showRelativeToRect: rect,

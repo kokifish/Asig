@@ -26,15 +26,21 @@ objc2-app-kit = { version = "0.3", features = [
     # 故父类链也要开。
     "NSResponder",
     "NSApplication",
+    "NSAccessibility", # NSWorkspace 的 accessibilityDisplayShouldReduce{Motion,Transparency}
+    "NSWorkspace",     # 系统无障碍偏好(Reduce Motion / Transparency)轮询
     "NSStatusBar",
     "NSStatusItem",
     "NSStatusBarButton",
     "NSMenu",
     "NSMenuItem",
     "NSButton",
+    "NSButtonCell", # NSButtonType / NSBezelStyle 枚举(setButtonType/setBezelStyle)
+    "NSCell",       # NSCellImagePosition / NSControlStateValue / NSBoxType / NSImageScaling
+    "NSText",       # NSTextAlignment(setAlignment)
     "NSControl",
     "NSView",
     "NSImage", # 菜单栏自绘圆点 + 底栏 SF Symbol 单色图标
+    "NSImageView", # 设置页 header 单色 SF Symbol 图标(强类型构造 + setter)
     "NSBox",   # 设置页分组圆角卡片(stats.app 风)
     "NSVisualEffectView", # 设置页材质(sidebar/contentBackground/windowBackground)
     "NSViewController",   # 方案 A:包 sidebar/content 视图给 NSSplitViewItem
@@ -45,6 +51,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSWindow",
     "NSColor",
     "NSBezierPath",
+    "NSEvent",   # 右键检测(currentEvent.type == RightMouseDown → 状态栏右键菜单)
     "NSGraphics",
     # Phase 2.5 设置面板:
     "NSTextField",
@@ -52,6 +59,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSFont",
     "NSSlider",
     "NSPopUpButton",
+    "NSAlert", # ResetAll 确认对话框
     "NSAppearance", # Theme setAppearance + NSColor dynamicProvider
     "NSColorList",  # NSColor colorWithName:dynamicProvider: 需此 feature
 ] }

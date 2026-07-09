@@ -4,7 +4,10 @@ use objc2::DefinedClass;
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, NSObject};
 use objc2::{MainThreadMarker, class, msg_send};
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSBox, NSColor, NSView};
+use objc2_app_kit::{
+    NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSView, NSVisualEffectBlendingMode,
+    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSString};
 
@@ -23,8 +26,6 @@ pub(crate) fn glass_available() -> bool {
 /// - macOS 26+:NSGlassEffectView,UI 必须放进其 contentView(Apple 文档明确要求;叠成兄弟视图
 ///   会被盖住 —— 这正是早先 NSGlassEffectView 失败的原因)。cornerRadius 决定玻璃形状圆角。
 /// - 旧系统:NSVisualEffectView(`fallback_material`),UI 作子视图叠在 vibrancy 上(`content` 即其自身)。
-///
-/// 全程 msg_send! 构造并上转为 NSView,与既有 NSVisualEffectView 用法一致(绕开 Retained 上转)。
 pub(crate) struct GlassPane {
     pub(crate) view: Retained<NSView>,
     pub(crate) content: Retained<NSView>,
@@ -38,7 +39,7 @@ pub(crate) fn glass_pane(
     // Reduce Transparency 开启时跳过 NSGlassEffectView,改走 NSVisualEffectView 分支
     // (它在 Reduce Transparency 下自动变不透明实色),保证文字可读。
     if glass_available() && !crate::overlay::reduce_transparency_on() {
-        // NSGlassEffectView 不在 feature 表里,全程 msg_send! 构造并上转 NSView(与既有用法一致)。
+        // NSGlassEffectView 不在 cargo feature 表里(macOS 26 新类),保留 msg_send! 构造 + setter。
         let g: Retained<NSView> = unsafe { msg_send![class!(NSGlassEffectView), new] };
         let content = new_view(NSRect::new(NSPoint::new(0.0, 0.0), frame.size));
         unsafe {
@@ -50,19 +51,18 @@ pub(crate) fn glass_pane(
         content.setAutoresizingMask(NSAutoresizingMaskOptions(18));
         GlassPane { view: g, content }
     } else {
-        let alloc: Allocated<NSView> = unsafe { msg_send![class!(NSVisualEffectView), alloc] };
-        let v: Retained<NSView> = unsafe { msg_send![alloc, initWithFrame: frame] };
-        unsafe {
-            // NSVisualEffectView 的 setMaterial/setBlendingMode/setState 取 enum 常量(feature 后),
-            // 常量不确定,保留裸值 msg_send!。
-            let _: () = msg_send![&v, setMaterial: fallback_material];
-            let _: () = msg_send![&v, setBlendingMode: 0i64]; // behindWindow — 模糊窗口背后
-            let _: () = msg_send![&v, setState: 1i64]; // active
-        }
+        let alloc: Allocated<NSVisualEffectView> =
+            unsafe { msg_send![class!(NSVisualEffectView), alloc] };
+        let v = NSVisualEffectView::initWithFrame(alloc, frame);
+        v.setMaterial(NSVisualEffectMaterial(fallback_material as isize));
+        v.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow); // 模糊窗口背后
+        v.setState(NSVisualEffectState::Active);
         v.setWantsLayer(true);
+        // content = vibrancy 自身(回退路径:UI 直接叠在 vibrancy 上)。
+        let content = v.into_super();
         GlassPane {
-            view: v.clone(),
-            content: v,
+            view: content.clone(),
+            content,
         }
     }
 }
@@ -74,18 +74,14 @@ pub(crate) fn glass_pane(
 pub(crate) fn make_selection_pill() -> Retained<NSView> {
     let mtm = MainThreadMarker::new().expect("make_selection_pill 须主线程");
     let b = NSBox::new(mtm);
-    unsafe {
-        let _: () = msg_send![&b, setBoxType: 4u64]; // NSBoxCustom(常量 feature 不确定,保留裸值)
-    }
+    b.setBoxType(NSBoxType::Custom);
     b.setCornerRadius(8.0);
     b.setBorderWidth(0.0);
     b.setFillColor(&NSColor::controlAccentColor());
     b.setTitle(&NSString::from_str(""));
     b.setWantsLayer(true);
     if let Some(layer) = b.layer() {
-        unsafe {
-            let _: () = msg_send![&layer, setCornerCurve: &*NSString::from_str("continuous")];
-        }
+        layer.setCornerCurve(&NSString::from_str("continuous"));
     }
     b.setHidden(true); // 初始隐藏,update_selection 时显示
     b.into_super() // NSBox → NSView(调用方按 NSView 用)

@@ -8,11 +8,10 @@ use agent_light_core::{
 };
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
-use objc2::{
-    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send,
-};
+use objc2::{ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSApplicationDelegate, NSStatusItem, NSView, NSWindow, NSWindowDelegate,
+    NSAlert, NSApplication, NSApplicationDelegate, NSEventType, NSStatusItem, NSView, NSWindow,
+    NSWindowDelegate,
 };
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString, NSTimer};
 use std::collections::HashMap;
@@ -117,16 +116,11 @@ define_class!(
                 .as_ref()
                 .and_then(|item| item.button(mtm));
             // 右键 → 状态栏菜单;左键 → 下拉 popover
-            let app: Retained<NSApplication> =
-                unsafe { msg_send![class!(NSApplication), sharedApplication] };
-            let is_right = unsafe {
-                app.currentEvent()
-                    .map(|ev| -> bool {
-                        let et: i64 = msg_send![&ev, type];
-                        et == 3
-                    })
-                    .unwrap_or(false)
-            };
+            let app = NSApplication::sharedApplication(mtm);
+            let is_right = app
+                .currentEvent()
+                .map(|ev| ev.r#type() == NSEventType::RightMouseDown)
+                .unwrap_or(false);
             if is_right {
                 if let Some(button) = button {
                     crate::tray::show_status_menu(self, &button, mtm);
@@ -157,9 +151,9 @@ define_class!(
         /// "退出"按钮 / 菜单 action。
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: *mut NSObject) {
-            let app: Retained<NSApplication> =
-                unsafe { msg_send![class!(NSApplication), sharedApplication] };
-            let _: () = unsafe { msg_send![&app, terminate: std::ptr::null_mut::<NSObject>()] };
+            let mtm = MainThreadMarker::new().expect("quit 须在主线程");
+            let app = NSApplication::sharedApplication(mtm);
+            app.terminate(None);
         }
 
         /// 设置面板「浮窗点击穿透」复选框 action。sender=复选框,读其 state。
@@ -318,16 +312,15 @@ define_class!(
         /// General「Reset 全部」action:确认对话框 → 重置所有自定义(语言 + 各状态)→ 重应用 + 重建。
         #[unsafe(method(resetAll:))]
         fn reset_all(&self, _sender: *mut NSObject) {
+            let mtm = MainThreadMarker::new().expect("resetAll 须在主线程");
             let lang = self.ivars().settings.borrow().lang;
             let (title, msg, yes, no) = crate::settings::reset_confirm_texts(lang);
-            let alert: Retained<NSAlert> = unsafe { msg_send![class!(NSAlert), new] };
-            unsafe {
-                let _: () = msg_send![&alert, setMessageText: &*NSString::from_str(title)];
-                let _: () = msg_send![&alert, setInformativeText: &*NSString::from_str(msg)];
-                let _: () = msg_send![&alert, addButtonWithTitle: &*NSString::from_str(yes)];
-                let _: () = msg_send![&alert, addButtonWithTitle: &*NSString::from_str(no)];
-            }
-            let resp: i64 = unsafe { msg_send![&alert, runModal] };
+            let alert = NSAlert::new(mtm);
+            alert.setMessageText(&NSString::from_str(title));
+            alert.setInformativeText(&NSString::from_str(msg));
+            alert.addButtonWithTitle(&NSString::from_str(yes));
+            alert.addButtonWithTitle(&NSString::from_str(no));
+            let resp = alert.runModal();
             if resp != 1000 {
                 return; // NSAlertFirstButtonReturn = 1000;非「重置」则取消
             }

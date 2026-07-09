@@ -19,7 +19,10 @@ use std::collections::HashMap;
 use objc2::DefinedClass;
 use objc2::rc::{Allocated, Retained};
 use objc2::{MainThreadMarker, class, msg_send};
-use objc2_app_kit::{NSApplication, NSAutoresizingMaskOptions, NSColor, NSView, NSWindow};
+use objc2_app_kit::{
+    NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSColor,
+    NSTitlebarSeparatorStyle, NSView, NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
+};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -67,36 +70,36 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     let lang = delegate.ivars().settings.borrow().lang;
     let st = strings_for(lang);
 
-    // 窗口:titled(1)|closable(2)|miniaturizable(4)|resizable(8)|fullSizeContentView(32768)
+    // 窗口:titled | closable | miniaturizable | resizable | fullSizeContentView(内容贯穿标题栏)
     let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(tags::W, tags::H));
-    // initWithContentRect / styleMask 常量在 feature 后,保留 msg_send!(透传避开子类 upcast)。
     let alloc: Allocated<NSWindow> = unsafe { msg_send![class!(NSWindow), alloc] };
-    let window: Retained<NSWindow> = unsafe {
-        msg_send![
+    let window = unsafe {
+        NSWindow::initWithContentRect_styleMask_backing_defer(
             alloc,
-            initWithContentRect: frame,
-            styleMask: 32783u64,
-            backing: 2u64,
-            defer: false,
-        ]
+            frame,
+            NSWindowStyleMask::Titled
+                .union(NSWindowStyleMask::Closable)
+                .union(NSWindowStyleMask::Miniaturizable)
+                .union(NSWindowStyleMask::Resizable)
+                .union(NSWindowStyleMask::FullSizeContentView),
+            NSBackingStoreType::Buffered,
+            false,
+        )
     };
     window.setTitle(&NSString::from_str("Asig"));
     unsafe {
         // setReleasedWhenClosed: ARC 下手动 retain,需 unsafe。
-        let _: () = msg_send![&window, setReleasedWhenClosed: false];
+        window.setReleasedWhenClosed(false);
     }
     window.setOpaque(false); // 透明底,让 vibrancy 能模糊桌面
     window.setBackgroundColor(Some(&NSColor::clearColor()));
     window.setTitlebarAppearsTransparent(true); // 内容贯穿标题栏
-    unsafe {
-        // setTitleVisibility / setTitlebarSeparatorStyle 取 enum 常量(feature 后),保留裸值 msg_send!。
-        let _: () = msg_send![&window, setTitleVisibility: 1i64]; // hidden
-        let _: () = msg_send![&window, setTitlebarSeparatorStyle: 1i64]; // none — 玻璃贯穿标题栏,无顶部分隔线
-    }
+    window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
+    window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None); // 玻璃贯穿标题栏,无顶部分隔线
     window.setMovable(true);
     window.setMinSize(NSSize::new(tags::W, tags::H));
     // AppDelegate 兼作窗口 delegate:windowDidResize: 触发 state pane 色块按新宽度重排。
-    // setDelegate 取 ProtocolObject<dyn NSWindowDelegate>,构造繁琐,保留 msg_send!。
+    // setDelegate 需 ProtocolObject<dyn NSWindowDelegate>,构造繁琐,保留 msg_send!。
     unsafe {
         let _: () = msg_send![&window, setDelegate: delegate];
     }

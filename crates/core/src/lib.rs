@@ -36,11 +36,20 @@ pub struct Snapshot {
     pub done_notif: bool,
 }
 
+/// 一个会话的锁定态 + 连续未观测到的轮数(宽限防短暂消失清掉锁定态)。
+struct Latched {
+    status: AgentStatus,
+    misses: u8,
+}
+
+/// 锁定态宽限:会话连续 `LATCH_GRACE` 轮未出现才清(覆盖文件原子替换/瞬时改名等抖动)。
+const LATCH_GRACE: u8 = 2;
+
 /// 监控引擎:持有一组 source + 每会话的锁定状态(sticky 状态机)。
 pub struct Monitor {
     sources: Vec<Box<dyn AgentSource>>,
-    /// session_id -> 已锁定的状态。跨轮询保留,实现 sticky。
-    latched: RefCell<HashMap<String, AgentStatus>>,
+    /// session_id -> 锁定态 + 宽限计数。跨轮询保留,实现 sticky。
+    latched: RefCell<HashMap<String, Latched>>,
     /// 上一轮的全局态。用于检测「转入 Done」的边沿。
     prev_global: RefCell<AgentStatus>,
     /// 最近一次「全局态转入 Done」的时刻。Done Notification 窗口期由 `poll()` 入参决定。
@@ -105,16 +114,34 @@ impl Monitor {
         let mut latched = self.latched.borrow_mut();
         let mut sessions: Vec<AgentSession> = Vec::with_capacity(raw.len());
         for mut s in raw {
-            let prev = latched.get(&s.id).copied().unwrap_or(AgentStatus::Done);
+            let prev = latched
+                .get(&s.id)
+                .map(|l| l.status)
+                .unwrap_or(AgentStatus::Done);
             let new = transition(prev, s.status);
-            latched.insert(s.id.clone(), new);
+            latched.insert(
+                s.id.clone(),
+                Latched {
+                    status: new,
+                    misses: 0,
+                },
+            );
             s.status = new;
             sessions.push(s);
         }
 
-        // 3) 剪掉本轮没出现的会话(进程/文件已消失)—— 避免幻影堆积
+        // 3) 剪掉本轮没出现的会话(进程/文件已消失)—— 但给锁定态 LATCH_GRACE 轮宽限:
+        //    会话文件原子替换/瞬时改名时 live 会短暂不含它,立即删会让下轮重现以 Done 为
+        //    基线,丢失锁定态(违反 sticky「不因抖动清」)。连续超宽限才删,避免幻影堆积。
         let live: HashSet<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
-        latched.retain(|id, _| live.contains(id.as_str()));
+        latched.retain(|id, l| {
+            if live.contains(id.as_str()) {
+                true
+            } else {
+                l.misses += 1;
+                l.misses <= LATCH_GRACE
+            }
+        });
         drop(latched);
 
         // 4) 聚合全局灯态
@@ -223,5 +250,45 @@ mod tests {
         let s = m.poll(Duration::from_secs(30));
         assert_eq!(s.global, AgentStatus::Done);
         assert!(s.done_notif, "再次转入 Done 应重新触发");
+    }
+
+    #[test]
+    fn latched_grace_keeps_locked_across_brief_absence() {
+        // 锁定 Error → 短暂消失 1 轮 → 重现报 NeedsDeci:宽限内 latched 保留 Error,
+        // transition(Error, NeedsDeci) 保持 Error(sticky 正确)。无宽限则会降级 NeedsDeci。
+        let m = Monitor::with_sources(vec![Box::new(ScriptedSource {
+            kind: AgentKind::Claude,
+            call: Mutex::new(0),
+            script: vec![
+                vec![AgentStatus::Error],
+                vec![],
+                vec![AgentStatus::NeedsDeci],
+            ],
+        })]);
+        let _ = m.poll(Duration::from_secs(30));
+        let _ = m.poll(Duration::from_secs(30)); // 消失(live 不含)→ misses=1,宽限保留
+        let s = m.poll(Duration::from_secs(30)); // 重现 NeedsDeci → prev=Error → 保持 Error
+        assert_eq!(s.global, AgentStatus::Error);
+    }
+
+    #[test]
+    fn latched_grace_expires_after_n_rounds() {
+        // 连续 LATCH_GRACE+1 轮消失 → latched 清 → 重现以 Done 基线,接受新观测。
+        let m = Monitor::with_sources(vec![Box::new(ScriptedSource {
+            kind: AgentKind::Claude,
+            call: Mutex::new(0),
+            script: vec![
+                vec![AgentStatus::Error],
+                vec![],
+                vec![],
+                vec![],
+                vec![AgentStatus::NeedsDeci],
+            ],
+        })]);
+        for _ in 0..4 {
+            let _ = m.poll(Duration::from_secs(30)); // 4 轮:Error + 3 轮空(misses 3>2 删)
+        }
+        let s = m.poll(Duration::from_secs(30)); // 重现 → prev=Done → NeedsDeci
+        assert_eq!(s.global, AgentStatus::NeedsDeci);
     }
 }

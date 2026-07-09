@@ -4,7 +4,7 @@
 
 use agent_light_core::{AgentStatus, Color, LightAnim};
 use objc2::rc::Retained;
-use objc2::{DefinedClass, MainThreadMarker, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, sel};
 use objc2_app_kit::{NSMenu, NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem};
 use objc2_foundation::{NSPoint, NSString, NSTimer};
 
@@ -82,13 +82,7 @@ pub fn show_status_menu(delegate: &AppDelegate, button: &NSStatusBarButton, mtm:
             &NSString::from_str(""),
         );
         q.setTarget(Some(delegate));
-        // popUpMenu 的 view 参数要 &NSView,button 是 NSStatusBarButton 子类 —— 用 msg_send
-        // 透传避开子类→父类 upcast;返回 bool(是否弹出)。
-        let _: bool = msg_send![
-            &menu,
-            popUpMenuPositioningItem: std::ptr::null::<NSMenuItem>(),
-            atLocation: NSPoint::new(0.0, 0.0),
-            inView: button
-        ];
     }
+    // popUpMenu:view 参数取 Option<&NSView>;NSStatusBarButton 是 NSView 子类,可直接传入。
+    menu.popUpMenuPositioningItem_atLocation_inView(None, NSPoint::new(0.0, 0.0), Some(button));
 }

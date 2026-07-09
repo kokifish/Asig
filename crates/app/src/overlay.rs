@@ -17,18 +17,19 @@ use std::ptr::NonNull;
 use agent_light_core::{Color, LightAnim, LightPosition, Theme};
 use block2::RcBlock;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
-use objc2::runtime::{Bool, NSObject};
+use objc2::runtime::Bool;
 use objc2::{
     ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send,
 };
 use objc2_app_kit::{
-    NSAppearance, NSApplication, NSBezierPath, NSColor, NSImage, NSScreen, NSView, NSWindow,
+    NSAppearance, NSApplication, NSBackingStoreType, NSBezierPath, NSColor, NSImage, NSScreen,
+    NSView, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_core_foundation::CGFloat;
-use objc2_foundation::{
-    NSArray, NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue,
+use objc2_foundation::{NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue};
+use objc2_quartz_core::{
+    CABasicAnimation, CALayer, CAMediaTiming, CATransform3D, NSValueCATransform3DAdditions,
 };
-use objc2_quartz_core::{CABasicAnimation, CALayer, CATransform3D, NSValueCATransform3DAdditions};
 
 /// 固定窗口尺寸(透明,容得下最大圆点 + 波纹扩散)。
 const WIN: CGFloat = 120.0;
@@ -54,8 +55,8 @@ fn tailwind_rgb(c: Color) -> [(CGFloat, CGFloat, CGFloat); 2] {
 }
 
 /// 该 NSAppearance 是否为深色(name 含 "Dark":darkAqua / vibrantDark / …)。
-unsafe fn appearance_is_dark(appearance: &NSAppearance) -> bool {
-    let name: Retained<NSString> = msg_send![appearance, name];
+fn appearance_is_dark(appearance: &NSAppearance) -> bool {
+    let name = appearance.name();
     autoreleasepool(|pool| unsafe { name.to_str(pool) }.contains("Dark"))
 }
 
@@ -64,7 +65,7 @@ pub fn is_dark_appearance() -> bool {
     let mtm = MainThreadMarker::new().expect("is_dark_appearance 须在主线程");
     let app = NSApplication::sharedApplication(mtm);
     let appearance = app.effectiveAppearance();
-    unsafe { appearance_is_dark(&appearance) }
+    appearance_is_dark(&appearance)
 }
 
 /// 据 Theme 设 `NSApp.appearance`(FollowSystem→nil 继承系统;Dark/Light→对应固定外观)。
@@ -87,7 +88,7 @@ pub fn nscolor(c: Color) -> Retained<NSColor> {
     let [light, dark] = tailwind_rgb(c);
     let block: RcBlock<dyn Fn(NonNull<NSAppearance>) -> NonNull<NSColor>> = RcBlock::new(
         move |appearance: NonNull<NSAppearance>| -> NonNull<NSColor> {
-            let (r, g, b) = if unsafe { appearance_is_dark(appearance.as_ref()) } {
+            let (r, g, b) = if appearance_is_dark(unsafe { appearance.as_ref() }) {
                 dark
             } else {
                 light
@@ -152,21 +153,13 @@ fn anim_color(a: LightAnim) -> Color {
 /// 系统「Reduce Motion」是否开启(无障碍 → Display)。开启时浮窗动画降级为常亮,
 /// 状态仍由颜色区分 —— 避免对晕动症用户持续脉冲/扩散。
 pub fn reduce_motion_on() -> bool {
-    unsafe {
-        let ws: Retained<NSObject> = msg_send![class!(NSWorkspace), sharedWorkspace];
-        let on: Bool = msg_send![&ws, accessibilityDisplayShouldReduceMotion];
-        on == Bool::YES
-    }
+    NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
 }
 
 /// 系统「Reduce Transparency」是否开启(无障碍 → Display)。开启时液态玻璃退化不透明
 /// (走 NSVisualEffectView,其自动在 Reduce Transparency 下变实色),保证内容可读。
 pub fn reduce_transparency_on() -> bool {
-    unsafe {
-        let ws: Retained<NSObject> = msg_send![class!(NSWorkspace), sharedWorkspace];
-        let on: Bool = msg_send![&ws, accessibilityDisplayShouldReduceTransparency];
-        on == Bool::YES
-    }
+    NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceTransparency()
 }
 
 /// 圆点在窗口内居中的左下角 origin。
@@ -178,21 +171,18 @@ fn dot_origin(dot: CGFloat) -> CGFloat {
 
 /// 当前所有屏幕(screens[0] 是主屏 / 菜单栏所在屏)。
 fn screens() -> Vec<Retained<NSScreen>> {
-    let arr: Retained<NSArray<NSScreen>> = unsafe { msg_send![class!(NSScreen), screens] };
-    let n: usize = unsafe { msg_send![&arr, count] };
-    (0..n)
-        .map(|i| unsafe { msg_send![&arr, objectAtIndex: i] })
-        .collect()
+    let mtm = MainThreadMarker::new().expect("screens 须在主线程");
+    NSScreen::screens(mtm).to_vec()
 }
 
 /// 屏幕的 CGDirectDisplayID(经 deviceDescription[@"NSScreenNumber"]);取不到返回 0。
 fn screen_device_id(screen: &NSScreen) -> u32 {
-    let dict: Retained<NSDictionary<NSString, NSObject>> =
-        unsafe { msg_send![screen, deviceDescription] };
-    let num: Retained<NSNumber> =
-        unsafe { msg_send![&dict, objectForKey: &*NSString::from_str("NSScreenNumber")] };
-    let v: i64 = unsafe { msg_send![&num, integerValue] };
-    v as u32
+    let dict = screen.deviceDescription();
+    let key = NSString::from_str("NSScreenNumber");
+    dict.objectForKey(&key)
+        .and_then(|o| o.downcast::<NSNumber>().ok())
+        .map(|n| n.integerValue() as u32)
+        .unwrap_or(0)
 }
 
 fn point_in_rect(r: NSRect, p: NSPoint) -> bool {
@@ -205,8 +195,7 @@ fn point_in_rect(r: NSRect, p: NSPoint) -> bool {
 /// 点所在的屏的 display id;不在任何屏内返回 0(用于存「上次所在屏」)。
 pub fn screen_id_at(pt: NSPoint) -> u32 {
     for s in screens() {
-        let fr: NSRect = unsafe { msg_send![&s, frame] };
-        if point_in_rect(fr, pt) {
+        if point_in_rect(s.frame(), pt) {
             return screen_device_id(&s);
         }
     }
@@ -224,12 +213,10 @@ fn screen_with_id(id: u32) -> Option<Retained<NSScreen>> {
 /// 主屏(screens[0])左上角的默认 origin:borderless 浮窗贴可见区(visibleFrame,
 /// 已排除菜单栏 / Dock)左上,留小边距,大致落在窗口红黄绿按钮那一行。
 fn default_origin(win: CGFloat) -> NSPoint {
+    let mtm = MainThreadMarker::new().expect("default_origin 须在主线程");
     let vf: NSRect = match screens().into_iter().next() {
-        Some(s) => unsafe { msg_send![&s, visibleFrame] },
-        None => {
-            let main: Retained<NSScreen> = unsafe { msg_send![class!(NSScreen), mainScreen] };
-            unsafe { msg_send![&main, visibleFrame] }
-        }
+        Some(s) => s.visibleFrame(),
+        None => NSScreen::mainScreen(mtm).expect("无屏幕").visibleFrame(),
     };
     const GAP: CGFloat = 8.0;
     NSPoint::new(vf.origin.x + GAP, vf.origin.y + vf.size.height - win - GAP)
@@ -245,7 +232,7 @@ fn resolve_origin(saved: Option<LightPosition>, win: CGFloat) -> NSPoint {
     let Some(s) = screen_with_id(p.screen_id) else {
         return default_origin(win);
     };
-    let vf: NSRect = unsafe { msg_send![&s, visibleFrame] };
+    let vf = s.visibleFrame();
     let max_x = (vf.origin.x + vf.size.width - win).max(vf.origin.x);
     let max_y = (vf.origin.y + vf.size.height - win).max(vf.origin.y);
     NSPoint::new(p.x.clamp(vf.origin.x, max_x), p.y.clamp(vf.origin.y, max_y))
@@ -360,27 +347,27 @@ pub fn build(
     let frame = NSRect::new(origin, NSSize::new(WIN, WIN));
 
     let alloc: Allocated<NSWindow> = unsafe { msg_send![class!(NSWindow), alloc] };
-    let window: Retained<NSWindow> = unsafe {
-        msg_send![
+    let window = unsafe {
+        NSWindow::initWithContentRect_styleMask_backing_defer(
             alloc,
-            initWithContentRect: frame,
-            styleMask: 0u64, // NSWindowStyleMaskBorderless
-            backing: 2u64,   // NSBackingStoreBuffered
-            defer: Bool::NO,
-        ]
+            frame,
+            NSWindowStyleMask::Borderless,
+            NSBackingStoreType::Buffered,
+            false,
+        )
     };
 
     let clear = NSColor::clearColor();
+    window.setOpaque(false);
+    window.setBackgroundColor(Some(&clear));
+    window.setHasShadow(false);
+    window.setIgnoresMouseEvents(true); // 默认点击穿透
+    window.setMovableByWindowBackground(true); // 关穿透时可拖
+    window.setLevel(objc2_app_kit::NSFloatingWindowLevel); // 浮窗置顶
+    window.setCollectionBehavior(NSWindowCollectionBehavior::CanJoinAllSpaces);
     unsafe {
-        window.setOpaque(false);
-        window.setBackgroundColor(Some(&*clear));
-        window.setHasShadow(false);
-        window.setIgnoresMouseEvents(true); // 默认点击穿透
-        window.setMovableByWindowBackground(true); // 关穿透时可拖
-        window.setLevel(3); // NSFloatingWindowLevel(NSWindowLevel = NSInteger)
-        // setCollectionBehavior 常量 + setReleasedWhenClosed(unsafe: 手动 release)走 msg_send:
-        let _: () = msg_send![&window, setCollectionBehavior: 1u64]; // canJoinAllSpaces
-        let _: () = msg_send![&window, setReleasedWhenClosed: Bool::NO];
+        // ARC 下手动 retain,需 unsafe。
+        window.setReleasedWhenClosed(false);
     }
 
     let dot = dot_size as CGFloat;
@@ -390,8 +377,7 @@ pub fn build(
         dot,
     );
     view.setWantsLayer(true);
-    // view=PillView(NSView 子类),setContentView 的 Option<&NSView> coercion 不确定,用 msg_send 透传。
-    let _: () = unsafe { msg_send![&window, setContentView: &*view] };
+    window.setContentView(Some(&view));
     window.orderFrontRegardless();
     (window, view)
 }
@@ -426,10 +412,9 @@ pub fn set_light(view: &PillView, anim: LightAnim) {
     view.rust_set_color(nscolor(anim_color(anim)));
 
     let layer = view.layer().expect("PillView 须 layer-backed");
-    // 先清掉旧的:opacity 动画 + 波纹环子视图。(removeAnimationForKey/setOpacity 是 CALayer 方法,
-    // quartz-core 强类型未确认,保留 msg_send。)
-    let _: () = unsafe { msg_send![&layer, removeAnimationForKey: &*NSString::from_str("pulse")] };
-    let _: () = unsafe { msg_send![&layer, setOpacity: 1.0f32] };
+    // 先清掉旧的:opacity 动画 + 波纹环子视图。
+    layer.removeAnimationForKey(&NSString::from_str("pulse"));
+    layer.setOpacity(1.0);
     {
         let mut st = view.ivars().borrow_mut();
         for ring in st.rings.drain(..) {
@@ -454,22 +439,20 @@ impl PillView {
 /// 呼吸:opacity 在 [0.2, 1.0] 间往复。周期越短视觉上越「闪」(快闪/慢闪/呼吸)。
 fn add_pulse(layer: &CALayer, period_ms: u32) {
     const FLOOR: f64 = 0.2;
-    let basic: Retained<CABasicAnimation> = unsafe {
-        msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")]
-    };
-    let from_n: Retained<NSNumber> =
-        unsafe { msg_send![class!(NSNumber), numberWithDouble: FLOOR] };
-    let to_n: Retained<NSNumber> = unsafe { msg_send![class!(NSNumber), numberWithDouble: 1.0f64] };
+    let basic = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str("opacity")));
+    let from_n = NSNumber::numberWithDouble(FLOOR);
+    let to_n = NSNumber::numberWithDouble(1.0);
     // autoreverses 下 duration 是半周期;period_ms 为完整周期。
     let duration = period_ms as f64 / 1000.0 / 2.0;
+    // setFromValue/setToValue 强类型但仍 unsafe(AnyObject 类型校验留给调用方)。
     unsafe {
-        let _: () = msg_send![&basic, setFromValue: &*from_n];
-        let _: () = msg_send![&basic, setToValue: &*to_n];
-        let _: () = msg_send![&basic, setDuration: duration];
-        let _: () = msg_send![&basic, setAutoreverses: Bool::YES];
-        let _: () = msg_send![&basic, setRepeatCount: f32::INFINITY];
-        let _: () = msg_send![layer, addAnimation: &*basic, forKey: &*NSString::from_str("pulse")];
+        basic.setFromValue(Some(&from_n));
+        basic.setToValue(Some(&to_n));
     }
+    basic.setDuration(duration); // CABediaTiming trait
+    basic.setAutoreverses(true);
+    basic.setRepeatCount(f32::INFINITY);
+    layer.addAnimation_forKey(&basic, Some(&NSString::from_str("pulse")));
 }
 
 /// 波纹环数量。两环错相半个周期 → 视觉上连续扩散。
@@ -517,32 +500,31 @@ fn ripple_anims(
     duration: f64,
     phase: f64,
 ) {
-    let scale: Retained<CABasicAnimation> = unsafe {
-        msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("transform")]
-    };
-    let opacity: Retained<CABasicAnimation> = unsafe {
-        msg_send![class!(CABasicAnimation), animationWithKeyPath: &*NSString::from_str("opacity")]
-    };
+    let scale = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str("transform")));
+    let opacity = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str("opacity")));
+    // valueWithCATransform3D 仍 unsafe(Additions trait 的 unsafe 约定)。
+    let from_v = unsafe { NSValue::valueWithCATransform3D(from_t) };
+    let to_v = unsafe { NSValue::valueWithCATransform3D(to_t) };
+    // setFromValue/setToValue 强类型但仍 unsafe(AnyObject 类型校验留给调用方)。
     unsafe {
-        let from_v: Retained<NSValue> = NSValue::valueWithCATransform3D(from_t);
-        let to_v: Retained<NSValue> = NSValue::valueWithCATransform3D(to_t);
-        let _: () = msg_send![&scale, setFromValue: &*from_v];
-        let _: () = msg_send![&scale, setToValue: &*to_v];
-        let _: () = msg_send![&scale, setDuration: duration];
-        let _: () = msg_send![&scale, setTimeOffset: phase];
-        let _: () = msg_send![&scale, setRepeatCount: f32::INFINITY];
-        let _: () =
-            msg_send![layer, addAnimation: &*scale, forKey: &*NSString::from_str("rippleScale")];
-
-        let from2: Retained<NSNumber> = msg_send![class!(NSNumber), numberWithDouble: 0.85f64];
-        let to2: Retained<NSNumber> = msg_send![class!(NSNumber), numberWithDouble: 0.0f64];
-        let _: () = msg_send![&opacity, setFromValue: &*from2];
-        let _: () = msg_send![&opacity, setToValue: &*to2];
-        let _: () = msg_send![&opacity, setDuration: duration];
-        let _: () = msg_send![&opacity, setTimeOffset: phase];
-        let _: () = msg_send![&opacity, setRepeatCount: f32::INFINITY];
-        let _: () = msg_send![layer, addAnimation: &*opacity, forKey: &*NSString::from_str("rippleOpacity")];
+        scale.setFromValue(Some(&from_v));
+        scale.setToValue(Some(&to_v));
     }
+    scale.setDuration(duration);
+    scale.setTimeOffset(phase);
+    scale.setRepeatCount(f32::INFINITY);
+    layer.addAnimation_forKey(&scale, Some(&NSString::from_str("rippleScale")));
+
+    let from2 = NSNumber::numberWithDouble(0.85);
+    let to2 = NSNumber::numberWithDouble(0.0);
+    unsafe {
+        opacity.setFromValue(Some(&from2));
+        opacity.setToValue(Some(&to2));
+    }
+    opacity.setDuration(duration);
+    opacity.setTimeOffset(phase);
+    opacity.setRepeatCount(f32::INFINITY);
+    layer.addAnimation_forKey(&opacity, Some(&NSString::from_str("rippleOpacity")));
 }
 
 /// 波纹环最大缩放倍数(扩到 2.6× 圆点直径,仍在 120px 窗口内不裁切)。

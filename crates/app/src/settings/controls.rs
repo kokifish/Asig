@@ -7,8 +7,10 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::Sel;
 use objc2::{MainThreadMarker, Message, class, msg_send, sel};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBox, NSButton, NSColor, NSFont, NSImage, NSPopUpButton, NSSlider,
-    NSSwitch, NSTextField, NSView,
+    NSAutoresizingMaskOptions, NSBezelStyle, NSBox, NSBoxType, NSButton, NSButtonType,
+    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSImage,
+    NSImageScaling, NSImageView, NSPopUpButton, NSSlider, NSSwitch, NSTextAlignment, NSTextField,
+    NSView,
 };
 use objc2_foundation::{NSPoint, NSRect, NSString};
 
@@ -23,20 +25,15 @@ use super::tags::{SWATCH_D, sf_symbol};
 pub(crate) fn add_card(pane: &Retained<NSView>, frame: NSRect) -> Retained<NSBox> {
     let mtm = MainThreadMarker::new().expect("add_card 须主线程");
     let b = NSBox::new(mtm);
-    unsafe {
-        let _: () = msg_send![&b, setBoxType: 4u64]; // NSBoxCustom(常量 feature 不确定,保留裸值)
-    }
+    b.setBoxType(NSBoxType::Custom);
     b.setCornerRadius(10.0);
     b.setBorderWidth(0.0);
     b.setFillColor(&NSColor::quaternaryLabelColor());
     b.setTitle(&NSString::from_str(""));
     b.setFrame(frame);
     b.setWantsLayer(true);
-    // CALayer.setCornerCurve: 常量在 feature 后,保留 msg_send。
     if let Some(layer) = b.layer() {
-        unsafe {
-            let _: () = msg_send![&layer, setCornerCurve: &*NSString::from_str("continuous")];
-        }
+        layer.setCornerCurve(&NSString::from_str("continuous"));
     }
     b.setAutoresizingMask(NSAutoresizingMaskOptions(2)); // 宽度随 pane(state 卡片高度由 layout 重排覆盖)
     pane.addSubview(&b);
@@ -67,9 +64,7 @@ pub(crate) fn add_plain_button(
 ) -> Retained<NSButton> {
     let mtm = MainThreadMarker::new().expect("add_plain_button 须主线程");
     let btn = NSButton::new(mtm);
-    unsafe {
-        let _: () = msg_send![&btn, setBezelStyle: 1u64]; // NSBezelStyleRounded(enum 常量在 feature 后,保留裸值)
-    }
+    btn.setBezelStyle(NSBezelStyle::Push);
     btn.setTitle(&NSString::from_str(title));
     btn.setTag(tag as isize);
     unsafe {
@@ -81,8 +76,8 @@ pub(crate) fn add_plain_button(
     btn
 }
 
-/// Agent 多选 chip:原生 NSButton + NSBezelStyleRecessed(AccessoryBar=13,Apple 专为 scope/chip
-/// toggle 设计的 bezel,如 Mail 文件夹切换)+ NSButtonTypePushOnPushOff(=1,点击 on↔off)。
+/// Agent 多选 chip:原生 NSButton + NSBezelStyle::AccessoryBar(=13,亦别名 Recessed;Apple 专为
+/// scope/chip toggle 设计的 bezel,如 Mail 文件夹切换)+ NSButtonType::PushOnPushOff(点击 on↔off)。
 /// 选中态由系统绘制(accentColor 浅底),单层 button —— 无 NSBox contentView 内缩导致的文字
 /// 错位、无 layer.borderColor 的 CGColor 坑。宽按 sizeToFit 自适应。返回 button(tag=AGENT_OFF+i)。
 pub(crate) fn add_agent_chip(
@@ -94,10 +89,8 @@ pub(crate) fn add_agent_chip(
 ) -> Retained<NSButton> {
     let mtm = MainThreadMarker::new().expect("add_agent_chip 须主线程");
     let btn = NSButton::new(mtm);
-    unsafe {
-        let _: () = msg_send![&btn, setBezelStyle: 13i64]; // NSBezelStyleRecessed/AccessoryBar(chip)
-        let _: () = msg_send![&btn, setButtonType: 1i64]; // NSButtonTypePushOnPushOff(toggle on↔off)
-    }
+    btn.setBezelStyle(NSBezelStyle::AccessoryBar);
+    btn.setButtonType(NSButtonType::PushOnPushOff);
     btn.setBordered(true);
     btn.setTitle(&NSString::from_str(title));
     btn.setTag(tag as isize);
@@ -124,15 +117,11 @@ pub(crate) fn add_tab_button(
     let mtm = MainThreadMarker::new().expect("add_tab_button 须主线程");
     let btn = NSButton::new(mtm);
     btn.setBordered(false);
-    unsafe {
-        let _: () = msg_send![&btn, setAlignment: 0i64]; // NSTextAlignmentLeft(enum 常量在 feature 后,保留裸值)
-    }
+    btn.setAlignment(NSTextAlignment::Left);
     btn.setTitle(&NSString::from_str(title));
     if let Some(img) = image {
         btn.setImage(Some(img));
-        unsafe {
-            let _: () = msg_send![&btn, setImagePosition: 2i64]; // image left(NSCellImagePosition 常量在 feature 后,保留裸值)
-        }
+        btn.setImagePosition(NSCellImagePosition::ImageLeft);
     }
     btn.setTag(tag as isize);
     unsafe {
@@ -158,9 +147,7 @@ pub(crate) fn add_icon_button(
     btn.setBordered(false);
     btn.setTitle(&NSString::from_str("")); // 消掉默认 "Button"
     btn.setImage(Some(&img));
-    unsafe {
-        let _: () = msg_send![&btn, setImagePosition: 5i64]; // image only(NSCellImagePosition 常量在 feature 后,保留裸值)
-    }
+    btn.setImagePosition(NSCellImagePosition::ImageAbove);
     btn.setTag(tag as isize);
     unsafe {
         btn.setTarget(Some(delegate));
@@ -185,9 +172,7 @@ pub(crate) fn add_swatch_button(
     btn.setBordered(false);
     btn.setTitle(&NSString::from_str("")); // 消掉默认 "Button"
     btn.setImage(Some(&img));
-    unsafe {
-        let _: () = msg_send![&btn, setImagePosition: 5i64]; // image only(NSCellImagePosition 常量在 feature 后,保留裸值)
-    }
+    btn.setImagePosition(NSCellImagePosition::ImageAbove);
     btn.setTag(tag as isize);
     unsafe {
         btn.setTarget(Some(delegate));
@@ -209,9 +194,7 @@ pub(crate) fn add_radio_button(
 ) -> Retained<NSButton> {
     let mtm = MainThreadMarker::new().expect("add_radio_button 须主线程");
     let btn = NSButton::new(mtm);
-    unsafe {
-        let _: () = msg_send![&btn, setButtonType: 4u64]; // NSButtonTypeRadio(enum 常量在 feature 后,保留裸值)
-    }
+    btn.setButtonType(NSButtonType::Radio);
     btn.setTitle(&NSString::from_str(title));
     btn.setTag(tag as isize);
     unsafe {
@@ -244,9 +227,8 @@ pub(crate) fn add_text(
         label.setFont(Some(&NSFont::boldSystemFontOfSize(14.0)));
     }
     if center {
-        unsafe {
-            let _: () = msg_send![&label, setAlignment: 2i64]; // NSTextAlignmentCenter(enum 常量在 feature 后,保留裸值)
-        }
+        // NSTextAlignmentCenter=2(此版本 bindings 未导出 Center 常量,保留裸值)。
+        label.setAlignment(NSTextAlignment(2));
     }
     pane.addSubview(&label);
     label
@@ -285,9 +267,12 @@ pub(crate) fn add_switch(
 ) -> Retained<NSSwitch> {
     let mtm = MainThreadMarker::new().expect("NSSwitch 须主线程");
     let sw = NSSwitch::new(mtm);
+    sw.setState(if on {
+        NSControlStateValueOn
+    } else {
+        NSControlStateValueOff
+    });
     unsafe {
-        // setState 取 NSControlStateValue enum;用裸值 1/0 表 on/off,保留 msg_send!。
-        let _: () = msg_send![&sw, setState: if on { 1i64 } else { 0 }];
         sw.setTarget(Some(delegate));
         sw.setAction(Some(action));
     }
@@ -322,16 +307,13 @@ pub(crate) fn add_popup(
 
 /// header 图标:NSImageView + 单色(template)SF Symbol,contentTintColor=labelColor,随明暗。
 pub(crate) fn add_header_icon(pane: &Retained<NSView>, frame: NSRect, symbol: &str) {
+    let mtm = MainThreadMarker::new().expect("add_header_icon 须主线程");
     let img = sf_symbol(symbol);
     img.setTemplate(true);
-    // NSImageView 的 cargo feature 未开(只裸 msg_send! 用 class! 透传),保留 msg_send! 构造,
-    // 以免为单一图标控件引入 feature。其余 setter 同理走 msg_send!。
-    unsafe {
-        let iv: Retained<NSView> = msg_send![class!(NSImageView), new];
-        let _: () = msg_send![&iv, setFrame: frame];
-        let _: () = msg_send![&iv, setImage: &*img];
-        let _: () = msg_send![&iv, setImageScaling: 0i64]; // scaleProportionallyDown
-        let _: () = msg_send![&iv, setContentTintColor: &*NSColor::labelColor()];
-        let _: () = msg_send![&**pane, addSubview: &*iv];
-    }
+    let iv = NSImageView::new(mtm);
+    iv.setFrame(frame);
+    iv.setImage(Some(&img));
+    iv.setImageScaling(NSImageScaling::ScaleProportionallyDown);
+    iv.setContentTintColor(Some(&NSColor::labelColor()));
+    pane.addSubview(&iv);
 }
