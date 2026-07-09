@@ -4,13 +4,13 @@
 //! `core::openclaw::probe`(单一事实源),替代 `scripts/probe-openclaw.sh` 的 bash 重新实现
 //! —— 消除 CLAUDE.md 强制的 rs/sh 双实现同步负担,判定改动零漂移。
 
-use agent_light_core::openclaw::{self, AgentProbe};
+use agent_light_core::openclaw::{self, AgentProbe, OpenClawSource};
 
 /// 打印 db 路径 + 每 agent 诊断行(一行一个,便于 watch / jq / CI 断言)。
 pub fn probe_openclaw() {
-    let db = std::env::var("HOME")
-        .map(|h| format!("{h}/.openclaw/state/openclaw.sqlite"))
-        .unwrap_or_else(|_| "?".into());
+    let db = OpenClawSource::new()
+        .map(|s| s.db_path().display().to_string())
+        .unwrap_or_else(|| "(home 未找到)".into());
     eprintln!("db: {db}");
     for p in openclaw::probe() {
         println!("{}", format_probe(&p));

@@ -85,7 +85,9 @@ impl ClaudeLikeSource {
 
     /// kill(pid, 0) == 0 表示进程存活;ESRCH(不在)返回非 0。
     fn pid_alive(pid: u32) -> bool {
-        unsafe { libc::kill(pid as i32, 0) == 0 }
+        // SAFETY: signal 0 不发信号,只探测进程存在性;pid 来自本地 session 文件,非敌对输入。
+        let pid = i32::try_from(pid).unwrap_or(-1);
+        pid >= 0 && unsafe { libc::kill(pid, 0) == 0 }
     }
 }
 
@@ -109,7 +111,7 @@ impl AgentSource for ClaudeLikeSource {
             };
             files.push(ParsedFile::from(&f));
         }
-        let mut seen = self.seen.lock().unwrap();
+        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
         let root = &self.root;
         discover_from(
             &files,

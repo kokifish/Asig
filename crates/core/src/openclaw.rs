@@ -49,8 +49,18 @@ impl OpenClawSource {
         })
     }
 
-    fn db_path(&self) -> PathBuf {
+    /// 主库路径(cli 打印 / 单一事实源)。
+    pub fn db_path(&self) -> PathBuf {
         self.root.join("state").join("openclaw.sqlite")
+    }
+
+    /// 只读打开主库(WAL,不抢 openclaw 写锁)。失败 → None(discover/probe 据此回退)。
+    fn connect(&self) -> Option<Connection> {
+        Connection::open_with_flags(
+            self.db_path(),
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .ok()
     }
 }
 
@@ -60,12 +70,10 @@ impl AgentSource for OpenClawSource {
     }
 
     fn discover(&self) -> Vec<AgentSession> {
-        let path = self.db_path();
-        let Ok(conn) = Connection::open_with_flags(
-            &path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ) else {
-            return Vec::new(); // 没装 openclaw / 打不开 → 无会话
+        let Some(conn) = self.connect() else {
+            // 打不开:没装 openclaw(静默)vs 库损坏(应可见)。提示路径便于排障。
+            eprintln!("Asig: openclaw 库打不开: {}", self.db_path().display());
+            return Vec::new();
         };
         let signals = latest_session_signals(&self.root);
         discover_from(&conn, now_ms(), &signals)
@@ -80,6 +88,10 @@ fn collect(
     now: u64,
     session_signals: &HashMap<String, SessionSignal>,
 ) -> Vec<(String, AgentAcc, Option<SessionSignal>)> {
+    // now==0(系统时钟未就绪)→ cutoff 会失效(last_seen_at>=0 全过),早返回避免历史垃圾进结果。
+    if now == 0 {
+        return Vec::new();
+    }
     let cutoff_err = now.saturating_sub(ERROR_RECENT_MS) as i64;
     let cutoff_agent = now.saturating_sub(AGENT_RECENT_MS) as i64;
 
@@ -255,18 +267,13 @@ pub struct AgentProbe {
 /// 供 CLI `agent-light probe-openclaw` 用 —— 单一判定源,替代 scripts/probe-openclaw.sh 的
 /// bash 重新实现(消除 CLAUDE.md 强制 rs/sh 同步负担)。没装 openclaw / 打不开库 → 空。
 pub fn probe() -> Vec<AgentProbe> {
-    let Some(home) = dirs::home_dir() else {
+    let Some(src) = OpenClawSource::new() else {
         return Vec::new();
     };
-    let root = home.join(".openclaw");
-    let db = root.join("state").join("openclaw.sqlite");
-    let Ok(conn) = Connection::open_with_flags(
-        &db,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) else {
+    let Some(conn) = src.connect() else {
         return Vec::new();
     };
-    let signals = latest_session_signals(&root);
+    let signals = latest_session_signals(&src.root);
     let now = now_ms();
     collect(&conn, now, &signals)
         .into_iter()
@@ -968,5 +975,14 @@ mod tests {
             agent(c, "ghost", old);
         });
         assert!(discover_from(&conn, NOW, &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn collect_now_zero_returns_empty() {
+        // 时钟未就绪(now=0):cutoff 会失效(last_seen_at>=0 全过),collect 早返回空。
+        let conn = db(|c| {
+            agent(c, "ghost", 0);
+        });
+        assert!(collect(&conn, 0, &HashMap::new()).is_empty());
     }
 }
