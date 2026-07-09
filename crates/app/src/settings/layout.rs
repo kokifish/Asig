@@ -2,17 +2,17 @@
 
 use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSBox, NSButton, NSSlider, NSTextField, NSView};
+use objc2_app_kit::{NSBox, NSButton, NSSlider, NSTextField};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use agent_light_core::{AgentKind, Anim, StateStyle, StyleKey};
+use agent_light_core::{Anim, StateStyle, StyleKey};
 
 use crate::overlay::swatch_image;
 
 use super::tags::{
-    AGENT_KIND_ORDER, AGENT_OFF, ANIM_ORDER, CARD_BOT_PAD, CARD_TOP_PAD, COLOR_GAP, COLOR_ORDER,
-    CONTENT_PAD_X, H, HEADER_GAP, ROW_H, SPEED_MAX, SPEED_MIN, SWATCH_D, TOP_INSET, hz_of,
+    ANIM_ORDER, CARD_BOT_PAD, CARD_TOP_PAD, COLOR_GAP, COLOR_ORDER, CONTENT_PAD_X, H, HEADER_GAP,
+    ROW_H, SPEED_MAX, SPEED_MIN, SWATCH_D, TOP_INSET, hz_of,
 };
 
 /// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
@@ -151,18 +151,5 @@ pub fn refresh_duration(c: &StateControls, secs: u32) {
     if let (Some(slider), Some(label)) = (&c.duration, &c.duration_label) {
         slider.setDoubleValue(secs as f64);
         label.setStringValue(&NSString::from_str(&format!("{} s", secs)));
-    }
-}
-
-/// 刷新 General pane「监控的 Agent」chip 的选中态(按 enabled_agents 当前值)。
-/// chip 是 recessed toggle button,选中=state on(系统画强调色浅底)。tag = AGENT_OFF + i。
-#[allow(dead_code)] // recessed toggle button 点击时系统已切 state;保留供 reset/rebuild 等批量同步场景。
-pub fn refresh_agent_chips(content: &Retained<NSView>, enabled: &[AgentKind]) {
-    for (i, &kind) in AGENT_KIND_ORDER.iter().enumerate() {
-        if let Some(b) = super::view_with_tag(content, AGENT_OFF + i as i64) {
-            unsafe {
-                let _: () = msg_send![&b, setState: if enabled.contains(&kind) { 1i64 } else { 0 }];
-            }
-        }
     }
 }

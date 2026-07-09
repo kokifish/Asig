@@ -35,7 +35,7 @@ use pane_about::build_about_pane;
 use pane_general::build_general_pane;
 use pane_state::build_state_pane;
 use strings::{Strings, strings_for};
-use tags::{STATE_KEYS, sf_symbol};
+use tags::{STATE_KEYS, TAB_ABOUT, TAB_GENERAL, sf_symbol};
 
 // 子模块声明。
 mod controls;
@@ -47,23 +47,13 @@ mod pane_state;
 mod strings;
 mod tags;
 
-// ---- 外部(crate::settings::)所需的 pub use 重导出 ----
+// ---- 外部(crate::settings::)所需的 pub use 重导出(收敛到 app 层实际引用)----
 pub use glass::update_selection;
-#[allow(unused_imports)]
-// refresh_agent_chips 保留供 rebuild/reset 批量同步(当前 build 内已 setState)
-pub use layout::{
-    StateControls, layout_state_pane, refresh_agent_chips, refresh_duration, refresh_state_controls,
-};
+pub use layout::{StateControls, layout_state_pane, refresh_duration, refresh_state_controls};
 pub use strings::reset_confirm_texts;
-// pub const / pub fn 重导出(保持原 pub 可见性 —— 即使当前外部未全部引用,
-// 拆分前它们都是 settings 的公开 API)。`#[allow(unused_imports)]` 抑制
-// 「重导出的符号本 crate 内未通过此路径使用」的告警(clippy -D warnings)。
-#[allow(unused_imports)]
 pub use tags::{
     AGENT_KIND_ORDER, AGENT_OFF, ANIM_OFF, ANIM_ORDER, COLOR_OFF, COLOR_ORDER, CONTENT_W,
-    LANG_EN_TAG, LANG_ZH_TAG, POLL_PRESETS_MS, RESET_OFF, SIZE_LABEL_TAG, SPEED_LABEL_OFF,
-    SPEED_MAX, SPEED_MIN, SPEED_OFF, TAB_ABOUT, TAB_GENERAL, THEME_OFF, parse_control_tag,
-    stylekey_of_tab,
+    LANG_EN_TAG, POLL_PRESETS_MS, SIZE_LABEL_TAG, THEME_OFF, parse_control_tag,
 };
 
 pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
