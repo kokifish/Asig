@@ -3,8 +3,8 @@
 use std::cell::RefCell;
 
 use agent_light_core::{
-    AgentStatus, Anim, Color, GRADIENT_LAYERS_DEFAULT, Lang, LightAnim, LightPosition, Monitor,
-    Settings, Snapshot, StateStyle, StyleKey, Theme,
+    AgentStatus, Anim, Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN,
+    Lang, LightAnim, LightPosition, Monitor, Settings, Snapshot, StateStyle, StyleKey, Theme,
 };
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
@@ -258,10 +258,10 @@ define_class!(
                 return;
             };
             let v: f64 = unsafe { msg_send![sender, doubleValue] };
-            let layers = v.round().clamp(
-                agent_light_core::GRADIENT_LAYERS_MIN as f64,
-                agent_light_core::GRADIENT_LAYERS_MAX as f64,
-            ) as u8;
+            let layers = v
+                .round()
+                .clamp(GRADIENT_LAYERS_MIN as f64, GRADIENT_LAYERS_MAX as f64)
+                as u8;
             self.edit_style(key, |st| st.gradient_layers = layers);
             if let Some(c) = self.ivars().state_controls.borrow().get(&key) {
                 unsafe {

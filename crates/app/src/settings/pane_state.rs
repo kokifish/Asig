@@ -2,8 +2,9 @@
 
 use objc2::DefinedClass;
 use objc2::rc::Retained;
+use objc2::runtime::Sel;
 use objc2::sel;
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSButton, NSView};
+use objc2_app_kit::{NSAutoresizingMaskOptions, NSButton, NSSlider, NSTextField, NSView};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
 use agent_light_core::{
@@ -24,6 +25,35 @@ use super::tags::{
     GRADIENT_LABEL_OFF, GRADIENT_OFF, H, RESET_OFF, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN,
     SPEED_OFF, SWATCH_D, TOP_INSET, tab_of_key,
 };
+
+/// State pane 一行「name 标签 + 滑块 + 右侧值标签」:三控件先占位零尺寸(frame 由 `layout_state_pane`
+/// 后设),slider/value 打 tag(base + off)。收口 speed/gradient 两处「slider + set_tag + 文本」样板。
+#[allow(clippy::too_many_arguments)]
+fn add_state_slider(
+    pane: &Retained<NSView>,
+    delegate: &AppDelegate,
+    base: i64,
+    name: &str,
+    slider_off: i64,
+    label_off: i64,
+    min: f64,
+    max: f64,
+    val: f64,
+    action: Sel,
+    value_text: &str,
+) -> (
+    Retained<NSSlider>,
+    Retained<NSTextField>,
+    Retained<NSTextField>,
+) {
+    let zero = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
+    let name_lbl = add_text(pane, zero, name, false, false);
+    let slider = add_slider(pane, zero, min, max, val, action, delegate);
+    set_tag(&slider, base + slider_off);
+    let value_lbl = add_text(pane, zero, value_text, false, false);
+    set_tag(&value_lbl, base + label_off);
+    (slider, value_lbl, name_lbl)
+}
 
 pub(crate) fn build_state_pane(
     delegate: &AppDelegate,
@@ -103,64 +133,43 @@ pub(crate) fn build_state_pane(
             sel!(changeAnim:),
         ));
     }
-    let speed_lbl = add_text(
+    let (speed, speed_label, speed_lbl) = add_state_slider(
         &pane,
-        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+        delegate,
+        base,
         st.speed,
-        false,
-        false,
-    );
-    let speed = add_slider(
-        &pane,
-        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+        SPEED_OFF,
+        SPEED_LABEL_OFF,
         SPEED_MIN,
         SPEED_MAX,
         1.0,
         sel!(changeSpeed:),
-        delegate,
-    );
-    set_tag(&speed, base + SPEED_OFF);
-    let speed_label = add_text(
-        &pane,
-        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
         "—",
-        false,
-        false,
     );
-    set_tag(&speed_label, base + SPEED_LABEL_OFF);
 
     // 渐变层数(整数拉杆 0..=4,仅作用于浮窗圆点本体)+ 标签 + 右侧 slider 值。
-    let gradient_lbl = add_text(
-        &pane,
-        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
-        st.gradient,
-        false,
-        false,
-    );
     let layers = delegate
         .ivars()
         .settings
         .borrow()
         .style_for(key)
         .gradient_layers;
-    let gradient = add_slider(
+    let (gradient, gradient_label, gradient_lbl) = add_state_slider(
         &pane,
-        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+        delegate,
+        base,
+        st.gradient,
+        GRADIENT_OFF,
+        GRADIENT_LABEL_OFF,
         GRADIENT_LAYERS_MIN as f64,
         GRADIENT_LAYERS_MAX as f64,
         layers as f64,
         sel!(changeGradient:),
-        delegate,
-    );
-    set_tag(&gradient, base + GRADIENT_OFF);
-    let gradient_label = add_text(
-        &pane,
-        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
         &format!("{}", layers),
-        false,
-        false,
     );
-    set_tag(&gradient_label, base + GRADIENT_LABEL_OFF);
+    // 整数滑块:5 刻度(0..=4)吸附,旋钮只停整数位(speed 是连续 Hz 不吸附)。
+    gradient.setNumberOfTickMarks((GRADIENT_LAYERS_MAX - GRADIENT_LAYERS_MIN + 1) as isize);
+    gradient.setAllowsTickMarkValuesOnly(true);
 
     // DoneNotif 专属:持续时间(秒)拉杆 + 标签 + 右侧 `xx s` 实时值。其余状态 None。
     let (duration, duration_lbl, duration_label) = if key == StyleKey::DoneNotif {

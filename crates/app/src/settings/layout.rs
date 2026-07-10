@@ -90,48 +90,34 @@ pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
             NSSize::new(72.0, 22.0),
         ));
     }
-    c.speed_lbl.setFrame(NSRect::new(
-        NSPoint::new(lx, speed_mid - 10.0),
-        NSSize::new(lw, 20.0),
-    ));
-    c.speed.setFrame(NSRect::new(
-        NSPoint::new(cx, speed_mid - 11.0),
-        NSSize::new(cw - 64.0, 22.0),
-    ));
-    c.speed_label.setFrame(NSRect::new(
-        NSPoint::new(cx + cw - 56.0, speed_mid - 10.0),
-        NSSize::new(56.0, 20.0),
-    ));
-    // 渐变层数行(speed 下一行,整数拉杆 + 右侧 slider 值)。
-    c.gradient_lbl.setFrame(NSRect::new(
-        NSPoint::new(lx, gradient_mid - 10.0),
-        NSSize::new(lw, 20.0),
-    ));
-    c.gradient.setFrame(NSRect::new(
-        NSPoint::new(cx, gradient_mid - 11.0),
-        NSSize::new(cw - 64.0, 22.0),
-    ));
-    c.gradient_label.setFrame(NSRect::new(
-        NSPoint::new(cx + cw - 56.0, gradient_mid - 10.0),
-        NSSize::new(56.0, 20.0),
-    ));
+    // 一行「标签 + 滑块 + 右侧值」的几何(垂直居中 mid_y)—— speed/gradient/duration 共用。
+    let slider_row = |lbl: &NSTextField, slider: &NSSlider, value: &NSTextField, mid_y: CGFloat| {
+        lbl.setFrame(NSRect::new(
+            NSPoint::new(lx, mid_y - 10.0),
+            NSSize::new(lw, 20.0),
+        ));
+        slider.setFrame(NSRect::new(
+            NSPoint::new(cx, mid_y - 11.0),
+            NSSize::new(cw - 64.0, 22.0),
+        ));
+        value.setFrame(NSRect::new(
+            NSPoint::new(cx + cw - 56.0, mid_y - 10.0),
+            NSSize::new(56.0, 20.0),
+        ));
+    };
+    slider_row(&c.speed_lbl, &c.speed, &c.speed_label, speed_mid);
+    slider_row(
+        &c.gradient_lbl,
+        &c.gradient,
+        &c.gradient_label,
+        gradient_mid,
+    );
     // DoneNotif:持续时间行(gradient 下一行)。
     if let (Some(slider), Some(lbl), Some(vlabel)) =
         (&c.duration, &c.duration_lbl, &c.duration_label)
     {
         let dur_mid = anim_top - ROW_H * 3.0 - ROW_H / 2.0;
-        lbl.setFrame(NSRect::new(
-            NSPoint::new(lx, dur_mid - 10.0),
-            NSSize::new(lw, 20.0),
-        ));
-        slider.setFrame(NSRect::new(
-            NSPoint::new(cx, dur_mid - 11.0),
-            NSSize::new(cw - 64.0, 22.0),
-        ));
-        vlabel.setFrame(NSRect::new(
-            NSPoint::new(cx + cw - 56.0, dur_mid - 10.0),
-            NSSize::new(56.0, 20.0),
-        ));
+        slider_row(lbl, slider, vlabel, dur_mid);
     }
 }
 
