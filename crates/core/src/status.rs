@@ -34,7 +34,7 @@ impl AgentStatus {
         match self {
             Self::Done => LightAnim::Ripple {
                 color: Color::Green,
-                period_ms: 1600,
+                period_ms: 3333, // ≈0.3Hz(1000/0.3);Done 波纹默认速度
                 layers: GRADIENT_LAYERS_DEFAULT,
             }, // 波纹
             Self::Working => LightAnim::Pulse {

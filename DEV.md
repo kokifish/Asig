@@ -109,7 +109,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 | 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
 | 波纹 | Ripple | 两圈环以圆点为圆心、错相(半周期)对称扩散并淡出 | `transform`（绕圆心缩放的 `CATransform3D`）+ `opacity`（2 个错相 `RingView`），单程一次扩散 |
 
-- Default period：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=1600（波纹）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
+- Default period：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=3333（波纹,≈0.3Hz）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（LightBlue，450ms）覆盖全局态。
 - Configurable：Settings 里每状态独立改 动效 + 颜色 + 周期 + 渐变层数（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
 - Carrier：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用两个错相 `RingView` 子视图扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示自绘彩色圆点（`overlay::swatch_image`，`setTemplate:NO` 保留真彩），不可设动效。
