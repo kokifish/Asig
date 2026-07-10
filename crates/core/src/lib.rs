@@ -70,8 +70,7 @@ pub struct Monitor {
 
 impl Default for Monitor {
     fn default() -> Self {
-        // 默认全部启用(Trae 暂未实现,不入列表)。
-        Self::with_enabled(&[AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw])
+        Self::with_enabled(&AgentKind::IMPLEMENTED)
     }
 }
 

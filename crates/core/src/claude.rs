@@ -1,12 +1,18 @@
 //! Claude Code 与 CodeBuddy 共用同一实现。
 //!
 //! 两者都是"会话状态文件 + (可选)hook"模式,且文件格式同构:
-//!   ~/.claude/sessions/<pid>.json    status: "busy" | "idle"
+//!   ~/.claude/sessions/<pid>.json    status: "busy" | "idle" | "shell"
 //!   ~/.codebuddy/sessions/<pid>.json (CodeBuddy 是 Claude Code hook 的兼容 clone)
 //! 区别仅在根目录与进程名 —— 所以一个 ClaudeLikeSource 参数化复用。
 //!
+//! **按 cwd 聚合**:同目录下的多个 session(用户手开的 interactive + claude
+//! `--fork-session` 派发的后台子 claude `kind:"bg"`)合并为**一个**会话 —— interactive
+//! 作主,bg 不单独显示,但其 busy 活跃度合并进主会话状态。否则把任务 fork 到后台跑时,
+//! 主进程会 idle 成 shell,Asig 会误判为不在运行。纯 bg 无 interactive 的目录跳过(避免
+//! 与 OpenClaw source 重叠)。
+//!
 //! Offline 检测(廉价、可靠):
-//!   - `status` 字段只有 busy/idle,没有 error/offline;
+//!   - `status` 字段只有 busy/idle/shell,没有 error/offline;
 //!   - `statusUpdatedAt` 实测只在**状态转换**时写,不是周期心跳(busy 会话跑很久也
 //!     不更新),故**不能**用心跳新鲜度判"卡死"——会误报长任务;
 //!   - 可靠信号:进程死了。Claude 干净退出会清掉 session 文件;**残留的死 pid 文件
@@ -27,36 +33,23 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// ~/.claude|~/.codebuddy/sessions/<pid>.json 的结构(实测,版本 2.1.x)。
+/// ~/.claude|~/.codebuddy/sessions/<pid>.json 的结构(实测,版本 2.1.x;字段 camelCase)。
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionFile {
     pid: u32,
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
     cwd: Option<String>,
+    /// `"interactive"`(用户手动 REPL)/ `"bg"`(claude `--fork-session` 派发的后台子 claude)。
+    /// bg 不单独显示,但其 busy 活跃度合并进**同 cwd 的 interactive 主会话** —— 否则 fork
+    /// 任务到后台跑时主进程 idle 成 shell,Asig 会误判不在运行。纯 bg 无 interactive 的目录
+    /// 整组跳过(避免与 OpenClaw source 重叠)。CodeBuddy 等无此字段则为 None(当 interactive)。
     #[serde(default)]
-    status: Option<String>, // "busy" | "idle"
-}
-
-/// 与文件解析同构的纯数据(供纯函数 `discover_from` / 单测用,无需 serde)。
-#[derive(Debug, Clone)]
-pub(crate) struct ParsedFile {
-    pub pid: u32,
-    pub session_id: Option<String>,
-    pub cwd: Option<String>,
-    pub status: Option<String>,
-}
-
-impl From<&SessionFile> for ParsedFile {
-    fn from(f: &SessionFile) -> Self {
-        Self {
-            pid: f.pid,
-            session_id: f.session_id.clone(),
-            cwd: f.cwd.clone(),
-            status: f.status.clone(),
-        }
-    }
+    kind: Option<String>,
+    #[serde(default)]
+    status: Option<String>, // "busy" | "idle" | "shell"
 }
 
 pub struct ClaudeLikeSource {
@@ -109,7 +102,7 @@ impl AgentSource for ClaudeLikeSource {
             let Ok(f): Result<SessionFile, _> = serde_json::from_str(&text) else {
                 continue;
             };
-            files.push(ParsedFile::from(&f));
+            files.push(f);
         }
         let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
         let root = &self.root;
@@ -126,56 +119,120 @@ impl AgentSource for ClaudeLikeSource {
 /// 纯函数核心:给定本轮发现的文件集 + 历史可见状态 + 存活判定 + stop_reason 探测,决定
 /// 每个会话的状态,并更新 `seen`。文件系统 / pid / 时间 / transcript 都被抽掉,便于 MOCK。
 ///
-/// 返回的会话按文件顺序;`seen` 会:记录本轮见到的 pid,并裁掉本轮没出现的(已被
-/// Claude 清理 / 干净退出)。
+/// **按 cwd 聚合**:同目录下的多个 session(用户手开的 interactive + claude `--fork-session`
+/// 派发的 bg 子进程)合并为**一个**会话 —— interactive 作主(标识/cwd/sessionId),bg 不单独
+/// 显示,但其 busy 活跃度合并进主会话状态(取组内最活跃)。否则 fork 任务到后台跑时,主进程
+/// idle 成 shell,会被误判为不在运行。纯 bg 无 interactive 的目录整组跳过(避免与 OpenClaw
+/// source 重叠)。`seen` 只记每个主(interactive)pid;本轮消失的主 pid 被自然裁掉。
 fn discover_from(
-    files: &[ParsedFile],
+    files: &[SessionFile],
     seen: &mut HashMap<u32, AgentStatus>,
     is_alive: impl Fn(u32) -> bool,
     stop_reason_of: impl Fn(&str) -> Option<String>,
     kind: AgentKind,
 ) -> Vec<AgentSession> {
+    // 按目录分组,记下首次出现顺序(稳定输出)。
+    let mut groups: HashMap<Option<&str>, Vec<&SessionFile>> = HashMap::new();
+    let mut order: Vec<Option<&str>> = Vec::new();
+    for f in files {
+        let c = f.cwd.as_deref();
+        if !groups.contains_key(&c) {
+            order.push(c);
+        }
+        groups.entry(c).or_default().push(f);
+    }
+
     let mut live: HashSet<u32> = HashSet::new();
     let mut out = Vec::new();
-    for f in files {
-        let prev = seen.get(&f.pid).copied();
+    for cwd in order {
+        let group = &groups[&cwd];
+        // 主 = 组内首个 interactive(kind != bg);纯 bg 无主 → 跳过整组(避免与 OpenClaw 重叠)。
+        let Some(primary) = group
+            .iter()
+            .find(|f| f.kind.as_deref() != Some("bg"))
+            .copied()
+        else {
+            continue;
+        };
+        let prev = seen.get(&primary.pid).copied();
+        let Some(st) = group_status(primary, group, prev, &is_alive, &stop_reason_of) else {
+            continue;
+        };
+        seen.insert(primary.pid, st);
+        live.insert(primary.pid);
+        out.push(AgentSession {
+            kind,
+            id: format!("{:?}:{}", kind, primary.pid),
+            native_id: primary.pid.to_string(),
+            cwd: primary.cwd.clone().map(PathBuf::from),
+            project: None,
+            status: st,
+            label: primary.session_id.clone(),
+        });
+    }
+    // 本轮没出现的(主)pid → 不再盯。干净退出就这样被自然忘掉。
+    seen.retain(|pid, _| live.contains(pid));
+    out
+}
+
+/// 组内(同 cwd 的 interactive 主 + bg 子进程)聚合状态:对每个 file 调 `classify`,
+/// 取**最活跃**的(NeedsDeci > Working > Done > Offline)。bg 子进程的 busy 据此贡献给主会话。
+fn group_status(
+    primary: &SessionFile,
+    group: &[&SessionFile],
+    prev_of_primary: Option<AgentStatus>,
+    is_alive: &impl Fn(u32) -> bool,
+    stop_reason_of: &impl Fn(&str) -> Option<String>,
+) -> Option<AgentStatus> {
+    let mut best: Option<AgentStatus> = None;
+    for &f in group {
+        let prev = if f.pid == primary.pid {
+            prev_of_primary
+        } else {
+            None
+        };
         let alive = is_alive(f.pid);
-        // 只对 busy 会话读 transcript(idle→Done 无需、省一次文件读)。
+        // 只对 busy 进程读 transcript(idle/shell→Done 无需、省一次文件读)。
         let sr = if alive && f.status.as_deref() == Some("busy") {
-            f.session_id.as_deref().and_then(&stop_reason_of)
+            f.session_id.as_deref().and_then(stop_reason_of)
         } else {
             None
         };
         let Some(st) = classify(f, prev, alive, sr.as_deref()) else {
             continue;
         };
-        seen.insert(f.pid, st);
-        live.insert(f.pid);
-        out.push(AgentSession {
-            kind,
-            id: format!("{:?}:{}", kind, f.pid),
-            native_id: f.pid.to_string(),
-            cwd: f.cwd.clone().map(PathBuf::from),
-            project: None,
-            status: st,
-            label: f.session_id.clone(),
-        });
+        best = Some(most_active(best, st));
     }
-    // 本轮没出现的 pid(文件消失)→ 不再盯。干净退出就这样被自然忘掉。
-    seen.retain(|pid, _| live.contains(pid));
-    out
+    best
+}
+
+/// 活跃度排序:NeedsDeci > Working > Done > Offline;返回更活跃者。
+fn most_active(a: Option<AgentStatus>, b: AgentStatus) -> AgentStatus {
+    fn rank(st: AgentStatus) -> u8 {
+        match st {
+            AgentStatus::NeedsDeci => 4,
+            AgentStatus::Error => 4, // 出错也需关注;Claude source 不产生(OpenClaw 才有)
+            AgentStatus::Working => 3,
+            AgentStatus::Done => 2,
+            AgentStatus::Offline => 1,
+        }
+    }
+    match a {
+        Some(prev) if rank(prev) >= rank(b) => prev,
+        _ => b,
+    }
 }
 
 /// 单文件状态判定(纯函数)。
 ///
-/// - pid 活且 `idle` → Done;
+/// - pid 活且 `idle`/`shell` → Done;
 /// - pid 活且 `busy`:`stop_reason == "end_turn"`(模型说完、等用户回)→ NeedsDeci;
 ///   `tool_use`/未知/读不到 → Working(正在跑工具);
 /// - pid 活、status 未知 → Working;
 /// - pid 死且 `seen` 里曾见过(活的)→ **Offline**(崩溃/被杀,文件残留);
 /// - pid 死且从没见过 → `None`(古老残留,跳过,不制造噪音)。
 fn classify(
-    f: &ParsedFile,
+    f: &SessionFile,
     prev: Option<AgentStatus>,
     alive: bool,
     stop_reason: Option<&str>,
@@ -231,11 +288,17 @@ fn read_tail_stop_reason(path: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn pf(pid: u32, status: Option<&str>) -> ParsedFile {
-        ParsedFile {
+    fn pf(pid: u32, status: Option<&str>) -> SessionFile {
+        pf_cwd(pid, status, None)
+    }
+
+    /// 带 cwd 的构造(不同 cwd = 不同会话,用以测试聚合边界)。
+    fn pf_cwd(pid: u32, status: Option<&str>, cwd: Option<&str>) -> SessionFile {
+        SessionFile {
             pid,
             session_id: Some(format!("s{pid}")), // 有 session_id 才会触发 transcript 读取
-            cwd: None,
+            cwd: cwd.map(str::to_string),
+            kind: None,
             status: status.map(str::to_string),
         }
     }
@@ -316,6 +379,19 @@ mod tests {
     fn classify_dead_never_seen_is_skipped() {
         // 古老残留 → None(不报)
         assert_eq!(classify(&pf(1, Some("busy")), None, false, None), None);
+    }
+
+    // ---- most_active:聚合活跃度 ----
+
+    #[test]
+    fn most_active_picks_busier() {
+        use AgentStatus::*;
+        assert_eq!(most_active(Some(Working), Done), Working);
+        assert_eq!(most_active(Some(Done), Working), Working);
+        assert_eq!(most_active(Some(NeedsDeci), Working), NeedsDeci);
+        assert_eq!(most_active(Some(Working), NeedsDeci), NeedsDeci);
+        assert_eq!(most_active(Some(Offline), Working), Working);
+        assert_eq!(most_active(None, Done), Done);
     }
 
     // ---- discover_from:MOCK(is_alive / stop_reason / files / seen 全注入)----
@@ -441,10 +517,13 @@ mod tests {
 
     #[test]
     fn discover_mixed_alive_and_dead() {
-        // 100 活着 busy;200 上轮见过、现在死了 → 一个 Working 一个 Offline
+        // 不同目录 = 不同会话:100 活着 busy;200 上轮见过、现在死了 → 一 Working 一 Offline
         let mut seen = HashMap::from([(200, AgentStatus::Working)]);
         let out = discover_from(
-            &[pf(100, Some("busy")), pf(200, Some("busy"))],
+            &[
+                pf_cwd(100, Some("busy"), Some("/a")),
+                pf_cwd(200, Some("busy"), Some("/b")),
+            ],
             &mut seen,
             |pid| pid == 100,
             |_| None,
@@ -453,5 +532,97 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].status, AgentStatus::Working);
         assert_eq!(out[1].status, AgentStatus::Offline);
+    }
+
+    // ---- 按 cwd 聚合(interactive + bg 子进程)----
+
+    #[test]
+    fn discover_bg_merges_into_interactive_same_cwd() {
+        // 同 cwd:interactive + bg 合并为 1 个,主 = interactive(200);bg(100)不单独显示、不进 seen。
+        let mut seen = HashMap::new();
+        let mut bg = pf(100, Some("busy"));
+        bg.kind = Some("bg".into());
+        let out = discover_from(
+            &[bg, pf(200, Some("busy"))],
+            &mut seen,
+            |_| true,
+            |_| None,
+            AgentKind::Claude,
+        );
+        assert_eq!(out.len(), 1, "同 cwd 合并为 1 个");
+        assert_eq!(out[0].native_id, "200", "主 = interactive");
+        assert!(!seen.contains_key(&100), "bg pid 不进 seen");
+        assert!(seen.contains_key(&200));
+    }
+
+    #[test]
+    fn discover_bg_busy_lifts_interactive_shell_to_working() {
+        // fork 任务到后台跑的典型场景:interactive idle 成 shell(单独=Done)、bg busy(单独=Working)
+        // → 同 cwd 聚合为 1 个,状态 = Working(取组内最活跃)← 本次 bug 的核心修复。
+        let mut seen = HashMap::new();
+        let mut bg = pf_cwd(100, Some("busy"), Some("/a"));
+        bg.kind = Some("bg".into());
+        bg.session_id = None; // bg 即便没 sessionId 也贡献 busy 活跃度
+        let mut inter = pf_cwd(200, Some("shell"), Some("/a"));
+        inter.kind = Some("interactive".into());
+        let out = discover_from(
+            &[bg, inter],
+            &mut seen,
+            |_| true,
+            |_| None,
+            AgentKind::Claude,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].native_id, "200");
+        assert_eq!(
+            out[0].status,
+            AgentStatus::Working,
+            "bg busy 把 shell 主提升为 Working"
+        );
+        assert!(!seen.contains_key(&100));
+        assert!(seen.contains_key(&200));
+    }
+
+    #[test]
+    fn discover_pure_bg_group_without_interactive_is_skipped() {
+        // 组里只有 bg(无 interactive 主)→ 整组跳过(避免与 OpenClaw source 重叠)。
+        let mut seen = HashMap::new();
+        let mut bg = pf_cwd(100, Some("busy"), Some("/a"));
+        bg.kind = Some("bg".into());
+        let out = discover_from(&[bg], &mut seen, |_| true, |_| None, AgentKind::Claude);
+        assert!(out.is_empty());
+        assert!(seen.is_empty());
+    }
+
+    #[test]
+    fn discover_distinct_cwd_are_distinct_sessions() {
+        // 不同 cwd = 不同会话,各聚合成 1 个。
+        let mut seen = HashMap::new();
+        let out = discover_from(
+            &[
+                pf_cwd(100, Some("busy"), Some("/a")),
+                pf_cwd(200, Some("busy"), Some("/b")),
+            ],
+            &mut seen,
+            |_| true,
+            |_| None,
+            AgentKind::Claude,
+        );
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].cwd.as_deref(), Some(Path::new("/a")));
+        assert_eq!(out[1].cwd.as_deref(), Some(Path::new("/b")));
+    }
+
+    #[test]
+    fn session_file_parses_camelcase_and_kind() {
+        // 实测 session 文件是 camelCase + 含 kind/sessionId;rename_all 让 session_id 读到
+        // (NeedsDeci 的 transcript 读取前提),kind 用以区分 interactive / bg 子 claude。
+        let json = r#"{"pid":123,"sessionId":"abc","cwd":"/x","kind":"bg","status":"shell"}"#;
+        let f: SessionFile = serde_json::from_str(json).unwrap();
+        assert_eq!(f.pid, 123);
+        assert_eq!(f.session_id.as_deref(), Some("abc"));
+        assert_eq!(f.cwd.as_deref(), Some("/x"));
+        assert_eq!(f.kind.as_deref(), Some("bg"));
+        assert_eq!(f.status.as_deref(), Some("shell"));
     }
 }

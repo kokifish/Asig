@@ -2,7 +2,7 @@
 //! 菜单栏无「浅蓝圆」emoji,故按钮图标用自绘 NSImage 圆点(overlay::swatch_image)——
 //! 所有状态统一为「仅颜色不同」的圆(Done 绿 / DoneNotif 浅蓝 / Working 黄 …)。
 
-use agent_light_core::{AgentStatus, Color, LightAnim};
+use agent_light_core::{AgentStatus, LightAnim};
 use objc2::rc::Retained;
 use objc2::{DefinedClass, MainThreadMarker, sel};
 use objc2_app_kit::{NSMenu, NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatusItem};
@@ -31,13 +31,8 @@ pub fn build(delegate: &Retained<AppDelegate>) {
 
 /// 按灯效(颜色)把按钮图标设成自绘圆点。
 pub fn set_light(item: &NSStatusItem, anim: &LightAnim, mtm: MainThreadMarker) {
-    let color: Color = match anim {
-        LightAnim::Steady { color } => *color,
-        LightAnim::Pulse { color, .. } => *color,
-        LightAnim::Ripple { color, .. } => *color,
-    };
     let button = item.button(mtm).expect("状态栏按钮");
-    let img = swatch_image(color, 18.0, false);
+    let img = swatch_image(anim.color(), 18.0, false);
     button.setImage(Some(&img));
 }
 

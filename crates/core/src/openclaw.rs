@@ -423,10 +423,24 @@ fn read_tail_signals(path: &Path) -> Option<(String, Option<String>, bool, bool)
     Some((String::new(), None, ends_with_leaf, coordinating))
 }
 
+/// 派生/历史会话文件后缀(非真实交互式会话):trajectory / deleted / bak / reset。
+const SESSION_EXCLUDE: &[&str] = &[".trajectory.", ".deleted", ".bak", ".reset"];
+
+/// 是否为真实交互式会话文件(以 `.jsonl` 结尾且非派生/历史后缀)。
+fn is_active_session(name: &str) -> bool {
+    name.ends_with(".jsonl") && !SESSION_EXCLUDE.iter().any(|x| name.contains(x))
+}
+
+/// 文件修改时间距 epoch 的毫秒数;取不到(文件消失 / 不支持 mtime / 时钟倒跳)→ None。
+fn mtime_ms(path: &Path) -> Option<u64> {
+    use std::time::UNIX_EPOCH;
+    let m = path.metadata().ok()?.modified().ok()?;
+    Some(m.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64)
+}
+
 /// 扫 `agents/<aid>/sessions/*.jsonl`,每 agent 取 mtime 最新的会话尾部信号。
 /// 只看活跃会话文件(排除 `.trajectory.jsonl` / `.deleted` / `.bak` / `.reset` 等派生/历史)。
 fn latest_session_signals(root: &Path) -> HashMap<String, SessionSignal> {
-    use std::time::UNIX_EPOCH;
     let mut out = HashMap::new();
     let Ok(entries) = std::fs::read_dir(root.join("agents")) else {
         return out;
@@ -438,23 +452,12 @@ fn latest_session_signals(root: &Path) -> HashMap<String, SessionSignal> {
         };
         let mut best: Option<(u64, PathBuf)> = None;
         for f in sess.flatten() {
-            let name = f.file_name();
-            let name = name.to_string_lossy();
-            if !name.ends_with(".jsonl")
-                || name.contains(".trajectory.")
-                || name.contains(".deleted")
-                || name.contains(".bak")
-                || name.contains(".reset")
-            {
+            if !is_active_session(&f.file_name().to_string_lossy()) {
                 continue;
             }
-            let Ok(m) = f.metadata().and_then(|m| m.modified()) else {
+            let Some(mt) = mtime_ms(&f.path()) else {
                 continue;
             };
-            let Ok(d) = m.duration_since(UNIX_EPOCH) else {
-                continue;
-            };
-            let mt = d.as_millis() as u64;
             if best.as_ref().is_none_or(|(b, _)| mt > *b) {
                 best = Some((mt, f.path()));
             }

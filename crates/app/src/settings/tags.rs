@@ -50,9 +50,8 @@ pub const POLL_PRESETS_MS: [u32; 6] = [1000, 2000, 3000, 5000, 10000, 15000];
 /// General pane「监控的 Agent」多选 chip 的 tag 基数(+0/1/2 = Claude/CodeBuddy/OpenClaw)。
 /// 避让 LANG 50x / SIZE_LABEL 503 / THEME 600。
 pub const AGENT_OFF: i64 = 700;
-/// Agent chip 顺序(与 `default_enabled_agents` 一致);chip 排布 + tag 解码基准。
-pub const AGENT_KIND_ORDER: [AgentKind; 3] =
-    [AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw];
+/// Agent chip 顺序;引用 core 的 `AgentKind::IMPLEMENTED` 单一事实源(= 默认启用列表)。
+pub const AGENT_KIND_ORDER: [AgentKind; 3] = AgentKind::IMPLEMENTED;
 
 pub const TAB_GENERAL: i64 = 0;
 pub const TAB_ABOUT: i64 = 7;

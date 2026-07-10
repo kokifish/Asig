@@ -28,7 +28,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 **内核 `crates/core`：**
 
 - `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
-- `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）；读 session 文件（status: busy/idle/shell）+ pid 存活：busy+transcript `stop_reason`（`end_turn`→NeedsDeci / `tool_use`→Working）；idle/shell（空闲）→Done；pid 死→Offline
+- `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）；读 session 文件（camelCase 字段：`sessionId`/`kind`/`status`…，`rename_all`）+ pid 存活：按 **cwd 聚合** —— 同目录的多个 session（用户手开 interactive + claude `--fork-session` 派发的后台子 claude `kind:"bg"`）合并为**一个**会话：interactive 作主，bg 不单独显示但 busy 活跃度合并进主会话状态（否则 fork 任务到后台跑时主进程 idle 成 shell 会被误判不在运行），纯 bg 无 interactive 的目录整组跳过（避免与 OpenClaw source 重叠）；busy+transcript `stop_reason`（`end_turn`→NeedsDeci / `tool_use`→Working）；idle/shell（空闲）→Done；pid 死→Offline
 - `openclaw.rs` — `OpenClawSource`：两套数据源 —— ① 只读 `~/.openclaw/state/openclaw.sqlite`（单一事实源、升级迁移目标），按 `agent_databases` 聚合 task/flow/subagent runs（ended_at NULL→Working、blocked 且 ended_at NULL→NeedsDeci、近期 failed→Error）；② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working）；主 agent `sessions_yield` 让出 + 文件以 `leaf` 结尾 = 协调后台子 agent：子 agent 在跑 → Working，子 agent 全 ended 或协调态超 30min → 卡死 → Error —— 子 agent 走 sessions 机制（`.trajectory.jsonl`）不进 `subagent_runs` 表，靠 leaf+yield 信号识别（GLM 下 yield 期间尾部 `assistant stop="stop"` 否则误判 Done）—— **不进主库，故单读**。否则 Done
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
 - `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
@@ -93,6 +93,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 - **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 DoneNotif (Done-Notification)，用浅蓝色表示，默认动效为快速呼吸
 - **Aggregation**：同一个Agent多个会话同时存在时，全局灯取**优先级最高**的那一个（`AgentStatus::priority()`，数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
 - **Sticky state**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
+- **Latched grace period**：会话连续 `LATCH_GRACE`（=2 轮，约 6s）未被观测到才从锁定表清除，而非一轮即删——覆盖 source 端文件原子替换 / 瞬时改名等抖动（本轮 `live` 集合短暂不含该会话）；否则下轮重现会以 `Done` 为基线重算，丢失锁定态（违反 sticky）。连续超宽限才清，避免幻影堆积。
 - **Animation types**：`Steady`（常亮）/ `Pulse`（呼吸）/ `Ripple`（波纹），共 3 种（详见 [Light Animations](#light-animations)）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**，无独立的明灭（Blink）动效。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
 - **Color enum**：颜色定义在内核、平台无关；app 层翻译成具体 RGB。共 12 色（Tailwind 源）：6 个与默认状态一一对应（Green / LightBlue / Yellow / Amber / Red / Purple）+ 6 个个性化扩展（Blue / Indigo / Teal / Cyan / Orange / Pink，仅 Settings 可选，无默认映射）。每色浅 / 深两档（Tailwind 500 / 400），随外观自适应（见下「Appearance」）
 

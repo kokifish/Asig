@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use agent_light_core::{
     AgentStatus, Anim, Color, Lang, LightAnim, LightPosition, Monitor, Settings, Snapshot,
-    StyleKey, Theme,
+    StateStyle, StyleKey, Theme,
 };
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
@@ -200,11 +200,8 @@ define_class!(
             if i >= crate::settings::COLOR_ORDER.len() {
                 return;
             }
-            {
-                let mut s = self.ivars().settings.borrow_mut();
-                s.styles.entry(key).or_insert(key.default_style()).color =
-                    crate::settings::COLOR_ORDER[i];
-            }
+            let color = crate::settings::COLOR_ORDER[i];
+            self.edit_style(key, |st| st.color = color);
             self.refresh_state(key);
             self.settings_changed();
         }
@@ -220,14 +217,13 @@ define_class!(
             if i >= crate::settings::ANIM_ORDER.len() {
                 return;
             }
-            {
-                let mut s = self.ivars().settings.borrow_mut();
-                let st = s.styles.entry(key).or_insert(key.default_style());
-                st.anim = crate::settings::ANIM_ORDER[i];
+            let anim = crate::settings::ANIM_ORDER[i];
+            self.edit_style(key, |st| {
+                st.anim = anim;
                 if st.anim != Anim::Steady && st.period_ms == 0 {
                     st.period_ms = 1000; // 离开常亮时给个默认周期
                 }
-            }
+            });
             self.refresh_state(key);
             self.settings_changed();
         }
@@ -241,10 +237,7 @@ define_class!(
             };
             let hz: f64 = unsafe { msg_send![sender, doubleValue] };
             let period_ms = (1000.0 / hz).round().max(1.0) as u32;
-            {
-                let mut s = self.ivars().settings.borrow_mut();
-                s.styles.entry(key).or_insert(key.default_style()).period_ms = period_ms;
-            }
+            self.edit_style(key, |st| st.period_ms = period_ms);
             if let Some(c) = self.ivars().state_controls.borrow().get(&key) {
                 unsafe {
                     let _: () = msg_send![
@@ -477,6 +470,13 @@ impl AppDelegate {
         }
     }
 
+    /// 编辑某状态样式(缺失键时按默认填补);借用 scope 内聚,refresh/save 由调用方决定。
+    /// 收口 changeColor/Anim/Speed 三处 `entry().or_insert(default).<field> = …` 样板。
+    fn edit_style(&self, key: StyleKey, edit: impl FnOnce(&mut StateStyle)) {
+        let mut s = self.ivars().settings.borrow_mut();
+        edit(s.styles.entry(key).or_insert(key.default_style()));
+    }
+
     /// 关闭旧设置窗、丢弃其 pane/控件引用,按当前(可能已变的语言/设置)重新构建并显示。
     fn rebuild_settings(&self) {
         if let Some(w) = self.ivars().settings_window.borrow_mut().take() {
@@ -496,17 +496,22 @@ impl AppDelegate {
 }
 
 impl AppDelegate {
-    /// 把快照渲染到所有 UI(菜单栏灯 + 浮窗 + popover)。灯效来自用户设置。
-    fn render(&self, snap: &Snapshot) {
-        let anim = self.ivars().settings.borrow().light(snap);
-        // 渲染总在主线程(tick / 点击 / 设置改动均主线程触发);button() 要 MainThreadMarker。
-        let mtm = MainThreadMarker::new().expect("render 须在主线程");
+    /// 把单个灯效分发到菜单栏灯 + 浮窗(渲染总在主线程)。`render` 与 `preview_tick` 共用,
+    /// 避免两处各写一遍 status_item + overlay 的 set_light。
+    fn render_anim(&self, anim: LightAnim) {
+        let mtm = MainThreadMarker::new().expect("render_anim 须在主线程");
         if let Some(item) = self.ivars().status_item.borrow().as_ref() {
             crate::tray::set_light(item, &anim, mtm);
         }
         if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
             crate::overlay::set_light(view, anim);
         }
+    }
+
+    /// 把快照渲染到所有 UI(菜单栏灯 + 浮窗 + popover)。灯效来自用户设置。
+    fn render(&self, snap: &Snapshot) {
+        let anim = self.ivars().settings.borrow().light(snap);
+        self.render_anim(anim);
         if let Some(p) = self.ivars().popover.borrow().as_ref() {
             crate::panel::update_label(p, snap);
         }
@@ -561,13 +566,7 @@ impl AppDelegate {
             ("Offline", AgentStatus::Offline.light()),
         ];
         let (name, anim) = states[IDX.fetch_add(1, Ordering::SeqCst) % states.len()];
-        let mtm = MainThreadMarker::new().expect("preview 须在主线程");
-        if let Some(item) = self.ivars().status_item.borrow().as_ref() {
-            crate::tray::set_light(item, &anim, mtm);
-        }
-        if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
-            crate::overlay::set_light(view, anim);
-        }
+        self.render_anim(anim);
         println!("[asig-preview] {name}: {anim:?}");
         let mut out = std::io::stdout();
         let _ = std::io::Write::flush(&mut out);
@@ -582,6 +581,17 @@ impl AppDelegate {
             let f: NSRect = unsafe { msg_send![&**w, frame] };
             f
         };
+        // origin 没动 → 位置不变 → 跳过昂贵的 screen_id_at(枚举所有屏)。仅在窗口实际移动
+        // 后才重算 screen_id 并落盘;99% 的 tick 走这条快路径(浮窗静置时不触屏枚举)。
+        if self
+            .ivars()
+            .settings
+            .borrow()
+            .light_pos
+            .is_some_and(|p| p.x == frame.origin.x && p.y == frame.origin.y)
+        {
+            return;
+        }
         let center = NSPoint::new(
             frame.origin.x + frame.size.width / 2.0,
             frame.origin.y + frame.size.height / 2.0,
@@ -591,20 +601,9 @@ impl AppDelegate {
             y: frame.origin.y,
             screen_id: crate::overlay::screen_id_at(center),
         };
-        // 改字段与落盘用两个独立 borrow scope:borrow_mut 必须先结束再 borrow() 调 save()。
-        // 此前靠 `drop(s)` 顺序勉强安全 —— 重排或漏 drop 即 BorrowMutError panic(每 3s tick 跑)。
-        let changed = {
-            let mut s = self.ivars().settings.borrow_mut();
-            if s.light_pos != Some(pos) {
-                s.light_pos = Some(pos);
-                true
-            } else {
-                false
-            }
-        };
-        if changed {
-            self.ivars().settings.borrow().save();
-        }
+        // borrow_mut 的 RefMut 在此语句结束 drop,故下行 borrow() 安全(无并存可变借用)。
+        self.ivars().settings.borrow_mut().light_pos = Some(pos);
+        self.ivars().settings.borrow().save();
     }
 }
 

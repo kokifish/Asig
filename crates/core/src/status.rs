@@ -84,6 +84,17 @@ pub enum LightAnim {
     Ripple { color: Color, period_ms: u32 }, // 波纹:环从中心扩散并淡出
 }
 
+impl LightAnim {
+    /// 该灯效的颜色(三种变体都带 color)。菜单栏图标 / 浮窗 / 设置色块共用,避免各处重写 match。
+    pub fn color(self) -> Color {
+        match self {
+            LightAnim::Steady { color } => color,
+            LightAnim::Pulse { color, .. } => color,
+            LightAnim::Ripple { color, .. } => color,
+        }
+    }
+}
+
 /// 状态机:把「本轮观测 raw」叠加到「已锁定 current」。
 ///
 /// 规则:

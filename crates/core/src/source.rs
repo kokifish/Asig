@@ -14,6 +14,12 @@ pub enum AgentKind {
     Trae, // 暂未实现;Accessibility 路线见 README 长期目标。
 }
 
+impl AgentKind {
+    /// 全部已实现的 agent(chip 顺序 = 默认启用顺序)。Trae 暂未实现,不含。
+    /// `config::default_enabled_agents` / `Monitor::default` / 设置 chip 共用此单一事实源。
+    pub const IMPLEMENTED: [Self; 3] = [Self::Claude, Self::CodeBuddy, Self::OpenClaw];
+}
+
 /// 一个被发现的 agent 会话(状态已由 source 内部解析归一)。
 #[derive(Debug, Clone)]
 pub struct AgentSession {

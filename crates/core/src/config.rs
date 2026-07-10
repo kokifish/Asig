@@ -213,7 +213,7 @@ fn default_done_notif_duration_s() -> u32 {
 }
 
 fn default_enabled_agents() -> Vec<AgentKind> {
-    vec![AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw]
+    AgentKind::IMPLEMENTED.to_vec()
 }
 
 impl Default for Settings {
