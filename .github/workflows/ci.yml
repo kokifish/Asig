@@ -98,3 +98,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # 依赖卫生:cargo-machete 查未用依赖(fail)、cargo-outdated 查过时依赖(advisory,不 fail)。
+  # 放 ubuntu 并行,不阻主干反馈。taiki-e/install-action 装预编译二进制,省 cargo install 编译。
+  deps-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete,cargo-outdated
+      - name: Unused dependencies (machete)
+        run: cargo machete
+      - name: Outdated dependencies (advisory)
+        run: cargo outdated --workspace || true

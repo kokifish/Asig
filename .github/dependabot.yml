@@ -1,0 +1,23 @@
+# Dependabot:自动开 PR 更新依赖。
+# - cargo:Rust 依赖(Cargo.lock 漂移,新版/CVE 跟进)
+# - github-actions:各 workflow 用到的 action 版本(checkout/rust-toolchain/rust-cache/...)
+# 周一跑,配合 cargo-deny 双保险(deny 查漏洞/许可证,dependabot 提版本)。
+version: 2
+updates:
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels: ["dependencies"]
+    commit-message:
+      prefix: "chore(ci)"
