@@ -182,7 +182,8 @@ fn classify(
 ) -> Option<AgentStatus> {
     if alive {
         Some(match f.status.as_deref() {
-            Some("idle") => AgentStatus::Done,
+            // idle/shell = 空闲(shell=Claude REPL 等输入,无活跃任务)→ Done,非 Working。
+            Some("idle") | Some("shell") => AgentStatus::Done,
             Some("busy") => match stop_reason {
                 Some("end_turn") => AgentStatus::NeedsDeci,
                 _ => AgentStatus::Working, // tool_use / 未知 / 读不到 → 正在跑
@@ -265,6 +266,11 @@ mod tests {
         );
         assert_eq!(
             classify(&pf(1, Some("idle")), None, true, None),
+            Some(AgentStatus::Done)
+        );
+        // shell(Claude REPL 模式,空闲等输入)→ Done,非 Working(曾误判运行中)
+        assert_eq!(
+            classify(&pf(1, Some("shell")), None, true, None),
             Some(AgentStatus::Done)
         );
         // status 未知 → Working
