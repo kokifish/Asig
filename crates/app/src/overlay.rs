@@ -448,7 +448,7 @@ pub fn set_light(view: &PillView, anim: LightAnim, layers: u8) {
         LightAnim::Pulse { period_ms, .. } => add_pulse(&layer, period_ms),
         LightAnim::Ripple {
             color, period_ms, ..
-        } => add_ripple(view, color, period_ms),
+        } => add_ripple(view, color, period_ms, layers),
         LightAnim::Steady { .. } => {}
     }
 }
@@ -501,16 +501,22 @@ const RIPPLE_RINGS: usize = 2;
 /// 不动锚点,改用一个「绕环自身圆心缩放」的 CATransform3D 作动画
 /// (translate(+c)·scale·translate(-c)),无论 anchorPoint 在哪,环都在缩放时圆心始终
 /// 对齐圆点圆心,对称向外扩散。
-fn add_ripple(view: &PillView, color: Color, period_ms: u32) {
+fn add_ripple(view: &PillView, color: Color, period_ms: u32, layers: u8) {
     let dot = view.ivars().borrow().dot;
-    let o = dot_origin(dot);
-    let ring_frame = NSRect::new(NSPoint::new(o, o), NSSize::new(dot, dot));
+    // 波纹从「最内层」(同心圆中心实心圆)外缘起扩散,而非整个圆点中心 —— 这样 layers>0
+    // 时环从中心实心圆边缘出现、向外穿过半透明外层,视觉读作「从最内层扩散出去」
+    // (最内层与环同色、重叠处本就不可辨,故起点贴其外缘)。layers=0 → L=1 → 最内层即整个
+    // 圆点,等价历史行为。scale 终值随 L 放大,保证不同层数都扩散到圆点外同一圈(MAX_SCALE×dot)。
+    let l = layers as CGFloat + 1.0;
+    let inner_d = dot / l; // 最内层直径
+    let o = dot_origin(dot) + (dot - inner_d) / 2.0; // 最内层在圆点内居中
+    let ring_frame = NSRect::new(NSPoint::new(o, o), NSSize::new(inner_d, inner_d));
     let duration = period_ms as f64 / 1000.0;
 
-    // 环视图自身坐标里的圆心 = (dot/2, dot/2)(环描边内切于 dot×dot bounds)。
-    let c = dot / 2.0;
+    // 环视图自身坐标圆心 = (inner_d/2, inner_d/2)(环描边内切于 inner_d×inner_d bounds)。
+    let c = inner_d / 2.0;
     let from_t = scale_about(c, c, 1.0);
-    let to_t = scale_about(c, c, MAX_SCALE);
+    let to_t = scale_about(c, c, MAX_SCALE * l);
 
     let mut rings = Vec::with_capacity(RIPPLE_RINGS);
     for i in 0..RIPPLE_RINGS {

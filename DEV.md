@@ -107,7 +107,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 |---|---|---|---|---|
 | 常亮 | Steady | 不变，纯色常亮 | 无周期，period_ms 置 0 |
 | 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
-| 波纹 | Ripple | 两圈环以圆点为圆心、错相(半周期)对称扩散并淡出 | `transform`（绕圆心缩放的 `CATransform3D`）+ `opacity`（2 个错相 `RingView`），单程一次扩散 |
+| 波纹 | Ripple | 两圈环从**最内层外缘**起、错相(半周期)对称扩散并淡出（layers>0 时穿过半透明外层，视觉读作「从最内层扩散出去」；layers=0 → L=1 即整个圆点，等价历史行为） | `transform`（绕圆心缩放的 `CATransform3D`；scale 终值随 L 放大，保证不同层数都扩到圆点外同一圈 MAX_SCALE×dot）+ `opacity`（2 个错相 `RingView`），单程一次扩散 |
 
 - Default period：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=3333（波纹,≈0.3Hz）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（LightBlue，450ms）覆盖全局态。
