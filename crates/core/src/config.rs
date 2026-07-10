@@ -6,7 +6,10 @@
 
 use crate::Snapshot;
 use crate::source::AgentKind;
-use crate::status::{AgentStatus, Color, LightAnim};
+use crate::status::{
+    AgentStatus, Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN,
+    LightAnim,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,41 +33,64 @@ pub struct StateStyle {
     pub anim: Anim,
     /// 动画周期(ms)。Steady 时无意义,置 0。
     pub period_ms: u32,
+    /// 渐变层数(slider 值 0..=4,见 `status::GRADIENT_LAYERS_*`)。浮窗圆点据此画 layers+1 同心环;
+    /// 旧配置缺此字段 → 默认 1(两层渐变)。
+    #[serde(default = "default_gradient_layers")]
+    pub gradient_layers: u8,
 }
 
 impl StateStyle {
     /// 反向:从内核硬编码的 `LightAnim` 构造(用于派生 5 个真实状态的默认样式)。
     fn from_light(la: LightAnim) -> Self {
         match la {
-            LightAnim::Steady { color } => Self {
+            LightAnim::Steady { color, layers } => Self {
                 color,
                 anim: Anim::Steady,
                 period_ms: 0,
+                gradient_layers: layers,
             },
-            LightAnim::Pulse { color, period_ms } => Self {
+            LightAnim::Pulse {
+                color,
+                period_ms,
+                layers,
+            } => Self {
                 color,
                 anim: Anim::Pulse,
                 period_ms,
+                gradient_layers: layers,
             },
-            LightAnim::Ripple { color, period_ms } => Self {
+            LightAnim::Ripple {
+                color,
+                period_ms,
+                layers,
+            } => Self {
                 color,
                 anim: Anim::Ripple,
                 period_ms,
+                gradient_layers: layers,
             },
         }
     }
 
     /// 正向:翻译成内核的 `LightAnim`(带周期下限保护,避免过快)。
     fn to_light(self) -> LightAnim {
+        let layers = self
+            .gradient_layers
+            .clamp(GRADIENT_LAYERS_MIN, GRADIENT_LAYERS_MAX);
         match self.anim {
-            Anim::Steady => LightAnim::Steady { color: self.color },
+            Anim::Steady => LightAnim::Steady {
+                color: self.color,
+                layers,
+            },
             Anim::Pulse => LightAnim::Pulse {
                 color: self.color,
                 period_ms: self.period_ms.max(200),
+                layers,
             },
             Anim::Ripple => LightAnim::Ripple {
                 color: self.color,
                 period_ms: self.period_ms.max(400),
+                layers,
             },
         }
     }
@@ -135,6 +161,7 @@ impl StyleKey {
                 color: Color::LightBlue,
                 anim: Anim::Pulse,
                 period_ms: 450,
+                gradient_layers: GRADIENT_LAYERS_DEFAULT,
             },
             other => StateStyle::from_light(other.status().unwrap().light()),
         }
@@ -214,6 +241,10 @@ fn default_done_notif_duration_s() -> u32 {
 
 fn default_enabled_agents() -> Vec<AgentKind> {
     AgentKind::IMPLEMENTED.to_vec()
+}
+
+fn default_gradient_layers() -> u8 {
+    GRADIENT_LAYERS_DEFAULT
 }
 
 impl Default for Settings {
@@ -345,7 +376,8 @@ mod tests {
         assert!(matches!(
             s.light_for(AgentStatus::Offline),
             LightAnim::Steady {
-                color: Color::Purple
+                color: Color::Purple,
+                ..
             }
         ));
     }
@@ -369,11 +401,15 @@ mod tests {
                 color: Color::Red,
                 anim: Anim::Steady,
                 period_ms: 0,
+                gradient_layers: GRADIENT_LAYERS_DEFAULT,
             },
         );
         assert!(matches!(
             s.light_for(AgentStatus::Done),
-            LightAnim::Steady { color: Color::Red }
+            LightAnim::Steady {
+                color: Color::Red,
+                ..
+            }
         ));
     }
 
@@ -387,6 +423,7 @@ mod tests {
                 color: Color::Green,
                 anim: Anim::Ripple,
                 period_ms: 1200,
+                gradient_layers: GRADIENT_LAYERS_DEFAULT,
             },
         );
         let snap = Snapshot {
@@ -398,7 +435,8 @@ mod tests {
             s.light(&snap),
             LightAnim::Ripple {
                 color: Color::Green,
-                period_ms: 1200
+                period_ms: 1200,
+                ..
             }
         ));
     }
@@ -451,6 +489,8 @@ mod tests {
                 ..
             }
         ));
+        // 旧 styles 子对象缺 gradient_layers → serde 默认 1(两层渐变)
+        assert_eq!(s.style_for(StyleKey::Done).gradient_layers, 1);
     }
 
     #[test]
@@ -462,11 +502,30 @@ mod tests {
                 color: Color::Yellow,
                 anim: Anim::Pulse,
                 period_ms: 1,
+                gradient_layers: GRADIENT_LAYERS_DEFAULT,
             },
         );
         assert!(
             matches!(s.light_for(AgentStatus::Working), LightAnim::Pulse { period_ms, .. } if period_ms >= 200)
         );
+    }
+
+    #[test]
+    fn gradient_layers_clamped_and_default() {
+        // 默认 = 1(两层渐变)
+        assert_eq!(Settings::default().light_for(AgentStatus::Done).layers(), 1);
+        // 越界值(手改配置)在 to_light 时 clamp 回 [0, 4]
+        let mut s = Settings::default();
+        s.styles.insert(
+            StyleKey::Done,
+            StateStyle {
+                color: Color::Green,
+                anim: Anim::Ripple,
+                period_ms: 1600,
+                gradient_layers: 99,
+            },
+        );
+        assert_eq!(s.light_for(AgentStatus::Done).layers(), GRADIENT_LAYERS_MAX);
     }
 
     #[test]
@@ -481,14 +540,16 @@ mod tests {
             s.light_for(AgentStatus::Error),
             LightAnim::Pulse {
                 color: Color::Red,
-                period_ms: 350
+                period_ms: 350,
+                ..
             }
         ));
         assert!(matches!(
             s.light_for(AgentStatus::NeedsDeci),
             LightAnim::Pulse {
                 color: Color::Amber,
-                period_ms: 1000
+                period_ms: 1000,
+                ..
             }
         ));
     }

@@ -111,9 +111,10 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 - Default period：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=1600（波纹）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（LightBlue，450ms）覆盖全局态。
-- Configurable：Settings 里每状态独立改 动效 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
+- Configurable：Settings 里每状态独立改 动效 + 颜色 + 周期 + 渐变层数（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
 - Carrier：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用两个错相 `RingView` 子视图扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示自绘彩色圆点（`overlay::swatch_image`，`setTemplate:NO` 保留真彩），不可设动效。
 - 速度（周期）以 **Hz** 呈现给用户（`period_ms = 1000 / Hz`）；常亮（Steady）无周期、速度不可设。
+- **渐变层数（Gradient layers）**：圆点本体按半径等距分 L=layers+1 个同心环（slider 值 layers∈0..=4，默认 1），第 k 层（k=0 中心）透明度 α=1−k/L（中心最亮、向外线性递减；0=纯色单层=历史行为，1=两层外层 α=0.5，2=三层中 2/3·外 1/3）。每段画 even-odd 环（外圆+内圆 path）独立 α、互不重叠，避免 source-over 合成使中间层 α 累加。`LightAnim.layers` 三变体共享、与动画类型正交（如同 `color` 也正交却仍属灯效），经 `light()` 单一入口直达 `PillView::drawRect`。**仅作用于 Signal Light 浮窗圆点本体**；Signal Icon（菜单栏，18px 太小）与波纹环（`RingView` 扩散动画）不分级。Settings State pane 每状态独立设（整数拉杆，右侧显示 slider 值，0..=4，默认 1）；Reduce Motion 降级为 Steady 时保留层数。
 
 ### Accessibility（Reduce Motion / Reduce Transparency）
 
@@ -188,6 +189,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 - Color/颜色: "颜色"为色块单选(按钮中间为颜色展示,选中时外圈带选中环)。色块**固定像素间距(15px)、左对齐 flow**,随窗宽自动换行(每行数量可不同)、很宽时合并为 1 行;换行后与第一行保持同间距、左对齐(间距始终恒定,不随宽度拉伸)。"颜色: "label + 色块组占一或多行。
 - Animation/效果: 横向单选按钮组。总共占一行
 - Speed/速度: "速度"调整。波纹/呼吸 支持自定义速度，范围为0.2Hz - 5Hz。总共占一行
+- Gradient layers/渐变层数: "渐变层数"整数拉杆(0..=4,默认 1),右侧显示 slider 值。把浮窗圆点本体按半径等距分成 layers+1 个同心环(中心 α=1、向外线性递减 α=1−k/L);0=纯色单层(历史行为)。仅作用于浮窗圆点本体,菜单栏图标/波纹环不分级。不受 Animation 类型影响(常亮也可调,与 Speed 不同)。总共占一行
 
 ##### DoneNotif Pane
 

@@ -35,21 +35,26 @@ impl AgentStatus {
             Self::Done => LightAnim::Ripple {
                 color: Color::Green,
                 period_ms: 1600,
+                layers: GRADIENT_LAYERS_DEFAULT,
             }, // 波纹
             Self::Working => LightAnim::Pulse {
                 color: Color::Yellow,
                 period_ms: 1800,
+                layers: GRADIENT_LAYERS_DEFAULT,
             }, // 呼吸-慢速
             Self::NeedsDeci => LightAnim::Pulse {
                 color: Color::Amber,
                 period_ms: 1000,
+                layers: GRADIENT_LAYERS_DEFAULT,
             }, // 慢闪(中速呼吸)
             Self::Error => LightAnim::Pulse {
                 color: Color::Red,
                 period_ms: 350,
+                layers: GRADIENT_LAYERS_DEFAULT,
             }, // 快闪(快速呼吸)
             Self::Offline => LightAnim::Steady {
                 color: Color::Purple,
+                layers: GRADIENT_LAYERS_DEFAULT,
             }, // 常亮
         }
     }
@@ -75,22 +80,53 @@ pub enum Color {
     Pink,
 }
 
+/// 渐变层数(信号灯圆点同心圆分层)的合法范围与默认。存的是「slider 值」0..=4:
+/// 0=纯色单层(等价历史行为)、1=两层(外层 α=0.5)、2=三层(中 2/3·外 1/3)……
+/// 实际层数 L=layers+1,第 k 层(k=0 中心)透明度 α=1−k/L。app 层 slider 以 MIN/MAX 为边界,
+/// 渲染层 draw_rect 据此画等距同心环;仅作用于浮窗圆点本体,菜单栏图标不分级。
+pub const GRADIENT_LAYERS_MIN: u8 = 0;
+pub const GRADIENT_LAYERS_MAX: u8 = 4;
+pub const GRADIENT_LAYERS_DEFAULT: u8 = 1;
+
 /// 灯效规格(平台无关)。app 层翻译成 CoreAnimation。
 /// 共 3 种:Steady 常亮 / Pulse 呼吸(快闪·慢闪·呼吸只是周期不同)/ Ripple 波纹。
+/// `layers` = 渐变层数(slider 值,见 `GRADIENT_LAYERS_*`),三变体共享、与动画类型正交
+/// (如同 `color` 也与动画正交却仍属「灯效」)——经 `light()` 单一入口直达渲染层。
 #[derive(Debug, Clone, Copy)]
 pub enum LightAnim {
-    Steady { color: Color },                 // 常亮
-    Pulse { color: Color, period_ms: u32 },  // 呼吸:透明度在 0.2~1 间渐变(周期越短越「闪」)
-    Ripple { color: Color, period_ms: u32 }, // 波纹:环从中心扩散并淡出
+    Steady {
+        color: Color,
+        layers: u8,
+    }, // 常亮
+    Pulse {
+        color: Color,
+        period_ms: u32,
+        layers: u8,
+    }, // 呼吸:透明度在 0.2~1 间渐变(周期越短越「闪」)
+    Ripple {
+        color: Color,
+        period_ms: u32,
+        layers: u8,
+    }, // 波纹:环从中心扩散并淡出
 }
 
 impl LightAnim {
     /// 该灯效的颜色(三种变体都带 color)。菜单栏图标 / 浮窗 / 设置色块共用,避免各处重写 match。
     pub fn color(self) -> Color {
         match self {
-            LightAnim::Steady { color } => color,
+            LightAnim::Steady { color, .. } => color,
             LightAnim::Pulse { color, .. } => color,
             LightAnim::Ripple { color, .. } => color,
+        }
+    }
+
+    /// 该灯效的渐变层数(slider 值 0..=4,三变体共享)。浮窗 draw_rect 据此画 layers+1 同心环;
+    /// 菜单栏图标不分层。
+    pub fn layers(self) -> u8 {
+        match self {
+            LightAnim::Steady { layers, .. }
+            | LightAnim::Pulse { layers, .. }
+            | LightAnim::Ripple { layers, .. } => layers,
         }
     }
 }
@@ -160,7 +196,8 @@ mod tests {
         assert!(matches!(
             AgentStatus::Offline.light(),
             LightAnim::Steady {
-                color: Color::Purple
+                color: Color::Purple,
+                ..
             }
         ));
         // 快闪(Error)周期 < 慢闪(NeedsDeci)周期 < 呼吸(Working)

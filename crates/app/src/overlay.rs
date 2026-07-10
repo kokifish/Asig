@@ -14,7 +14,10 @@
 use std::cell::RefCell;
 use std::ptr::NonNull;
 
-use agent_light_core::{Color, LightAnim, LightPosition, Theme};
+use agent_light_core::{
+    Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN, LightAnim,
+    LightPosition, Theme,
+};
 use block2::RcBlock;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
 use objc2::runtime::Bool;
@@ -23,7 +26,7 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSAppearance, NSApplication, NSBackingStoreType, NSBezierPath, NSColor, NSImage, NSScreen,
-    NSView, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
+    NSView, NSWindingRule, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue};
@@ -236,6 +239,8 @@ pub struct PillState {
     /// 波纹环(2 个,错相扩散)。无波纹时为空。
     pub rings: Vec<Retained<RingView>>,
     pub dot: CGFloat,
+    /// 渐变层数(slider 值 0..=4)。drawRect 据此画 layers+1 同心环;0=纯色单层。
+    pub layers: u8,
 }
 
 define_class!(
@@ -259,11 +264,33 @@ define_class!(
             let b = self.ivars().borrow();
             let color: &NSColor = &b.color;
             let dot = b.dot;
-            let o = dot_origin(dot);
-            let rect = NSRect::new(NSPoint::new(o, o), NSSize::new(dot, dot));
-            let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, dot / 2.0, dot / 2.0);
-            color.set();
-            path.fill();
+            // 渐变层数 layers(slider 值 0..=4) → 实际层数 L=layers+1。第 k 层(k=0 中心)透明度
+            // α=1−k/L,按半径等距分段 [k/L·R, (k+1)/L·R](R=dot/2)。每段画 even-odd 环(外圆+内圆)
+            // 各自独立 α、互不重叠 —— 避免 source-over 合成使中间层 α 累加(否则「中 2/3」会
+            // 渗入外层色)。layers=0 → L=1 → 单个实心圆(等价历史纯色圆点)。
+            let l = b.layers as usize + 1;
+            let r = dot / 2.0;
+            let c = dot_origin(dot) + r; // 圆心(正方形圆点,cx=cy=c)
+            for k in 0..l {
+                let frac_in = k as CGFloat / l as CGFloat;
+                let r_out = (k as CGFloat + 1.0) / l as CGFloat * r;
+                let outer = NSRect::new(
+                    NSPoint::new(c - r_out, c - r_out),
+                    NSSize::new(2.0 * r_out, 2.0 * r_out),
+                );
+                let path = NSBezierPath::bezierPathWithOvalInRect(outer);
+                if k > 0 {
+                    let r_in = frac_in * r;
+                    let inner = NSRect::new(
+                        NSPoint::new(c - r_in, c - r_in),
+                        NSSize::new(2.0 * r_in, 2.0 * r_in),
+                    );
+                    path.appendBezierPathWithOvalInRect(inner);
+                    path.setWindingRule(NSWindingRule::EvenOdd);
+                }
+                color.colorWithAlphaComponent(1.0 - frac_in).set();
+                path.fill();
+            }
         }
 
         /// 外观变化 → 重绘(drawRect 按当前外观重新解析动态色)。
@@ -275,12 +302,13 @@ define_class!(
 );
 
 impl PillView {
-    fn new(color: Retained<NSColor>, frame: NSRect, dot: CGFloat) -> Retained<Self> {
+    fn new(color: Retained<NSColor>, frame: NSRect, dot: CGFloat, layers: u8) -> Retained<Self> {
         let allocated: Allocated<Self> = unsafe { msg_send![Self::class(), alloc] };
         let partial = allocated.set_ivars(RefCell::new(PillState {
             color,
             rings: Vec::new(),
             dot,
+            layers,
         }));
         unsafe { msg_send![super(partial), initWithFrame: frame] }
     }
@@ -367,6 +395,7 @@ pub fn build(
         nscolor(Color::Purple),
         NSRect::new(NSPoint::new(0.0, 0.0), frame.size),
         dot,
+        GRADIENT_LAYERS_DEFAULT,
     );
     view.setWantsLayer(true);
     window.setContentView(Some(&view));
@@ -393,15 +422,17 @@ pub fn set_size(view: &PillView, dot_size: u32) {
 
 // ---- 按灯效更新颜色 + 动画 ----
 pub fn set_light(view: &PillView, anim: LightAnim) {
-    // Reduce Motion 开启:动画降级为常亮(保留颜色),不脉冲/不扩散。
+    // Reduce Motion 开启:动画降级为常亮(保留颜色 + 渐变层数),不脉冲/不扩散。
     let anim = if reduce_motion_on() {
         LightAnim::Steady {
             color: anim.color(),
+            layers: anim.layers(),
         }
     } else {
         anim
     };
     view.rust_set_color(nscolor(anim.color()));
+    view.rust_set_layers(anim.layers());
 
     let layer = view.layer().expect("PillView 须 layer-backed");
     // 先清掉旧的:opacity 动画 + 波纹环子视图。
@@ -416,7 +447,9 @@ pub fn set_light(view: &PillView, anim: LightAnim) {
 
     match anim {
         LightAnim::Pulse { period_ms, .. } => add_pulse(&layer, period_ms),
-        LightAnim::Ripple { color, period_ms } => add_ripple(view, color, period_ms),
+        LightAnim::Ripple {
+            color, period_ms, ..
+        } => add_ripple(view, color, period_ms),
         LightAnim::Steady { .. } => {}
     }
 }
@@ -425,6 +458,16 @@ impl PillView {
     fn rust_set_color(&self, color: Retained<NSColor>) {
         self.ivars().borrow_mut().color = color;
         self.setNeedsDisplay(true);
+    }
+
+    /// 改渐变层数(仅变化时重绘)。
+    fn rust_set_layers(&self, layers: u8) {
+        let layers = layers.clamp(GRADIENT_LAYERS_MIN, GRADIENT_LAYERS_MAX);
+        let changed = self.ivars().borrow().layers != layers;
+        if changed {
+            self.ivars().borrow_mut().layers = layers;
+            self.setNeedsDisplay(true);
+        }
     }
 }
 

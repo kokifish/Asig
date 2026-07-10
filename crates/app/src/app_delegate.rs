@@ -3,8 +3,8 @@
 use std::cell::RefCell;
 
 use agent_light_core::{
-    AgentStatus, Anim, Color, Lang, LightAnim, LightPosition, Monitor, Settings, Snapshot,
-    StateStyle, StyleKey, Theme,
+    AgentStatus, Anim, Color, GRADIENT_LAYERS_DEFAULT, Lang, LightAnim, LightPosition, Monitor,
+    Settings, Snapshot, StateStyle, StyleKey, Theme,
 };
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
@@ -243,6 +243,31 @@ define_class!(
                     let _: () = msg_send![
                         &c.speed_label,
                         setStringValue: &*NSString::from_str(&format!("{:.1} Hz", hz))
+                    ];
+                }
+            }
+            self.settings_changed();
+        }
+
+        /// 状态 pane「渐变层数」滑块 action(整数 0..=4)。tag = base + GRADIENT_OFF。
+        /// 仅作用于浮窗圆点本体;改完存盘 + 重渲染(set_light → drawRect 据 layers 画同心环)。
+        #[unsafe(method(changeGradient:))]
+        fn change_gradient(&self, sender: *mut NSObject) {
+            let tag: i64 = unsafe { msg_send![sender, tag] };
+            let Some((key, _)) = crate::settings::parse_control_tag(tag) else {
+                return;
+            };
+            let v: f64 = unsafe { msg_send![sender, doubleValue] };
+            let layers = v.round().clamp(
+                agent_light_core::GRADIENT_LAYERS_MIN as f64,
+                agent_light_core::GRADIENT_LAYERS_MAX as f64,
+            ) as u8;
+            self.edit_style(key, |st| st.gradient_layers = layers);
+            if let Some(c) = self.ivars().state_controls.borrow().get(&key) {
+                unsafe {
+                    let _: () = msg_send![
+                        &c.gradient_label,
+                        setStringValue: &*NSString::from_str(&format!("{}", layers))
                     ];
                 }
             }
@@ -558,6 +583,7 @@ impl AppDelegate {
                 LightAnim::Pulse {
                     color: Color::LightBlue,
                     period_ms: 450,
+                    layers: GRADIENT_LAYERS_DEFAULT,
                 },
             ),
             ("Working", AgentStatus::Working.light()),

@@ -19,7 +19,10 @@ pub use config::{
     StateStyle, StyleKey, Theme,
 };
 pub use source::{AgentKind, AgentSession, AgentSource};
-pub use status::{AgentStatus, Color, LightAnim, transition};
+pub use status::{
+    AgentStatus, Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN,
+    LightAnim, transition,
+};
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};

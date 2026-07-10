@@ -26,6 +26,10 @@ pub struct StateControls {
     pub speed: Retained<NSSlider>,
     pub speed_lbl: Retained<NSTextField>,
     pub speed_label: Retained<NSTextField>,
+    /// 渐变层数(整数拉杆 0..=4)+ 标签 + 右侧实时值。仅作用于浮窗圆点本体。
+    pub gradient: Retained<NSSlider>,
+    pub gradient_lbl: Retained<NSTextField>,
+    pub gradient_label: Retained<NSTextField>,
     /// DoneNotif 专属:持续时间(秒)拉杆 + 标签 + 右侧 `xx s` 实时值。其余状态为 None。
     pub duration: Option<Retained<NSSlider>>,
     pub duration_lbl: Option<Retained<NSTextField>>,
@@ -51,12 +55,13 @@ pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
     } else {
         0.0
     };
-    let card_h = CARD_TOP_PAD + color_h + ROW_H * 2.0 + extra + CARD_BOT_PAD;
+    let card_h = CARD_TOP_PAD + color_h + ROW_H * 3.0 + extra + CARD_BOT_PAD;
     let y_top = H - CONTENT_PAD_X - TOP_INSET - HEADER_GAP; // card 顶
     let color_top = y_top - CARD_TOP_PAD;
     let anim_top = color_top - color_h;
     let anim_mid = anim_top - ROW_H / 2.0;
     let speed_mid = anim_top - ROW_H - ROW_H / 2.0;
+    let gradient_mid = anim_top - ROW_H * 2.0 - ROW_H / 2.0;
     c.card.setFrame(NSRect::new(
         NSPoint::new(x0, y_top - card_h),
         NSSize::new(col_w, card_h),
@@ -97,11 +102,24 @@ pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
         NSPoint::new(cx + cw - 56.0, speed_mid - 10.0),
         NSSize::new(56.0, 20.0),
     ));
-    // DoneNotif:持续时间行(speed 下一行)。
+    // 渐变层数行(speed 下一行,整数拉杆 + 右侧 slider 值)。
+    c.gradient_lbl.setFrame(NSRect::new(
+        NSPoint::new(lx, gradient_mid - 10.0),
+        NSSize::new(lw, 20.0),
+    ));
+    c.gradient.setFrame(NSRect::new(
+        NSPoint::new(cx, gradient_mid - 11.0),
+        NSSize::new(cw - 64.0, 22.0),
+    ));
+    c.gradient_label.setFrame(NSRect::new(
+        NSPoint::new(cx + cw - 56.0, gradient_mid - 10.0),
+        NSSize::new(56.0, 20.0),
+    ));
+    // DoneNotif:持续时间行(gradient 下一行)。
     if let (Some(slider), Some(lbl), Some(vlabel)) =
         (&c.duration, &c.duration_lbl, &c.duration_label)
     {
-        let dur_mid = anim_top - ROW_H * 2.0 - ROW_H / 2.0;
+        let dur_mid = anim_top - ROW_H * 3.0 - ROW_H / 2.0;
         lbl.setFrame(NSRect::new(
             NSPoint::new(lx, dur_mid - 10.0),
             NSSize::new(lw, 20.0),
@@ -144,6 +162,11 @@ pub fn refresh_state_controls(c: &StateControls, style: StateStyle) {
     c.speed.setEnabled(!steady);
     c.speed.setDoubleValue(hz);
     c.speed_label.setStringValue(&NSString::from_str(&text));
+    // 渐变层数:整数拉杆,右侧显示 slider 值(0..=4,0=纯色单层)。
+    let layers = style.gradient_layers;
+    c.gradient.setDoubleValue(layers as f64);
+    c.gradient_label
+        .setStringValue(&NSString::from_str(&format!("{}", layers)));
 }
 
 /// 刷新 DoneNotif 持续时间拉杆的值 + 右侧 `xx s` 标签(其余状态无 duration 控件,空操作)。

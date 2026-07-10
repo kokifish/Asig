@@ -6,7 +6,10 @@ use objc2::sel;
 use objc2_app_kit::{NSAutoresizingMaskOptions, NSButton, NSView};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
-use agent_light_core::{DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S, StyleKey};
+use agent_light_core::{
+    DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN,
+    StyleKey,
+};
 
 use crate::app_delegate::AppDelegate;
 
@@ -17,8 +20,9 @@ use super::controls::{
 use super::layout::{StateControls, layout_state_pane, refresh_duration, refresh_state_controls};
 use super::strings::Strings;
 use super::tags::{
-    ANIM_OFF, COL_W, COLOR_OFF, COLOR_ORDER, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, H,
-    RESET_OFF, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN, SPEED_OFF, SWATCH_D, TOP_INSET, tab_of_key,
+    ANIM_OFF, COL_W, COLOR_OFF, COLOR_ORDER, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W,
+    GRADIENT_LABEL_OFF, GRADIENT_OFF, H, RESET_OFF, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN,
+    SPEED_OFF, SWATCH_D, TOP_INSET, tab_of_key,
 };
 
 pub(crate) fn build_state_pane(
@@ -125,6 +129,39 @@ pub(crate) fn build_state_pane(
     );
     set_tag(&speed_label, base + SPEED_LABEL_OFF);
 
+    // 渐变层数(整数拉杆 0..=4,仅作用于浮窗圆点本体)+ 标签 + 右侧 slider 值。
+    let gradient_lbl = add_text(
+        &pane,
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+        st.gradient,
+        false,
+        false,
+    );
+    let layers = delegate
+        .ivars()
+        .settings
+        .borrow()
+        .style_for(key)
+        .gradient_layers;
+    let gradient = add_slider(
+        &pane,
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+        GRADIENT_LAYERS_MIN as f64,
+        GRADIENT_LAYERS_MAX as f64,
+        layers as f64,
+        sel!(changeGradient:),
+        delegate,
+    );
+    set_tag(&gradient, base + GRADIENT_OFF);
+    let gradient_label = add_text(
+        &pane,
+        NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+        &format!("{}", layers),
+        false,
+        false,
+    );
+    set_tag(&gradient_label, base + GRADIENT_LABEL_OFF);
+
     // DoneNotif 专属:持续时间(秒)拉杆 + 标签 + 右侧 `xx s` 实时值。其余状态 None。
     let (duration, duration_lbl, duration_label) = if key == StyleKey::DoneNotif {
         let dlbl = add_text(
@@ -166,6 +203,9 @@ pub(crate) fn build_state_pane(
         speed,
         speed_lbl,
         speed_label,
+        gradient,
+        gradient_lbl,
+        gradient_label,
         duration,
         duration_lbl,
         duration_label,

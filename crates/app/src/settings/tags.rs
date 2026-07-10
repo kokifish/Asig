@@ -72,6 +72,9 @@ pub const ANIM_OFF: i64 = 20;
 pub const SPEED_OFF: i64 = 30;
 pub const SPEED_LABEL_OFF: i64 = 31;
 pub const RESET_OFF: i64 = 40;
+// State pane「渐变层数」滑块 sub offset(整数拉杆 0..=4,仅作用于浮窗圆点本体)。
+pub const GRADIENT_OFF: i64 = 50;
+pub const GRADIENT_LABEL_OFF: i64 = 51;
 // General pane 语言单选 tag。
 pub const LANG_EN_TAG: i64 = 501;
 pub const LANG_ZH_TAG: i64 = 502;

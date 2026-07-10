@@ -18,6 +18,7 @@ pub(crate) struct Strings {
     pub(crate) color: &'static str,
     pub(crate) animation: &'static str,
     pub(crate) speed: &'static str,
+    pub(crate) gradient: &'static str,
     pub(crate) duration: &'static str,
     pub(crate) version: &'static str,
     pub(crate) state: [&'static str; 6], // 与 STATE_KEYS 同序
@@ -59,6 +60,7 @@ pub(crate) fn strings_for(l: Lang) -> Strings {
             color: "颜色",
             animation: "效果",
             speed: "速度",
+            gradient: "渐变层数",
             duration: "持续时间",
             version: "版本 ",
             state: ["完成通知", "已完成", "运行中", "待决策", "错误", "异常"],
@@ -86,6 +88,7 @@ pub(crate) fn strings_for(l: Lang) -> Strings {
             color: "Color",
             animation: "Animation",
             speed: "Speed",
+            gradient: "Gradient layers",
             duration: "Duration",
             version: "Version ",
             state: ["Notify", "Done", "Working", "Pending", "Error", "Offline"],
