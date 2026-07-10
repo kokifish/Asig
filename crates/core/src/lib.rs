@@ -15,14 +15,12 @@ pub(crate) mod jsonl_tail;
 
 pub use config::{
     Anim, DONE_NOTIF_DURATION_DEFAULT_S, DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S,
-    DOT_SIZE_DEFAULT_PX, DOT_SIZE_MAX_PX, DOT_SIZE_MIN_PX, Lang, LightPosition, Settings,
-    StateStyle, StyleKey, Theme,
+    DOT_SIZE_DEFAULT_PX, DOT_SIZE_MAX_PX, DOT_SIZE_MIN_PX, GRADIENT_LAYERS_DEFAULT,
+    GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN, Lang, LightPosition, Settings, StateStyle, StyleKey,
+    Theme,
 };
 pub use source::{AgentKind, AgentSession, AgentSource};
-pub use status::{
-    AgentStatus, Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN,
-    LightAnim, transition,
-};
+pub use status::{AgentStatus, Color, LightAnim, transition};
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};

@@ -421,18 +421,17 @@ pub fn set_size(view: &PillView, dot_size: u32) {
 }
 
 // ---- 按灯效更新颜色 + 动画 ----
-pub fn set_light(view: &PillView, anim: LightAnim) {
-    // Reduce Motion 开启:动画降级为常亮(保留颜色 + 渐变层数),不脉冲/不扩散。
+pub fn set_light(view: &PillView, anim: LightAnim, layers: u8) {
+    // Reduce Motion 开启:动画降级为常亮(保留颜色),不脉冲/不扩散。渐变层数是正交参数,不受影响。
     let anim = if reduce_motion_on() {
         LightAnim::Steady {
             color: anim.color(),
-            layers: anim.layers(),
         }
     } else {
         anim
     };
     view.rust_set_color(nscolor(anim.color()));
-    view.rust_set_layers(anim.layers());
+    view.rust_set_layers(layers);
 
     let layer = view.layer().expect("PillView 须 layer-backed");
     // 先清掉旧的:opacity 动画 + 波纹环子视图。

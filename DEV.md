@@ -114,7 +114,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 - Configurable：Settings 里每状态独立改 动效 + 颜色 + 周期 + 渐变层数（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
 - Carrier：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用两个错相 `RingView` 子视图扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示自绘彩色圆点（`overlay::swatch_image`，`setTemplate:NO` 保留真彩），不可设动效。
 - 速度（周期）以 **Hz** 呈现给用户（`period_ms = 1000 / Hz`）；常亮（Steady）无周期、速度不可设。
-- **渐变层数（Gradient layers）**：圆点本体按半径等距分 L=layers+1 个同心环（slider 值 layers∈0..=4，默认 1），第 k 层（k=0 中心）透明度 α=1−k/L（中心最亮、向外线性递减；0=纯色单层=历史行为，1=两层外层 α=0.5，2=三层中 2/3·外 1/3）。每段画 even-odd 环（外圆+内圆 path）独立 α、互不重叠，避免 source-over 合成使中间层 α 累加。`LightAnim.layers` 三变体共享、与动画类型正交（如同 `color` 也正交却仍属灯效），经 `light()` 单一入口直达 `PillView::drawRect`。**仅作用于 Signal Light 浮窗圆点本体**；Signal Icon（菜单栏，18px 太小）与波纹环（`RingView` 扩散动画）不分级。Settings State pane 每状态独立设（整数拉杆，右侧显示 slider 值，0..=4，默认 1）；Reduce Motion 降级为 Steady 时保留层数。
+- **渐变层数（Gradient layers）**：圆点本体按半径等距分 L=layers+1 个同心环（slider 值 layers∈0..=4，默认 1），第 k 层（k=0 中心）透明度 α=1−k/L（中心最亮、向外线性递减；0=纯色单层=历史行为，1=两层外层 α=0.5，2=三层中 2/3·外 1/3）。每段画 even-odd 环（外圆+内圆 path）独立 α、互不重叠，避免 source-over 合成使中间层 α 累加。`layers` 与动画类型正交、且只被浮窗 `drawRect` 消费，故**不**放 `LightAnim` 枚举（避免随 `light()` 流经菜单栏图标 / 波纹环 / 色块等不分级消费者），而是作 `set_light` 的正交参数，由 `Settings::layers(snap)` 经 `StateStyle::layers()` 单独取。**仅作用于 Signal Light 浮窗圆点本体**；Signal Icon（菜单栏，18px 太小）与波纹环（`RingView` 扩散动画）不分级。Settings State pane 每状态独立设（整数拉杆，右侧显示 slider 值，0..=4，默认 1）；Reduce Motion 降级为 Steady 时保留层数。
 
 ### Accessibility（Reduce Motion / Reduce Transparency）
 

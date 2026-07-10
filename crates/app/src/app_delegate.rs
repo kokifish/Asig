@@ -523,20 +523,24 @@ impl AppDelegate {
 impl AppDelegate {
     /// 把单个灯效分发到菜单栏灯 + 浮窗(渲染总在主线程)。`render` 与 `preview_tick` 共用,
     /// 避免两处各写一遍 status_item + overlay 的 set_light。
-    fn render_anim(&self, anim: LightAnim) {
+    fn render_anim(&self, anim: LightAnim, layers: u8) {
         let mtm = MainThreadMarker::new().expect("render_anim 须在主线程");
         if let Some(item) = self.ivars().status_item.borrow().as_ref() {
             crate::tray::set_light(item, &anim, mtm);
         }
         if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
-            crate::overlay::set_light(view, anim);
+            crate::overlay::set_light(view, anim, layers);
         }
     }
 
     /// 把快照渲染到所有 UI(菜单栏灯 + 浮窗 + popover)。灯效来自用户设置。
     fn render(&self, snap: &Snapshot) {
-        let anim = self.ivars().settings.borrow().light(snap);
-        self.render_anim(anim);
+        // 动画规格(LightAnim)与渐变层数是两条正交轴,分别从 settings 取:light() 不带 layers。
+        let (anim, layers) = {
+            let s = self.ivars().settings.borrow();
+            (s.light(snap), s.layers(snap))
+        };
+        self.render_anim(anim, layers);
         if let Some(p) = self.ivars().popover.borrow().as_ref() {
             crate::panel::update_label(p, snap);
         }
@@ -583,7 +587,6 @@ impl AppDelegate {
                 LightAnim::Pulse {
                     color: Color::LightBlue,
                     period_ms: 450,
-                    layers: GRADIENT_LAYERS_DEFAULT,
                 },
             ),
             ("Working", AgentStatus::Working.light()),
@@ -592,7 +595,7 @@ impl AppDelegate {
             ("Offline", AgentStatus::Offline.light()),
         ];
         let (name, anim) = states[IDX.fetch_add(1, Ordering::SeqCst) % states.len()];
-        self.render_anim(anim);
+        self.render_anim(anim, GRADIENT_LAYERS_DEFAULT);
         println!("[asig-preview] {name}: {anim:?}");
         let mut out = std::io::stdout();
         let _ = std::io::Write::flush(&mut out);

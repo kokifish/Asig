@@ -6,10 +6,7 @@
 
 use crate::Snapshot;
 use crate::source::AgentKind;
-use crate::status::{
-    AgentStatus, Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN,
-    LightAnim,
-};
+use crate::status::{AgentStatus, Color, LightAnim};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -26,7 +23,15 @@ pub enum Anim {
     Ripple,
 }
 
-/// 单个状态的可配置样式:颜色 + 动画 + 周期。
+/// 渐变层数(信号灯圆点同心圆分层)的合法范围与默认。存的是「slider 值」0..=4:
+/// 0=纯色单层(等价历史行为)、1=两层(外层 α=0.5)、2=三层(中 2/3·外 1/3)……
+/// 实际层数 L=layers+1,第 k 层(k=0 中心)透明度 α=1−k/L。app 层 slider 以 MIN/MAX 为边界,
+/// 渲染层 draw_rect 据此画等距同心环;仅作用于浮窗圆点本体,菜单栏图标不分级。
+pub const GRADIENT_LAYERS_MIN: u8 = 0;
+pub const GRADIENT_LAYERS_MAX: u8 = 4;
+pub const GRADIENT_LAYERS_DEFAULT: u8 = 1;
+
+/// 单个状态的可配置样式:颜色 + 动画 + 周期 + 渐变层数。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct StateStyle {
     pub color: Color,
@@ -42,57 +47,40 @@ pub struct StateStyle {
 impl StateStyle {
     /// 反向:从内核硬编码的 `LightAnim` 构造(用于派生 5 个真实状态的默认样式)。
     fn from_light(la: LightAnim) -> Self {
-        match la {
-            LightAnim::Steady { color, layers } => Self {
-                color,
-                anim: Anim::Steady,
-                period_ms: 0,
-                gradient_layers: layers,
-            },
-            LightAnim::Pulse {
-                color,
-                period_ms,
-                layers,
-            } => Self {
-                color,
-                anim: Anim::Pulse,
-                period_ms,
-                gradient_layers: layers,
-            },
-            LightAnim::Ripple {
-                color,
-                period_ms,
-                layers,
-            } => Self {
-                color,
-                anim: Anim::Ripple,
-                period_ms,
-                gradient_layers: layers,
-            },
+        // LightAnim 不带渐变层数(那是正交的圆点绘制规格),派生默认样式时回填默认层数。
+        let (color, anim, period_ms) = match la {
+            LightAnim::Steady { color } => (color, Anim::Steady, 0),
+            LightAnim::Pulse { color, period_ms } => (color, Anim::Pulse, period_ms),
+            LightAnim::Ripple { color, period_ms } => (color, Anim::Ripple, period_ms),
+        };
+        Self {
+            color,
+            anim,
+            period_ms,
+            gradient_layers: GRADIENT_LAYERS_DEFAULT,
         }
     }
 
-    /// 正向:翻译成内核的 `LightAnim`(带周期下限保护,避免过快)。
+    /// 正向:翻译成内核的 `LightAnim`(带周期下限保护,避免过快)。不含渐变层数——
+    /// 那是正交的圆点绘制规格,由 `layers()` 单独取,经 `set_light` 参数传入浮窗。
     fn to_light(self) -> LightAnim {
-        let layers = self
-            .gradient_layers
-            .clamp(GRADIENT_LAYERS_MIN, GRADIENT_LAYERS_MAX);
         match self.anim {
-            Anim::Steady => LightAnim::Steady {
-                color: self.color,
-                layers,
-            },
+            Anim::Steady => LightAnim::Steady { color: self.color },
             Anim::Pulse => LightAnim::Pulse {
                 color: self.color,
                 period_ms: self.period_ms.max(200),
-                layers,
             },
             Anim::Ripple => LightAnim::Ripple {
                 color: self.color,
                 period_ms: self.period_ms.max(400),
-                layers,
             },
         }
+    }
+
+    /// 渐变层数(slider 值,clamp 到合法范围)。浮窗 drawRect 据此画 layers+1 同心环。
+    pub fn layers(self) -> u8 {
+        self.gradient_layers
+            .clamp(GRADIENT_LAYERS_MIN, GRADIENT_LAYERS_MAX)
     }
 }
 
@@ -292,6 +280,20 @@ impl Settings {
             self.style_for(StyleKey::DoneNotif).to_light()
         } else {
             self.light_for(snap.global)
+        }
+    }
+
+    /// 某个真实状态对应的渐变层数。
+    pub fn layers_for(&self, s: AgentStatus) -> u8 {
+        self.style_for(StyleKey::from(s)).layers()
+    }
+
+    /// 一次快照应渲染的渐变层数(与 `light()` 同优先级:DoneNotif 优先于 global)。
+    pub fn layers(&self, snap: &Snapshot) -> u8 {
+        if snap.done_notif {
+            self.style_for(StyleKey::DoneNotif).layers()
+        } else {
+            self.layers_for(snap.global)
         }
     }
 
@@ -513,8 +515,8 @@ mod tests {
     #[test]
     fn gradient_layers_clamped_and_default() {
         // 默认 = 1(两层渐变)
-        assert_eq!(Settings::default().light_for(AgentStatus::Done).layers(), 1);
-        // 越界值(手改配置)在 to_light 时 clamp 回 [0, 4]
+        assert_eq!(Settings::default().style_for(StyleKey::Done).layers(), 1);
+        // 越界值(手改配置)经 StateStyle::layers() clamp 回 [0, 4]
         let mut s = Settings::default();
         s.styles.insert(
             StyleKey::Done,
@@ -525,7 +527,7 @@ mod tests {
                 gradient_layers: 99,
             },
         );
-        assert_eq!(s.light_for(AgentStatus::Done).layers(), GRADIENT_LAYERS_MAX);
+        assert_eq!(s.style_for(StyleKey::Done).layers(), GRADIENT_LAYERS_MAX);
     }
 
     #[test]
