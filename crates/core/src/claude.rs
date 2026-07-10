@@ -21,10 +21,12 @@
 //! NeedsDeci(待决策)检测:
 //!   - session 文件的 `status` 在"Claude 问你问题"时**仍是 busy**(turn 还没结束),
 //!     故单看 status 只能区分 busy(Working)/idle(Done),永远到不了 NeedsDeci。
-//!   - 真正信号在会话 transcript(`~/.claude/projects/*/<sessionId>.jsonl`)的最后一条
-//!     `stop_reason`:busy 且 `end_turn`(模型说完、把控制权交还用户)→ NeedsDeci(等你
-//!     输入/决策);`tool_use`/未知 → Working(正在跑工具)。只读文件尾部 ~16KB,3s 一次
-//!     轮询开销可忽略;读不到 transcript → 回退 Working(不报错)。
+//!   - 真正信号在会话 transcript(`~/.claude/projects/*/<sessionId>.jsonl`)尾部最后一条
+//!     有意义事件:busy 且 `end_turn`(模型说完、把控制权交还用户)→ NeedsDeci(等你
+//!     输入/决策);`user`(用户刚输入、Claude 正在处理)/`tool_use`/未知 → Working。
+//!     关键:end_turn 之后若已有 user 消息,判 Working 而非残留 end_turn 误判 NeedsDeci
+//!     (用户回了 = Claude 在跑,不是等你)。只读文件尾部 ~16KB,3s 一次轮询开销可忽略;
+//!     读不到 transcript → 回退 Working(不报错)。
 
 use crate::source::{AgentKind, AgentSession, AgentSource};
 use crate::status::AgentStatus;
@@ -110,13 +112,13 @@ impl AgentSource for ClaudeLikeSource {
             &files,
             &mut seen,
             Self::pid_alive,
-            |sid| last_stop_reason(root, sid),
+            |sid| last_signal(root, sid),
             self.kind,
         )
     }
 }
 
-/// 纯函数核心:给定本轮发现的文件集 + 历史可见状态 + 存活判定 + stop_reason 探测,决定
+/// 纯函数核心:给定本轮发现的文件集 + 历史可见状态 + 存活判定 + 尾部信号探测,决定
 /// 每个会话的状态,并更新 `seen`。文件系统 / pid / 时间 / transcript 都被抽掉,便于 MOCK。
 ///
 /// **按 cwd 聚合**:同目录下的多个 session(用户手开的 interactive + claude `--fork-session`
@@ -128,7 +130,7 @@ fn discover_from(
     files: &[SessionFile],
     seen: &mut HashMap<u32, AgentStatus>,
     is_alive: impl Fn(u32) -> bool,
-    stop_reason_of: impl Fn(&str) -> Option<String>,
+    signal_of: impl Fn(&str) -> Option<String>,
     kind: AgentKind,
 ) -> Vec<AgentSession> {
     // 按目录分组,记下首次出现顺序(稳定输出)。
@@ -155,7 +157,7 @@ fn discover_from(
             continue;
         };
         let prev = seen.get(&primary.pid).copied();
-        let Some(st) = group_status(primary, group, prev, &is_alive, &stop_reason_of) else {
+        let Some(st) = group_status(primary, group, prev, &is_alive, &signal_of) else {
             continue;
         };
         seen.insert(primary.pid, st);
@@ -182,7 +184,7 @@ fn group_status(
     group: &[&SessionFile],
     prev_of_primary: Option<AgentStatus>,
     is_alive: &impl Fn(u32) -> bool,
-    stop_reason_of: &impl Fn(&str) -> Option<String>,
+    signal_of: &impl Fn(&str) -> Option<String>,
 ) -> Option<AgentStatus> {
     let mut best: Option<AgentStatus> = None;
     for &f in group {
@@ -193,12 +195,12 @@ fn group_status(
         };
         let alive = is_alive(f.pid);
         // 只对 busy 进程读 transcript(idle/shell→Done 无需、省一次文件读)。
-        let sr = if alive && f.status.as_deref() == Some("busy") {
-            f.session_id.as_deref().and_then(stop_reason_of)
+        let sig = if alive && f.status.as_deref() == Some("busy") {
+            f.session_id.as_deref().and_then(signal_of)
         } else {
             None
         };
-        let Some(st) = classify(f, prev, alive, sr.as_deref()) else {
+        let Some(st) = classify(f, prev, alive, sig.as_deref()) else {
             continue;
         };
         best = Some(most_active(best, st));
@@ -226,8 +228,8 @@ fn most_active(a: Option<AgentStatus>, b: AgentStatus) -> AgentStatus {
 /// 单文件状态判定(纯函数)。
 ///
 /// - pid 活且 `idle`/`shell` → Done;
-/// - pid 活且 `busy`:`stop_reason == "end_turn"`(模型说完、等用户回)→ NeedsDeci;
-///   `tool_use`/未知/读不到 → Working(正在跑工具);
+/// - pid 活且 `busy`:`signal == "end_turn"`(模型说完、等用户回)→ NeedsDeci;
+///   `signal` 为 `"user"`(用户刚输入、Claude 正在处理)/`tool_use`/未知/读不到 → Working;
 /// - pid 活、status 未知 → Working;
 /// - pid 死且 `seen` 里曾见过(活的)→ **Offline**(崩溃/被杀,文件残留);
 /// - pid 死且从没见过 → `None`(古老残留,跳过,不制造噪音)。
@@ -235,15 +237,15 @@ fn classify(
     f: &SessionFile,
     prev: Option<AgentStatus>,
     alive: bool,
-    stop_reason: Option<&str>,
+    signal: Option<&str>,
 ) -> Option<AgentStatus> {
     if alive {
         Some(match f.status.as_deref() {
             // idle/shell = 空闲(shell=Claude REPL 等输入,无活跃任务)→ Done,非 Working。
             Some("idle") | Some("shell") => AgentStatus::Done,
-            Some("busy") => match stop_reason {
+            Some("busy") => match signal {
                 Some("end_turn") => AgentStatus::NeedsDeci,
-                _ => AgentStatus::Working, // tool_use / 未知 / 读不到 → 正在跑
+                _ => AgentStatus::Working, // user / tool_use / 未知 / 读不到 → 正在跑
             },
             _ => AgentStatus::Working,
         })
@@ -252,9 +254,9 @@ fn classify(
     }
 }
 
-/// 读会话 transcript(`<root>/projects/*/<sessionId>.jsonl`)尾部最后一条 `stop_reason`。
-/// busy 会话据此区分 NeedsDeci(end_turn)vs Working(tool_use)。读不到 → None(回退 Working)。
-fn last_stop_reason(root: &Path, session_id: &str) -> Option<String> {
+/// 读会话 transcript(`<root>/projects/*/<sessionId>.jsonl`)尾部的"最后信号"。
+/// busy 会话据此区分 NeedsDeci(end_turn)vs Working(其他)。读不到 → None(回退 Working)。
+fn last_signal(root: &Path, session_id: &str) -> Option<String> {
     let projects = root.join("projects");
     let Ok(entries) = std::fs::read_dir(&projects) else {
         return None;
@@ -262,23 +264,33 @@ fn last_stop_reason(root: &Path, session_id: &str) -> Option<String> {
     for e in entries.flatten() {
         let p = e.path().join(format!("{session_id}.jsonl"));
         if p.is_file() {
-            return read_tail_stop_reason(&p);
+            return read_tail_signal(&p);
         }
     }
     None
 }
 
-/// 只读文件尾部 ~16KB,反序找最后一条带 `message.stop_reason` 的行。
-/// 尾部 I/O(seek+read+lossy+丢首行+解析)走共用 `jsonl_tail::read_tail_lines`。
-fn read_tail_stop_reason(path: &Path) -> Option<String> {
+/// 只读文件尾部 ~16KB,反序找最后一条**有意义事件**:`type:"user"`(用户刚输入,Claude
+/// 正在处理)→ 返回 `"user"`;`type:"assistant"` → 返回其 `message.stop_reason`
+/// (`end_turn`/`tool_use`/...)。这样 end_turn 之后若已有 user 消息,判 Working 而非
+/// 残留 end_turn 误判 NeedsDeci。尾部 I/O 走共用 `jsonl_tail::read_tail_lines`。
+fn read_tail_signal(path: &Path) -> Option<String> {
     let events = crate::jsonl_tail::read_tail_lines(path, 16_384)?;
     for v in events.iter().rev() {
-        if let Some(sr) = v
-            .get("message")
-            .and_then(|m| m.get("stop_reason"))
-            .and_then(|s| s.as_str())
-        {
-            return Some(sr.to_string());
+        let Some(ty) = v.get("type").and_then(|t| t.as_str()) else {
+            continue;
+        };
+        if ty == "user" {
+            return Some("user".to_string());
+        }
+        if ty == "assistant" {
+            if let Some(sr) = v
+                .get("message")
+                .and_then(|m| m.get("stop_reason"))
+                .and_then(|s| s.as_str())
+            {
+                return Some(sr.to_string());
+            }
         }
     }
     None
@@ -321,6 +333,11 @@ mod tests {
         assert_eq!(
             classify(&pf(1, Some("busy")), None, true, Some("end_turn")),
             Some(AgentStatus::NeedsDeci)
+        );
+        // busy + user(用户刚输入、Claude 处理中)→ Working(曾因残留 end_turn 误判 NeedsDeci)
+        assert_eq!(
+            classify(&pf(1, Some("busy")), None, true, Some("user")),
+            Some(AgentStatus::Working)
         );
         // idle → Done(stop_reason 无关;即 idle 优先于 stop_reason)
         assert_eq!(
@@ -373,6 +390,58 @@ mod tests {
             ),
             Some(AgentStatus::Offline)
         );
+    }
+
+    // ---- read_tail_signal:transcript 尾部信号 ----
+
+    fn write_jsonl(name: &str, lines: &[&str]) -> std::path::PathBuf {
+        use std::io::Write;
+        let p =
+            std::env::temp_dir().join(format!("asig_claude_{name}_{}.jsonl", std::process::id()));
+        let mut f = std::fs::File::create(&p).unwrap();
+        for l in lines {
+            writeln!(f, "{l}").unwrap();
+        }
+        drop(f);
+        p
+    }
+
+    #[test]
+    fn read_tail_signal_user_after_end_turn_is_user() {
+        // end_turn 后有 user(用户回了)→ "user"(Claude 处理中 → Working),不误判残留 end_turn
+        let p = write_jsonl(
+            "user_after_end",
+            &[
+                r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#,
+                r#"{"type":"user","message":{"role":"user"}}"#,
+            ],
+        );
+        assert_eq!(read_tail_signal(&p).as_deref(), Some("user"));
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn read_tail_signal_end_turn_when_last_is_end_turn() {
+        // 最后是 assistant end_turn(等用户)→ "end_turn" → NeedsDeci
+        let p = write_jsonl(
+            "end_last",
+            &[
+                r#"{"type":"user","message":{"role":"user"}}"#,
+                r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#,
+            ],
+        );
+        assert_eq!(read_tail_signal(&p).as_deref(), Some("end_turn"));
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn read_tail_signal_tool_use_is_tool_use() {
+        let p = write_jsonl(
+            "tool",
+            &[r#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#],
+        );
+        assert_eq!(read_tail_signal(&p).as_deref(), Some("tool_use"));
+        std::fs::remove_file(&p).ok();
     }
 
     #[test]
