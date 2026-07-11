@@ -12,15 +12,16 @@
 //! 与 OpenClaw source 重叠)。
 //!
 //! Offline 检测(廉价、可靠):
-//!   - `status` 字段只有 busy/idle/shell,没有 error/offline;
+//!   - `status` 字段只有 busy/idle/shell/waiting,没有 error/offline;
 //!   - `statusUpdatedAt` 实测只在**状态转换**时写,不是周期心跳(busy 会话跑很久也
 //!     不更新),故**不能**用心跳新鲜度判"卡死"——会误报长任务;
 //!   - 可靠信号:进程死了。Claude 干净退出会清掉 session 文件;**残留的死 pid 文件
 //!     = 崩溃/被杀**。Asig 只对"本轮之前见过它活着"的会话报 Offline,过滤掉古老残留。
 //!
 //! NeedsDeci(待决策)检测:
-//!   - session 文件的 `status` 在"Claude 问你问题"时**仍是 busy**(turn 还没结束),
-//!     故单看 status 只能区分 busy(Working)/idle(Done),永远到不了 NeedsDeci。
+//!   - `status == "waiting"`(Claude 等用户输入/授权,如工具 permission)→ 直接 NeedsDeci;
+//!   - 否则 session 文件的 `status` 在"Claude 问你问题"时仍是 busy(turn 还没结束),
+//!     故单看 busy/idle 只能区分 Working/Done,得到 NeedsDeci 靠下面的 transcript 信号。
 //!   - 真正信号在会话 transcript(`~/.claude/projects/*/<sessionId>.jsonl`)尾部最后一条
 //!     有意义事件:busy 且 `end_turn`(模型说完、把控制权交还用户)→ NeedsDeci(等你
 //!     输入/决策);`user`(用户刚输入、Claude 正在处理)/`tool_use`/未知 → Working。
@@ -51,7 +52,7 @@ struct SessionFile {
     #[serde(default)]
     kind: Option<String>,
     #[serde(default)]
-    status: Option<String>, // "busy" | "idle" | "shell"
+    status: Option<String>, // "busy" | "idle" | "shell" | "waiting"
 }
 
 pub struct ClaudeLikeSource {
@@ -228,6 +229,8 @@ fn most_active(a: Option<AgentStatus>, b: AgentStatus) -> AgentStatus {
 /// 单文件状态判定(纯函数)。
 ///
 /// - pid 活且 `idle`/`shell` → Done;
+/// - pid 活且 `waiting`(Claude 等用户输入/授权,如工具 permission)→ NeedsDeci
+///   (status 层明确,优先于 transcript——此时尾部可能是历史 tool_use);
 /// - pid 活且 `busy`:`signal == "end_turn"`(模型说完、等用户回)→ NeedsDeci;
 ///   `signal` 为 `"user"`(用户刚输入、Claude 正在处理)/`tool_use`/未知/读不到 → Working;
 /// - pid 活、status 未知 → Working;
@@ -243,6 +246,9 @@ fn classify(
         Some(match f.status.as_deref() {
             // idle/shell = 空闲(shell=Claude REPL 等输入,无活跃任务)→ Done,非 Working。
             Some("idle") | Some("shell") => AgentStatus::Done,
+            // waiting = Claude 等用户输入/授权(如工具 permission),明确的 NeedsDeci,
+            // 优先于 transcript(尾部可能是历史 tool_use,但 status 已切 waiting)。
+            Some("waiting") => AgentStatus::NeedsDeci,
             Some("busy") => match signal {
                 Some("end_turn") => AgentStatus::NeedsDeci,
                 _ => AgentStatus::Working, // user / tool_use / 未知 / 读不到 → 正在跑
@@ -338,6 +344,15 @@ mod tests {
         assert_eq!(
             classify(&pf(1, Some("busy")), None, true, Some("user")),
             Some(AgentStatus::Working)
+        );
+        // waiting(Claude 等用户输入/授权)→ NeedsDeci,优先于 transcript(尾部可能是历史 tool_use)
+        assert_eq!(
+            classify(&pf(1, Some("waiting")), None, true, Some("tool_use")),
+            Some(AgentStatus::NeedsDeci)
+        );
+        assert_eq!(
+            classify(&pf(1, Some("waiting")), None, true, None),
+            Some(AgentStatus::NeedsDeci)
         );
         // idle → Done(stop_reason 无关;即 idle 优先于 stop_reason)
         assert_eq!(
