@@ -129,6 +129,15 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 - 速度（周期）以 **Hz** 呈现给用户（`period_ms = 1000 / Hz`）；常亮（Steady）无周期、速度不可设。
 - **渐变层数（Gradient layers）**：圆点本体按半径等距分 L=layers+1 个同心环（slider 值 layers∈0..=4，默认 1），第 k 层（k=0 中心）透明度 α=1−k/L（中心最亮、向外线性递减；0=纯色单层=历史行为，1=两层外层 α=0.5，2=三层中 2/3·外 1/3）。每段画 even-odd 环（外圆+内圆 path）独立 α、互不重叠，避免 source-over 合成使中间层 α 累加。`layers` 与动画类型正交、且只被浮窗 `drawRect` 消费，故**不**放 `LightAnim` 枚举（避免随 `light()` 流经菜单栏图标 / 波纹环 / 色块等不分级消费者），而是作 `set_light` 的正交参数，由 `Settings::layers(snap)` 经 `StateStyle::layers()` 单独取。**仅作用于 Signal Light 浮窗圆点本体**；Signal Icon（菜单栏，18px 太小）与波纹环（`RingView` 扩散动画）不分级。Settings State pane 每状态独立设（整数拉杆，右侧显示 slider 值，0..=4，默认 1）；Reduce Motion 降级为 Steady 时保留层数。
 
+### System Notifications（系统通知）
+
+转入某些状态时弹 macOS 系统通知（`UserNotifications` framework,`notify.rs`），让用户全屏干活也能被叫回。
+
+- 触发:`tick` 边沿检测(`app_delegate::maybe_notify`)——`snap.global` 转入(≠上一轮)且在 `notify_on` → 发通知;同一状态停留不重复弹。
+- 默认 `[NeedsDeci, Error]`(`Settings.notify_on`,serde default 向后兼容)。General pane「状态通知」多选可改(5 个 AgentStatus chip)。
+- 内容:title=`Asig`,body=状态名(按 `Settings.lang`);identifier 固定 `asig-status`(新通知覆盖旧,通知中心不堆积)。
+- 授权:启动 `notify::request_authorization`(alert+sound),首次弹系统对话框;未授权则 `send` 静默 no-op。
+
 ### Accessibility（Reduce Motion / Reduce Transparency）
 
 遵循 macOS 无障碍开关（System Settings → Accessibility → Display），读 `NSWorkspace.shared` 的两个布尔：
@@ -193,6 +202,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - Click-through/点击穿透(取消则可拖动): 开关。默认开
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
   - Agent to monitor/监控的 Agent: 多选块(Claude Code / CodeBuddy / OpenClaw 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
+  - Status notifications/状态通知: 多选块(已完成/运行中/待决策/错误/异常 横排圆角块,选中=转入该状态时弹 macOS 系统通知,点击 toggle)。默认 待决策+错误;数据结构 `notify_on: Vec<AgentStatus>`
   - Launch at login/开机自启动(待实现): 开关。默认开
   - Theme/主题: 横向单选按钮组 "跟随系统", "深色", "浅色"。默认"跟随系统"
 

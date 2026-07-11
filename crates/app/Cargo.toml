@@ -71,3 +71,11 @@ objc2-quartz-core = { version = "0.3", features = [
     "CAMediaTimingFunction",
     "CATransform3D", # 波纹「绕圆心缩放」变换动画(绕开 layer-backed 视图 anchorPoint 被重置的问题)
 ] }
+# 系统通知:转 NeedsDeci/Error 等状态时弹 macOS 通知(UserNotifications framework)。
+objc2-user-notifications = { version = "0.3", features = [
+    "UNUserNotificationCenter",
+    "UNNotification",
+    "UNNotificationContent",
+    "UNNotificationRequest",
+    "UNNotificationTrigger",
+] }

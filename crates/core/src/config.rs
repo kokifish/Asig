@@ -217,6 +217,10 @@ pub struct Settings {
     /// 旧配置无此字段 → 全开,保持现有行为不变。
     #[serde(default = "default_enabled_agents")]
     pub enabled_agents: Vec<AgentKind>,
+    /// 转入这些状态时弹 macOS 系统通知(General 多选)。默认 [NeedsDeci, Error] ——
+    /// 旧配置无此字段 → 回默认。
+    #[serde(default = "default_notify_on")]
+    pub notify_on: Vec<AgentStatus>,
 }
 
 fn default_poll_interval_ms() -> u32 {
@@ -229,6 +233,10 @@ fn default_done_notif_duration_s() -> u32 {
 
 fn default_enabled_agents() -> Vec<AgentKind> {
     AgentKind::IMPLEMENTED.to_vec()
+}
+
+fn default_notify_on() -> Vec<AgentStatus> {
+    vec![AgentStatus::NeedsDeci, AgentStatus::Error]
 }
 
 fn default_gradient_layers() -> u8 {
@@ -250,6 +258,7 @@ impl Default for Settings {
             theme: Theme::default(),
             done_notif_duration_s: default_done_notif_duration_s(),
             enabled_agents: default_enabled_agents(),
+            notify_on: default_notify_on(),
         }
     }
 }
@@ -613,6 +622,26 @@ mod tests {
         s.enabled_agents = vec![AgentKind::OpenClaw];
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.enabled_agents, vec![AgentKind::OpenClaw]);
+    }
+
+    #[test]
+    fn notify_on_default_roundtrip_and_backcompat() {
+        // 默认 = [NeedsDeci, Error]
+        let s = Settings::default();
+        assert_eq!(
+            s.notify_on,
+            vec![AgentStatus::NeedsDeci, AgentStatus::Error]
+        );
+        // 往返
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.notify_on, s.notify_on);
+        // 旧配置无此字段 → 默认
+        let old = r#"{"dot_size":16,"styles":{}}"#;
+        let s: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!(
+            s.notify_on,
+            vec![AgentStatus::NeedsDeci, AgentStatus::Error]
+        );
     }
 
     #[test]

@@ -76,18 +76,21 @@ pub(crate) fn add_plain_button(
     btn
 }
 
-/// Agent 多选 chip:原生 NSButton + NSBezelStyle::AccessoryBar(=13,亦别名 Recessed;Apple 专为
+/// 多选 chip:原生 NSButton + NSBezelStyle::AccessoryBar(=13,亦别名 Recessed;Apple 专为
 /// scope/chip toggle 设计的 bezel,如 Mail 文件夹切换)+ NSButtonType::PushOnPushOff(点击 on↔off)。
 /// 选中态由系统绘制(accentColor 浅底),单层 button —— 无 NSBox contentView 内缩导致的文字
-/// 错位、无 layer.borderColor 的 CGColor 坑。宽按 sizeToFit 自适应。返回 button(tag=AGENT_OFF+i)。
-pub(crate) fn add_agent_chip(
+/// 错位、无 layer.borderColor 的 CGColor 坑。宽按 sizeToFit 自适应。`action` 决定点击调用的
+/// 选择子(General 多个多选行复用此 helper:Agent chip → changeEnabledAgents:,状态通知 chip →
+/// changeNotifyOn:)。返回 button(tag 由调用方设)。
+pub(crate) fn add_toggle_chip(
     pane: &Retained<NSView>,
     origin: NSPoint,
     title: &str,
     tag: i64,
     delegate: &AppDelegate,
+    action: Sel,
 ) -> Retained<NSButton> {
-    let mtm = MainThreadMarker::new().expect("add_agent_chip 须主线程");
+    let mtm = MainThreadMarker::new().expect("add_toggle_chip 须主线程");
     let btn = NSButton::new(mtm);
     btn.setBezelStyle(NSBezelStyle::AccessoryBar);
     btn.setButtonType(NSButtonType::PushOnPushOff);
@@ -96,7 +99,7 @@ pub(crate) fn add_agent_chip(
     btn.setTag(tag as isize);
     unsafe {
         btn.setTarget(Some(delegate));
-        btn.setAction(Some(sel!(changeEnabledAgents:)));
+        btn.setAction(Some(action));
     }
     btn.sizeToFit();
     let fit = btn.frame();

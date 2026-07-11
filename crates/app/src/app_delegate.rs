@@ -49,6 +49,8 @@ pub struct AppIvars {
     pub settings_selection: RefCell<Option<Retained<NSView>>>,
     /// 各状态 pane 的控件(色块/radio/速度),按 StyleKey 索引;reset / 选择变更时刷新。
     pub state_controls: RefCell<HashMap<StyleKey, crate::settings::StateControls>>,
+    /// 上一轮的全局状态;转入时触发系统通知(边沿检测)。
+    pub last_global: RefCell<Option<AgentStatus>>,
 }
 
 define_class!(
@@ -69,6 +71,7 @@ define_class!(
             }
             self.persist_light_pos();
             let snap = self.snap();
+            self.maybe_notify(&snap);
             // 把 Reduce Motion 并入签名:用户在系统设置里切该开关时,签名变化 → 立即重渲染,
             // set_light 据 reduce_motion_on 把动画降级为常亮(无需常驻渲染,不损 CPU)。
             // 签名并入 reduce_motion + 外观(app):系统深浅 / Theme 切换时签名变化 → 下次
@@ -420,6 +423,30 @@ define_class!(
             self.settings_changed();
         }
 
+        /// General「状态通知」多选 chip action(点击 toggle)。tag = NOTIFY_OFF + i →
+        /// NOTIFY_STATUS_ORDER[i]:已选→移除、未选→加入。改完仅存盘(无需重渲染:灯效不变,
+        /// 只影响下次状态转入边沿时是否弹系统通知)。
+        #[unsafe(method(changeNotifyOn:))]
+        fn change_notify_on(&self, sender: *mut NSObject) {
+            let tag: i64 = unsafe { msg_send![sender, tag] };
+            let i = (tag - crate::settings::NOTIFY_OFF) as usize;
+            let Some(&kind) = crate::settings::NOTIFY_STATUS_ORDER.get(i) else {
+                return;
+            };
+            // recessed toggle button:点击后系统已切 state(on=1 通知 / off=0 不通知),据此改 Vec。
+            let state: i64 = unsafe { msg_send![sender, state] };
+            let mut kinds = self.ivars().settings.borrow().notify_on.clone();
+            if state == 1 {
+                if !kinds.contains(&kind) {
+                    kinds.push(kind);
+                }
+            } else {
+                kinds.retain(|k| *k != kind);
+            }
+            self.ivars().settings.borrow_mut().notify_on = kinds;
+            self.ivars().settings.borrow().save();
+        }
+
         /// General「Theme」radio action。sender tag − THEME_OFF = 0/1/2 = 跟随系统/深/浅。
         /// 设 NSApp.appearance + 存盘 + 重建(radio 选中态据新 theme 重设)+ 重绘。
         #[unsafe(method(changeTheme:))]
@@ -520,7 +547,34 @@ impl AppDelegate {
     }
 }
 
+/// AgentStatus 的本地化名称(系统通知 body 用)。与 settings strings 的状态名一致(中/英)。
+fn status_name(st: AgentStatus, lang: Lang) -> &'static str {
+    use AgentStatus::*;
+    match (st, lang) {
+        (Working, Lang::Zh) => "运行中",
+        (Working, Lang::En) => "Working",
+        (NeedsDeci, Lang::Zh) => "待决策",
+        (NeedsDeci, Lang::En) => "Pending",
+        (Done, Lang::Zh) => "已完成",
+        (Done, Lang::En) => "Done",
+        (Error, Lang::Zh) => "错误",
+        (Error, Lang::En) => "Error",
+        (Offline, Lang::Zh) => "异常",
+        (Offline, Lang::En) => "Offline",
+    }
+}
+
 impl AppDelegate {
+    /// 状态转入边沿检测:global 与上一轮不同 且 在 `notify_on` 列表 → 发 macOS 系统通知。
+    fn maybe_notify(&self, snap: &Snapshot) {
+        let st = snap.global;
+        let prev = self.ivars().last_global.replace(Some(st));
+        if prev != Some(st) && self.ivars().settings.borrow().notify_on.contains(&st) {
+            let lang = self.ivars().settings.borrow().lang;
+            crate::notify::send("Asig", status_name(st, lang));
+        }
+    }
+
     /// 把单个灯效分发到菜单栏灯 + 浮窗(渲染总在主线程)。`render` 与 `preview_tick` 共用,
     /// 避免两处各写一遍 status_item + overlay 的 set_light。
     fn render_anim(&self, anim: LightAnim, layers: u8) {

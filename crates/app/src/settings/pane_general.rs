@@ -12,14 +12,14 @@ use agent_light_core::{DOT_SIZE_MAX_PX, DOT_SIZE_MIN_PX, Lang};
 use crate::app_delegate::AppDelegate;
 
 use super::controls::{
-    add_agent_chip, add_card, add_header_icon, add_plain_button, add_popup, add_radio_button,
-    add_slider, add_switch, add_text, set_tag,
+    add_card, add_header_icon, add_plain_button, add_popup, add_radio_button, add_slider,
+    add_switch, add_text, add_toggle_chip, set_tag,
 };
 use super::strings::Strings;
 use super::tags::{
     AGENT_KIND_ORDER, AGENT_OFF, COL_W, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, H, HEADER_GAP,
-    LANG_EN_TAG, LANG_ZH_TAG, SIZE_LABEL_TAG, THEME_OFF, TOP_INSET, card_frame, card_height,
-    poll_preset_index, row_center_y, theme_index,
+    LANG_EN_TAG, LANG_ZH_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, SIZE_LABEL_TAG, THEME_OFF,
+    TOP_INSET, card_frame, card_height, poll_preset_index, row_center_y, theme_index,
 };
 
 pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> {
@@ -240,12 +240,13 @@ pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retain
     let mut chip_h: CGFloat = 22.0;
     for (i, &name) in st.agent_opts.iter().enumerate() {
         // 先以临时 origin 建好 chip 拿 sizeToFit 尺寸,再按 flow 定位 + 设初始选中态。
-        let btn = add_agent_chip(
+        let btn = add_toggle_chip(
             &pane,
             NSPoint::new(0.0, 0.0),
             name,
             AGENT_OFF + i as i64,
             delegate,
+            sel!(changeEnabledAgents:),
         );
         let bf = btn.frame();
         chip_h = chip_h.max(bf.size.height);
@@ -262,16 +263,63 @@ pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retain
         btn.setFrameOrigin(NSPoint::new(ax, row_center - bf.size.height / 2.0));
         ax += bw + CHIP_GAP;
     }
-    // agent chip 占 chip_row+1 行;超出 1 行(extra)让后续行(开机/主题)+ Group-2 卡片高度下移。
-    let extra = chip_row;
-    if extra > 0 {
-        group2.setFrame(card_frame(x0, y, 6 + extra));
-    }
-    // Launch at login(标签 + 开关,占位禁用)
+    // agent chip 占 chip_row+1 行;超出 1 行(agent_extra)让后续行下移。
+    let agent_extra = chip_row;
+    // —— 状态通知(标签 + 5 个 AgentStatus chip:Done/Working/NeedsDeci/Error/Offline;
+    // 选中=转入该状态时弹系统通知,默认 [NeedsDeci, Error])。置于 agent chip 之后、launch 之前,
+    // 同款 chip flow(sizeToFit 自适应 + 放不下换行)。notify 一行 + notify_extra 换行行数。 ——
+    let notify_row = 4 + agent_extra;
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 4 + extra) - 10.0),
+            NSPoint::new(lx, row_center_y(y, notify_row) - 10.0),
+            NSSize::new(lw, 20.0),
+        ),
+        st.notify,
+        false,
+        false,
+    );
+    let notify_on = delegate.ivars().settings.borrow().notify_on.clone();
+    let nrow0_center = row_center_y(y, notify_row);
+    let mut nx = cx;
+    let mut notify_row_count: usize = 0;
+    let mut notify_h: CGFloat = 22.0;
+    for (i, &name) in st.notify_opts.iter().enumerate() {
+        let btn = add_toggle_chip(
+            &pane,
+            NSPoint::new(0.0, 0.0),
+            name,
+            NOTIFY_OFF + i as i64,
+            delegate,
+            sel!(changeNotifyOn:),
+        );
+        let bf = btn.frame();
+        notify_h = notify_h.max(bf.size.height);
+        let on = notify_on.contains(&NOTIFY_STATUS_ORDER[i]);
+        unsafe {
+            let _: () = msg_send![&btn, setState: if on { 1i64 } else { 0 }];
+        }
+        let bw = bf.size.width;
+        if nx + bw > chip_max_x && nx > cx {
+            notify_row_count += 1;
+            nx = cx;
+        }
+        let row_center = nrow0_center - notify_row_count as CGFloat * (notify_h + CHIP_VGAP);
+        btn.setFrameOrigin(NSPoint::new(nx, row_center - bf.size.height / 2.0));
+        nx += bw + CHIP_GAP;
+    }
+    let notify_extra = notify_row_count;
+    // 卡片高度:原 6 行 + agent extra + notify 一行 + notify extra(换行行数)。
+    group2.setFrame(card_frame(x0, y, 6 + agent_extra + 1 + notify_extra));
+    // Launch at login(标签 + 开关,占位禁用)
+    let launch_theme_off = 1 + notify_extra; // launch/theme 相对 agent_extra 之后的额外下移
+    add_text(
+        &pane,
+        NSRect::new(
+            NSPoint::new(
+                lx,
+                row_center_y(y, 4 + agent_extra + launch_theme_off) - 10.0,
+            ),
             NSSize::new(lw, 20.0),
         ),
         st.launch_login,
@@ -281,7 +329,10 @@ pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retain
     let launch = add_switch(
         &pane,
         NSRect::new(
-            NSPoint::new(cx, row_center_y(y, 4 + extra) - 11.0),
+            NSPoint::new(
+                cx,
+                row_center_y(y, 4 + agent_extra + launch_theme_off) - 11.0,
+            ),
             NSSize::new(40.0, 22.0),
         ),
         false,
@@ -293,7 +344,10 @@ pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retain
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 5 + extra) - 10.0),
+            NSPoint::new(
+                lx,
+                row_center_y(y, 5 + agent_extra + launch_theme_off) - 10.0,
+            ),
             NSSize::new(lw, 20.0),
         ),
         st.theme,
@@ -308,7 +362,10 @@ pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retain
         let btn = add_radio_button(
             &pane,
             NSRect::new(
-                NSPoint::new(rx, row_center_y(y, 5 + extra) - 11.0),
+                NSPoint::new(
+                    rx,
+                    row_center_y(y, 5 + agent_extra + launch_theme_off) - 11.0,
+                ),
                 NSSize::new(100.0, 22.0),
             ),
             opt,

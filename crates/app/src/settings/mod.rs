@@ -53,7 +53,8 @@ pub use layout::{StateControls, layout_state_pane, refresh_duration, refresh_sta
 pub use strings::reset_confirm_texts;
 pub use tags::{
     AGENT_KIND_ORDER, AGENT_OFF, ANIM_OFF, ANIM_ORDER, COLOR_OFF, COLOR_ORDER, CONTENT_W,
-    LANG_EN_TAG, POLL_PRESETS_MS, SIZE_LABEL_TAG, THEME_OFF, parse_control_tag,
+    LANG_EN_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, POLL_PRESETS_MS, SIZE_LABEL_TAG, THEME_OFF,
+    parse_control_tag,
 };
 
 pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {

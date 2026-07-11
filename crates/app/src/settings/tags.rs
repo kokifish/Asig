@@ -7,7 +7,7 @@ use objc2_app_kit::NSImage;
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use agent_light_core::{AgentKind, Anim, Color, StyleKey, Theme};
+use agent_light_core::{AgentKind, AgentStatus, Anim, Color, StyleKey, Theme};
 
 pub(crate) const W: CGFloat = 680.0;
 pub(crate) const H: CGFloat = 460.0;
@@ -52,6 +52,18 @@ pub const POLL_PRESETS_MS: [u32; 6] = [1000, 2000, 3000, 5000, 10000, 15000];
 pub const AGENT_OFF: i64 = 700;
 /// Agent chip 顺序;引用 core 的 `AgentKind::IMPLEMENTED` 单一事实源(= 默认启用列表)。
 pub const AGENT_KIND_ORDER: [AgentKind; 3] = AgentKind::IMPLEMENTED;
+
+/// General pane「状态通知」多选 chip 的 tag 基数(+0..4 = 5 个 AgentStatus)。
+/// 避让 AGENT_OFF 700 / THEME 600。
+pub const NOTIFY_OFF: i64 = 800;
+/// 状态通知 chip 顺序(Done/Working/NeedsDeci/Error/Offline);与 `strings::notify_opts` 同序。
+pub const NOTIFY_STATUS_ORDER: [AgentStatus; 5] = [
+    AgentStatus::Done,
+    AgentStatus::Working,
+    AgentStatus::NeedsDeci,
+    AgentStatus::Error,
+    AgentStatus::Offline,
+];
 
 pub const TAB_GENERAL: i64 = 0;
 pub const TAB_ABOUT: i64 = 7;

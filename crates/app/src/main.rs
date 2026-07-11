@@ -2,6 +2,7 @@
 
 mod app_delegate;
 mod cli;
+mod notify;
 mod overlay;
 mod palette;
 mod panel;
@@ -54,6 +55,7 @@ fn main() {
         settings_selected: RefCell::new(0),
         settings_selection: RefCell::new(None),
         state_controls: RefCell::new(HashMap::new()),
+        last_global: RefCell::new(None),
     });
     // popover / 设置窗改为首次点击时懒创建(省常驻内存,压到 <60MB 预算内)。
 
@@ -85,6 +87,7 @@ fn main() {
         }
     }
 
+    notify::request_authorization(); // 请求系统通知授权(转 NeedsDeci/Error 等弹通知)
     unsafe {
         let _: () = msg_send![&app, setDelegate: &**delegate];
         app.run();
