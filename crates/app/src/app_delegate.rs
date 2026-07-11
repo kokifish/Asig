@@ -10,10 +10,11 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
 use objc2::{ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSApplicationDelegate, NSEventType, NSStatusItem, NSView, NSWindow,
-    NSWindowDelegate,
+    NSAlert, NSApplication, NSApplicationDelegate, NSEventType, NSScrollView, NSStatusItem, NSView,
+    NSWindow, NSWindowDelegate,
 };
-use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString, NSTimer};
+use objc2_core_foundation::CGFloat;
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer};
 use std::collections::HashMap;
 
 use crate::overlay::PillView;
@@ -39,8 +40,12 @@ pub struct AppIvars {
     pub tick_timer: RefCell<Option<Retained<NSTimer>>>,
     /// 设置窗侧栏(切换 tab 时改前缀用)。
     pub settings_sidebar: RefCell<Option<Retained<NSView>>>,
-    /// 设置窗右侧内容区(viewWithTag 找控件用)。
+    /// 设置窗右侧内容区(viewWithTag 找控件用;存 scrollView 的 NSView 视图)。
     pub settings_content: RefCell<Option<Retained<NSView>>>,
+    /// 设置窗右区 scrollView(切 pane 时读 documentView 设高 + 滚顶)。
+    pub settings_scroll: RefCell<Option<Retained<NSScrollView>>>,
+    /// 各 pane(按 tab id 0..7)的实际内容高;切 pane 时据此设 documentView 高。
+    pub settings_pane_heights: RefCell<HashMap<i64, CGFloat>>,
     /// 设置窗 8 个 pane(按 pane id 0..7 排列:常规/DoneNotif/.../Offline/关于)。切 tab 用。
     pub settings_panes: RefCell<Option<Vec<Retained<NSView>>>>,
     /// 设置窗当前选中的 tab(pane id)。
@@ -381,6 +386,24 @@ define_class!(
             }
             *self.ivars().settings_selected.borrow_mut() = new;
             crate::settings::update_selection(self, new);
+            // documentView 高度 = 新 pane 的 content_h(动态,每页独立滚动语义),并滚到顶
+            // (避免残留上一 pane 的滚动位置)。flipped doc 下 bounds origin y=0 即顶。
+            let new_h = self
+                .ivars()
+                .settings_pane_heights
+                .borrow()
+                .get(&new)
+                .copied()
+                .unwrap_or(crate::settings::H);
+            if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
+                if let Some(doc) = scroll.documentView() {
+                    let df: NSRect = unsafe { msg_send![&doc, frame] };
+                    let _: () =
+                        unsafe { msg_send![&doc, setFrameSize: NSSize::new(df.size.width, new_h)] };
+                }
+                let cv = scroll.contentView();
+                let _: () = unsafe { msg_send![&cv, setBoundsOrigin: NSPoint::new(0.0, 0.0)] };
+            }
         }
 
         /// 常规页「轮询间隔」下拉 action。改完即时重排 tick 定时器。
@@ -469,18 +492,20 @@ define_class!(
         #[unsafe(method(noop:))]
         fn noop(&self, _sender: *mut NSObject) {}
 
-        /// Settings 窗口尺寸变化:按右区新宽度重排所有 state pane 的色块
+        /// Settings 窗口尺寸变化:按右区 documentView 新宽度重排所有 state pane 的色块
         /// (固定间距 flow——宽度变时自动换行 / 很宽时合并为 1 行,色块间距恒定;
         /// card 高度也随之按行数重算)。其余 pane 靠 autoresizing 自适应宽度。
+        /// pane 宽读 documentView(scrollView 的 doc)——其宽随 scrollView(autoresizing=2)。
         #[unsafe(method(windowDidResize:))]
         fn window_did_resize(&self, _notif: *mut NSObject) {
             let pane_w = self
                 .ivars()
-                .settings_content
+                .settings_scroll
                 .borrow()
                 .as_ref()
-                .map(|c| {
-                    let f: NSRect = unsafe { msg_send![&**c, frame] };
+                .and_then(|s| s.documentView())
+                .map(|d| {
+                    let f: NSRect = unsafe { msg_send![&d, frame] };
                     f.size.width
                 })
                 .filter(|w| *w > 0.0)
@@ -537,6 +562,8 @@ impl AppDelegate {
         *self.ivars().settings_panes.borrow_mut() = None;
         *self.ivars().settings_sidebar.borrow_mut() = None;
         *self.ivars().settings_content.borrow_mut() = None;
+        *self.ivars().settings_scroll.borrow_mut() = None;
+        self.ivars().settings_pane_heights.borrow_mut().clear();
         *self.ivars().settings_selected.borrow_mut() = 0;
         self.ivars().state_controls.borrow_mut().clear();
         let w = crate::settings::build(self);

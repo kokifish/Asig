@@ -357,6 +357,35 @@ impl RingView {
     }
 }
 
+// ---- FlippedView:isFlipped=>YES 的 NSView,作 NSScrollView documentView ----
+// NSScrollView 的 documentView 默认非 flipped(底锚),不翻则内容贴底显示(General 一眼可辨)。
+// 翻转后 y=0 在顶,内容从顶部排布、向下延展,符合设置窗预期。
+define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FlippedView"]
+    #[ivars = ()]
+    pub struct FlippedView;
+
+    #[allow(non_snake_case)]
+    impl FlippedView {
+        /// 翻转坐标系:y=0 在顶(而非底),子视图从顶部排布。
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> Bool {
+            Bool::YES
+        }
+    }
+);
+
+impl FlippedView {
+    /// 按指定 frame 构造(alloc → set_ivars(()) → initWithFrame);ivars 为单元类型。
+    pub fn new(frame: NSRect) -> Retained<Self> {
+        let allocated: Allocated<Self> = unsafe { msg_send![Self::class(), alloc] };
+        let partial = allocated.set_ivars(());
+        unsafe { msg_send![super(partial), initWithFrame: frame] }
+    }
+}
+
 // ---- 构建浮窗 ----
 /// `saved` = 上次记忆的位置(含所在屏 id);None 或该屏已断开 → 主屏左上角默认。
 pub fn build(

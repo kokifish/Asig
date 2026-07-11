@@ -169,13 +169,13 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 ### Settings Panel
 
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
-- Position: 默认在屏幕中央，可以拖动；**可调整大小**（minSize = 默认 680×460;右区 pane 与卡片/滑块等随窗宽自适应,侧栏固定宽）
+- Position: 默认在屏幕中央，可以拖动；**可调整大小**（minSize = 默认 640×460;侧栏固定宽随高、右区 `NSScrollView` 随窗宽自适应）。**右区滚动 + 顶部锚定**:右区是 `NSScrollView`(documentView = `FlippedView` 顶锚 + 透明 ClipView 承玻璃),各 pane 内容超高自动出竖滚动条;缩放窗口时 pane 顶部固定不漂移,documentView 高 = 当前 pane 实际 content_h(切 tab 时设 + 滚顶)。紧凑编排:W=640 / SIDEBAR_W=160 / CONTENT_PAD_X=22;label 列宽 `label_col_width`(sizeToFit 测最宽文字,排除 reset 按钮),非固定值
 - Navigation: 左侧栏（顶部 tab 列表 + 底部图标行）+ 右侧 pane 切换。点 tab / 「关于」图标切换右侧 pane。
 - 材质：真·液态玻璃（macOS 26+ `NSGlassEffectView`，UI 必须放进其 `contentView`；旧系统回退 `NSVisualEffectView` vibrancy）。窗口 = 一整片主玻璃（透明标题栏，玻璃贯穿顶部）；**左侧栏是浮动玻璃面板**——独立一块 `NSGlassEffectView` 叠在主玻璃上，二次模糊自然更不透明，读作浮于内容之上的圆角玻璃块。刻意**不用** `NSGlassEffectContainerView`：它会合并重叠/相邻的玻璃成一次模糊，反而让浮动侧栏与主玻璃融为一体、失去「浮动」层次。**右侧内容区无外框、标题下无横线**；靠极淡连续圆角卡片（`quaternaryLabelColor`）分组（stats.app 式编排），用层级而非厚重描边区分。
 - Content:
   - 右侧内容区有自己的 **header**：标题固定在右侧内容区的左上方（State pane 的 Reset 按钮对齐到该 header 右侧），而不是漂在卡片列中央；标题下方不再有分隔线。
   - General pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、监控的 Agent（多选块；选中=监控,点击 toggle）、开机启动（占位，待实现）。详见 General Settings Card。
-  - State pane(每状态一个): 颜色（12 色块,**固定像素间距(15px)、左对齐 flow**——随窗宽自动换行,每行数量可不同,很宽时合并为 1 行;间距始终恒定、换行后与第一行同间距左对齐;label 左对齐、控件区往左加宽;Tailwind 源、随主题深浅自适应）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
+  - State pane(每状态一个): 颜色（12 色块,**固定像素间距(15px)、左对齐 flow**——随窗宽自动换行,每行数量可不同,很宽时合并为 1 行;间距始终恒定、换行后与第一行同间距左对齐;label 左对齐（列宽 = `label_col_width` sizeToFit 测最宽文字）、控件区往左加宽;Tailwind 源、随主题深浅自适应）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
   - About pane: 版本号 + GitHub 链接（纯展示）。
   - 各状态可独立改 动画 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
 - **Left Side Tabs**（左侧栏顶部、左对齐、自上而下 7 项；顺序固定）：

@@ -62,6 +62,8 @@ objc2-app-kit = { version = "0.3", features = [
     "NSAlert", # ResetAll 确认对话框
     "NSAppearance", # Theme setAppearance + NSColor dynamicProvider
     "NSColorList",  # NSColor colorWithName:dynamicProvider: 需此 feature
+    "NSScrollView", # 设置窗右区滚动(General 内容超高)
+    "NSClipView",   # NSScrollView contentView,透明背景防白底盖玻璃
 ] }
 # CoreAnimation:CALayer 透明度脉冲(交 render server 驱动,app CPU ~0%)。
 objc2-quartz-core = { version = "0.3", features = [

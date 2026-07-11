@@ -51,6 +51,8 @@ fn main() {
         tick_timer: RefCell::new(None),
         settings_sidebar: RefCell::new(None),
         settings_content: RefCell::new(None),
+        settings_scroll: RefCell::new(None),
+        settings_pane_heights: RefCell::new(HashMap::new()),
         settings_panes: RefCell::new(None),
         settings_selected: RefCell::new(0),
         settings_selection: RefCell::new(None),

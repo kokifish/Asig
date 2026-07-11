@@ -2,18 +2,19 @@
 //!
 //! 常量保持原 visibility(pub const 维持 pub,其余私有);helper 多为模块间复用 → pub(crate)。
 
-use objc2::rc::Retained;
-use objc2_app_kit::NSImage;
+use objc2::rc::{Allocated, Retained};
+use objc2::{MainThreadMarker, class, msg_send};
+use objc2_app_kit::{NSFont, NSImage, NSTextField};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use agent_light_core::{AgentKind, AgentStatus, Anim, Color, StyleKey, Theme};
 
-pub(crate) const W: CGFloat = 680.0;
+pub(crate) const W: CGFloat = 640.0;
 pub(crate) const H: CGFloat = 460.0;
-pub(crate) const SIDEBAR_W: CGFloat = 170.0;
+pub(crate) const SIDEBAR_W: CGFloat = 160.0;
 pub const CONTENT_W: CGFloat = W - SIDEBAR_W;
-pub(crate) const CONTENT_PAD_X: CGFloat = 26.0;
+pub(crate) const CONTENT_PAD_X: CGFloat = 22.0;
 pub(crate) const CONTENT_HEADER_H: CGFloat = 26.0;
 /// 标题(下方不再有横线)到首张卡片的间距。
 pub(crate) const HEADER_GAP: CGFloat = 16.0;
@@ -169,4 +170,31 @@ pub(crate) fn theme_index(theme: Theme) -> usize {
 pub(crate) fn sf_symbol(name: &str) -> Retained<NSImage> {
     NSImage::imageWithSystemSymbolName_accessibilityDescription(&NSString::from_str(name), None)
         .expect("SF Symbol not found")
+}
+
+/// 测量一组 label 文字的最宽渲染宽,作为 label 列宽(系统字体 13,与 `add_text` 同字体;
+/// +8 padding)。建临时 NSTextField → sizeToFit → 取 max → 丢弃(不进视图树)。与项目既有
+/// sizeToFit 习惯(pane_general 标题 / theme chip)一致。
+///
+/// 用法:General/State pane 在 build 时测一次,确定 cx(控件 x)与 cw(控件区宽)。
+/// **注意**:只传 label 文字,**排除**非 label 控件(如 reset 按钮),否则列宽偏大。
+pub(crate) fn label_col_width(labels: &[&str]) -> CGFloat {
+    let mtm = MainThreadMarker::new().expect("label_col_width 须主线程");
+    const PADDING: CGFloat = 8.0;
+    let mut max_w: CGFloat = 0.0;
+    for &s in labels {
+        // 临时字段(系统字体 13,与 add_text 默认一致),测完丢弃(超出作用域自动释放)。
+        let alloc: Allocated<NSTextField> = unsafe { msg_send![class!(NSTextField), alloc] };
+        let field = NSTextField::initWithFrame(
+            alloc,
+            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
+        );
+        field.setStringValue(&NSString::from_str(s));
+        field.setFont(Some(&NSFont::systemFontOfSize(13.0)));
+        field.sizeToFit();
+        let f = field.frame();
+        max_w = max_w.max(f.size.width);
+        let _ = mtm; // 主线程标记已用(构造须主线程)
+    }
+    max_w + PADDING
 }

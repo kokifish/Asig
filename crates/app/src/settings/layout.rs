@@ -11,13 +11,19 @@ use agent_light_core::{Anim, StateStyle, StyleKey};
 use crate::overlay::swatch_image;
 
 use super::tags::{
-    ANIM_ORDER, CARD_BOT_PAD, CARD_TOP_PAD, COLOR_GAP, COLOR_ORDER, CONTENT_PAD_X, H, HEADER_GAP,
+    ANIM_ORDER, CARD_BOT_PAD, CARD_TOP_PAD, COLOR_GAP, COLOR_ORDER, CONTENT_PAD_X, HEADER_GAP,
     ROW_H, SPEED_MAX, SPEED_MIN, SWATCH_D, TOP_INSET, hz_of,
 };
 
 /// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
 pub struct StateControls {
     pub key: StyleKey,
+    /// label 列宽(build 时按 state 5 个 label 自适应测一次;layout 读它,避免每次重测)。
+    pub lw: CGFloat,
+    /// pane 实际内容高(build 时按初始宽度算定;pane 高不随窗变 autoresizing=2)。
+    /// windowDidResize 重排时据它定 header/card 的 y(而非读 pane frame —— 后者虽等价,但
+    /// 缓存避免每次 msg_send)。宽度变 card 行数变 → card_h 变,若 card 超出 pane 高则出滚动条。
+    pub pane_h: CGFloat,
     pub card: Retained<NSBox>,
     pub color: Vec<Retained<NSButton>>,
     pub color_lbl: Retained<NSTextField>,
@@ -38,13 +44,14 @@ pub struct StateControls {
 
 /// 按 pane 宽度重排 state pane:card + 色块(固定间距 flow,行数随宽度)+ Anim/Speed/label。
 /// build 与 windowDidResize 都调 —— 宽度变时色块自动换行 / 合并到 1 行,间距始终固定。
+/// pane 高取 `c.pane_h`(build 时按初始宽度算定,pane 高不随窗变 autoresizing=2)。
 pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
     let col_w = pane_w - CONTENT_PAD_X * 2.0;
     let x0 = CONTENT_PAD_X;
+    let lw = c.lw;
     let lx = x0 + 16.0;
-    let cx = x0 + 96.0;
-    let cw = col_w - 96.0 - 16.0;
-    let lw = cx - lx;
+    let cx = x0 + 16.0 + lw;
+    let cw = col_w - 16.0 - lw;
     let step = SWATCH_D + COLOR_GAP; // 色块固定间距(恒定,不随宽度变)
     // 每行可容纳数:首块 + 后续 (step) 量出;放不下就换行(每行数量可不同)。
     let per_row = (((cw + COLOR_GAP) / step).floor() as usize).max(1);
@@ -56,7 +63,7 @@ pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
         0.0
     };
     let card_h = CARD_TOP_PAD + color_h + ROW_H * 3.0 + extra + CARD_BOT_PAD;
-    let y_top = H - CONTENT_PAD_X - TOP_INSET - HEADER_GAP; // card 顶
+    let y_top = c.pane_h - CONTENT_PAD_X - TOP_INSET - HEADER_GAP; // card 顶
     let color_top = y_top - CARD_TOP_PAD;
     let anim_top = color_top - color_h;
     let anim_mid = anim_top - ROW_H / 2.0;

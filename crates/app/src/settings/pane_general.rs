@@ -17,21 +17,37 @@ use super::controls::{
 };
 use super::strings::Strings;
 use super::tags::{
-    AGENT_KIND_ORDER, AGENT_OFF, COL_W, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, H, HEADER_GAP,
-    LANG_EN_TAG, LANG_ZH_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, SIZE_LABEL_TAG, THEME_OFF,
-    TOP_INSET, card_frame, card_height, poll_preset_index, row_center_y, theme_index,
+    AGENT_KIND_ORDER, AGENT_OFF, CARD_GAP, COL_W, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, H,
+    HEADER_GAP, LANG_EN_TAG, LANG_ZH_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, SIZE_LABEL_TAG,
+    THEME_OFF, TOP_INSET, card_frame, card_height, label_col_width, poll_preset_index,
+    row_center_y, theme_index,
 };
 
-pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retained<NSView> {
+pub(crate) fn build_general_pane(
+    delegate: &AppDelegate,
+    st: &Strings,
+) -> (Retained<NSView>, CGFloat) {
+    // label 列宽:测 9 个 label(系统字体 13,排除 reset 按钮)取最宽 + padding。
+    let labels: [&str; 9] = [
+        st.language,
+        st.reset_all,
+        st.light_size,
+        st.click_through,
+        st.poll_interval,
+        st.agent_monitor,
+        st.notify,
+        st.launch_login,
+        st.theme,
+    ];
+    let lw = label_col_width(&labels);
     let pane = super::controls::new_view(NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(CONTENT_W, H),
     ));
     let x0 = CONTENT_PAD_X;
     let lx = x0 + 16.0; // 标签 x
-    let cx = x0 + 200.0; // 控件 x
-    let cw = COL_W - 200.0 - 16.0; // 控件区宽
-    let lw = cx - lx; // 标签列宽(容纳最长标签,不裁剪)
+    let cx = x0 + 16.0 + lw; // 控件 x(label 列自适应)
+    let cw = COL_W - 16.0 - lw; // 控件区宽
     let mut y = H - CONTENT_PAD_X - TOP_INSET;
 
     // header:齿轮图标 + 标题(DEV.md General Settings Card 的 icon + Name)。
@@ -129,7 +145,7 @@ pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retain
         sel!(resetAll:),
         delegate,
     );
-    y -= card_height(2) + super::tags::CARD_GAP;
+    y -= card_height(2) + CARD_GAP;
 
     // —— Group-2:浮窗灯大小 / 点击穿透 / Agent状态轮询间隔 / 开机自启动 ——
     let group2 = add_card(&pane, card_frame(x0, y, 6));
@@ -389,5 +405,19 @@ pub(crate) fn build_general_pane(delegate: &AppDelegate, st: &Strings) -> Retain
         rx += w + 28.0;
     }
 
-    pane
+    // pane 实际内容高度:group2 底 = y − card_height(g2_rows),加底部留白得 content_h。
+    // 此 y = after_g1(Header + Group-1 + gap 之后),Group-2 底 = y − card_height(g2_rows)。
+    let g2_rows = 6 + agent_extra + 1 + notify_extra;
+    let content_h = (H - y) + card_height(g2_rows) + CONTENT_PAD_X;
+    // 内容此前按 H(默认窗高)布置;pane 实际高 content_h 可能 ≠ H。把所有子视图统一 y 偏移
+    // dy = content_h − H:dy > 0(content 超 H)→ 整体上移,group2 底落在 CONTENT_PAD_X、
+    // header 落在 content_h − CONTENT_PAD_X − TOP_INSET;dy < 0(content 不足 H)→ 整体下移。
+    // 这样 pane 高 = content_h 时内容上下都不裁、留白对称。
+    let dy = content_h - H;
+    for sv in pane.subviews().iter() {
+        let f = sv.frame();
+        sv.setFrameOrigin(NSPoint::new(f.origin.x, f.origin.y + dy));
+    }
+    pane.setFrameSize(NSSize::new(CONTENT_W, content_h));
+    (pane, content_h)
 }

@@ -5,6 +5,7 @@ use objc2::rc::Retained;
 use objc2::runtime::Sel;
 use objc2::sel;
 use objc2_app_kit::{NSAutoresizingMaskOptions, NSButton, NSSlider, NSTextField, NSView};
+use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
 use agent_light_core::{
@@ -21,9 +22,10 @@ use super::controls::{
 use super::layout::{StateControls, layout_state_pane, refresh_duration, refresh_state_controls};
 use super::strings::Strings;
 use super::tags::{
-    ANIM_OFF, COL_W, COLOR_OFF, COLOR_ORDER, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W,
-    GRADIENT_LABEL_OFF, GRADIENT_OFF, H, RESET_OFF, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN,
-    SPEED_OFF, SWATCH_D, TOP_INSET, tab_of_key,
+    ANIM_OFF, CARD_BOT_PAD, CARD_TOP_PAD, COL_W, COLOR_GAP, COLOR_OFF, COLOR_ORDER,
+    CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, GRADIENT_LABEL_OFF, GRADIENT_OFF, H, HEADER_GAP,
+    RESET_OFF, ROW_H, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN, SPEED_OFF, SWATCH_D, TOP_INSET,
+    label_col_width, tab_of_key,
 };
 
 /// State pane 一行「name 标签 + 滑块 + 右侧值标签」:三控件先占位零尺寸(frame 由 `layout_state_pane`
@@ -60,13 +62,33 @@ pub(crate) fn build_state_pane(
     key: StyleKey,
     name: &str,
     st: &Strings,
-) -> (Retained<NSView>, StateControls) {
+) -> (Retained<NSView>, StateControls, CGFloat) {
     let pane = new_view(NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(CONTENT_W, H),
+        NSSize::new(CONTENT_W, H), // 临时高度,稍后按 content_h 重设
     ));
     let base = tab_of_key(key) * 1000;
-    let y_hdr = H - CONTENT_PAD_X - TOP_INSET;
+    // label 列宽:测 state 的 5 个 label(颜色/效果/速度/渐变层数/持续时间;DoneNotif 持续时间
+    // 仅其 pane 有,但列宽统一用同一组测量 —— 非该 pane 的 duration label 不存在,测量仍含它,
+    // 保证所有 state pane 列宽一致,切 pane 时不会跳动)。
+    let lw = label_col_width(&[st.color, st.animation, st.speed, st.gradient, st.duration]);
+    // pane 实际内容高(动态):按默认宽度算 card_h,得 content_h = 顶/底留白 + header gap + card_h。
+    // pane 高不随窗变(autoresizing=2 只宽);宽度变时 card 行数变 → card_h 变,但 pane 高固定,
+    // 若 card 超出则出滚动条(符合每页独立滚动语义)。先算 content_h,header 据它定位。
+    let col_w0 = CONTENT_W - CONTENT_PAD_X * 2.0;
+    let cw0 = col_w0 - 16.0 - lw;
+    let step0 = SWATCH_D + COLOR_GAP;
+    let per_row0 = (((cw0 + COLOR_GAP) / step0).floor() as usize).max(1);
+    let color_rows0 = COLOR_ORDER.len().div_ceil(per_row0);
+    let color_h0 = color_rows0 as CGFloat * step0;
+    let extra0 = if key == StyleKey::DoneNotif {
+        ROW_H
+    } else {
+        0.0
+    };
+    let card_h0 = CARD_TOP_PAD + color_h0 + ROW_H * 3.0 + extra0 + CARD_BOT_PAD;
+    let content_h = TOP_INSET + CONTENT_PAD_X + HEADER_GAP + card_h0 + CONTENT_PAD_X;
+    let y_hdr = content_h - CONTENT_PAD_X - TOP_INSET;
 
     // header:标题(宽随 pane autoresizing)+ Reset(贴右 autoresizing)。
     let title = add_text(
@@ -204,6 +226,8 @@ pub(crate) fn build_state_pane(
 
     let controls = StateControls {
         key,
+        lw,
+        pane_h: content_h,
         card,
         color: color_btns,
         color_lbl,
@@ -219,6 +243,7 @@ pub(crate) fn build_state_pane(
         duration_lbl,
         duration_label,
     };
+    pane.setFrameSize(NSSize::new(CONTENT_W, content_h));
     layout_state_pane(&controls, CONTENT_W); // 初始布局(默认宽度)
     let style = delegate.ivars().settings.borrow().style_for(key);
     refresh_state_controls(&controls, style);
@@ -226,5 +251,5 @@ pub(crate) fn build_state_pane(
         let secs = delegate.ivars().settings.borrow().done_notif_duration_s;
         refresh_duration(&controls, secs);
     }
-    (pane, controls)
+    (pane, controls, content_h)
 }

@@ -20,14 +20,14 @@ use objc2::DefinedClass;
 use objc2::rc::{Allocated, Retained};
 use objc2::{MainThreadMarker, class, msg_send};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSColor,
+    NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSScrollView,
     NSTitlebarSeparatorStyle, NSView, NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use crate::app_delegate::AppDelegate;
-use crate::overlay::swatch_image;
+use crate::overlay::{FlippedView, swatch_image};
 
 use controls::{add_icon_button, add_tab_button, new_view};
 use glass::{glass_pane, make_selection_pill};
@@ -51,6 +51,7 @@ mod tags;
 pub use glass::update_selection;
 pub use layout::{StateControls, layout_state_pane, refresh_duration, refresh_state_controls};
 pub use strings::reset_confirm_texts;
+pub(crate) use tags::H;
 pub use tags::{
     AGENT_KIND_ORDER, AGENT_OFF, ANIM_OFF, ANIM_ORDER, COLOR_OFF, COLOR_ORDER, CONTENT_W,
     LANG_EN_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, POLL_PRESETS_MS, SIZE_LABEL_TAG, THEME_OFF,
@@ -95,28 +96,63 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         let _: () = msg_send![&window, setDelegate: delegate];
     }
 
-    // 右区:透明 NSView,8 pane 叠在其上。origin 在 SIDEBAR_W,铺在主玻璃上(无外框)。
-    let content_area = new_view(NSRect::new(
+    // 右区:NSScrollView(顶锚 + 滚动),origin 在 SIDEBAR_W,铺在主玻璃上(无外框)。
+    // 8 pane 叠在 documentView(FlippedView,isFlipped=>YES)上 —— 不翻则内容贴底(NSScrollView
+    // documentView 默认底锚),翻后 y=0 在顶、内容从顶部排布。
+    let scroll_frame = NSRect::new(
         NSPoint::new(tags::SIDEBAR_W, 0.0),
         NSSize::new(CONTENT_W, tags::H),
-    ));
+    );
+    let scroll_alloc: Allocated<NSScrollView> = unsafe { msg_send![class!(NSScrollView), alloc] };
+    let content_area = NSScrollView::initWithFrame(scroll_alloc, scroll_frame);
     // 宽+高 随窗口缩放(左侧栏固定宽,故右区宽度 = 窗宽 − SIDEBAR_W)。
     content_area.setAutoresizingMask(NSAutoresizingMaskOptions(18));
+    content_area.setHasVerticalScroller(true);
+    content_area.setAutohidesScrollers(true);
+    // scrollView 自身透明(承玻璃);**同时** ClipView 也要透明,否则画白底盖住玻璃。
+    content_area.setDrawsBackground(false);
+    let clip = content_area.contentView();
+    clip.setDrawsBackground(false);
+    // documentView:FlippedView(翻坐标系),宽跟 scrollView、高动态(切 pane 时设)。
+    let doc = FlippedView::new(NSRect::new(
+        NSPoint::new(0.0, 0.0),
+        NSSize::new(CONTENT_W, tags::H),
+    ));
+    // 只宽随 scrollView(2 = widthSizable),高固定 —— 切 pane 时由 switchSettingsTab 设高。
+    doc.setAutoresizingMask(NSAutoresizingMaskOptions(2));
+    content_area.setDocumentView(Some(&doc));
+
     // 8 pane:General + 6 状态(各带 StateControls)+ About。按 pane id(=索引)排。
+    // 各 pane build 时算 content_h(动态,非固定 H),登记到 settings_pane_heights 供切 pane 时取。
     let mut panes: Vec<Retained<NSView>> = Vec::with_capacity(8);
     let mut controls_map: HashMap<agent_light_core::StyleKey, StateControls> = HashMap::new();
-    panes.push(build_general_pane(delegate, &st));
+    let mut pane_heights: HashMap<i64, CGFloat> = HashMap::new();
+    let (g_pane, g_h) = build_general_pane(delegate, &st);
+    pane_heights.insert(TAB_GENERAL, g_h);
+    panes.push(g_pane);
     for (i, (_, key)) in STATE_KEYS.iter().enumerate() {
-        let (pane, c) = build_state_pane(delegate, *key, st.state[i], &st);
+        let (pane, c, h) = build_state_pane(delegate, *key, st.state[i], &st);
         controls_map.insert(*key, c);
+        pane_heights.insert(STATE_KEYS[i].0, h);
         panes.push(pane);
     }
-    panes.push(build_about_pane(&st));
+    let (a_pane, a_h) = build_about_pane(&st);
+    pane_heights.insert(TAB_ABOUT, a_h);
+    panes.push(a_pane);
     for (i, pane) in panes.iter().enumerate() {
         pane.setHidden(i != 0);
-        // 每个 pane 宽+高 随右区缩放;pane 内的卡片/滑块各自按 autoresizing 适配。
-        pane.setAutoresizingMask(NSAutoresizingMaskOptions(18));
-        content_area.addSubview(pane);
+        // 每个 pane **只宽**随 doc 缩放(2 = widthSizable);高固定 —— pane 高 = 内容高,
+        // 不随窗拉伸(否则窗口拉高时内容相对顶部漂移)。pane 内卡片/滑块各自按 autoresizing 适配。
+        pane.setAutoresizingMask(NSAutoresizingMaskOptions(2));
+        doc.addSubview(pane);
+    }
+    // 初始 documentView 高 = 当前选中 pane(General)的 content_h,滚到顶。
+    doc.setFrameSize(NSSize::new(CONTENT_W, g_h));
+    {
+        let cv = content_area.contentView();
+        unsafe {
+            let _: () = msg_send![&cv, setBoundsOrigin: NSPoint::new(0.0, 0.0)];
+        }
     }
 
     // 真·液态玻璃承载视图 root(普通 NSView;刻意不用 NSGlassEffectContainerView —— 它会把
@@ -139,7 +175,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
 
     main.view.setAutoresizingMask(NSAutoresizingMaskOptions(18)); // 主玻璃随窗口缩放
     root.addSubview(&main.view); // 主玻璃在底
-    main.content.addSubview(&content_area); // 右区在主玻璃上
+    main.content.addSubview(&content_area); // 右区(scroll)在主玻璃上
     sidebar
         .view
         .setAutoresizingMask(NSAutoresizingMaskOptions(16)); // 侧栏固定宽,随高伸缩
@@ -147,7 +183,12 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     window.setContentView(Some(&root));
 
     *delegate.ivars().settings_sidebar.borrow_mut() = Some(sidebar.content);
-    *delegate.ivars().settings_content.borrow_mut() = Some(content_area);
+    // settings_content 存 scrollView(upcast 到 NSView)——changeSize 用 viewWithTag 递归找
+    // SIZE_LABEL_TAG,scrollView 子树仍可命中。settings_scroll 存强类型 scrollView 引用,
+    // switchSettingsTab/windowDidResize 据此访问 documentView。
+    *delegate.ivars().settings_content.borrow_mut() = Some(content_area.clone().into_super());
+    *delegate.ivars().settings_scroll.borrow_mut() = Some(content_area);
+    *delegate.ivars().settings_pane_heights.borrow_mut() = pane_heights;
     *delegate.ivars().settings_panes.borrow_mut() = Some(panes);
     *delegate.ivars().settings_selected.borrow_mut() = TAB_GENERAL;
     *delegate.ivars().state_controls.borrow_mut() = controls_map;
@@ -172,6 +213,23 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
             }
             *delegate.ivars().settings_selected.borrow_mut() = n;
             update_selection(delegate, n);
+            // 同步 documentView 高度 = 该 pane content_h,并滚到顶。
+            let h = delegate
+                .ivars()
+                .settings_pane_heights
+                .borrow()
+                .get(&n)
+                .copied()
+                .unwrap_or(tags::H);
+            if let Some(scroll) = delegate.ivars().settings_scroll.borrow().as_ref() {
+                if let Some(doc) = scroll.documentView() {
+                    let df = doc.frame();
+                    let _: () =
+                        unsafe { msg_send![&doc, setFrameSize: NSSize::new(df.size.width, h)] };
+                }
+                let cv = scroll.contentView();
+                let _: () = unsafe { msg_send![&cv, setBoundsOrigin: NSPoint::new(0.0, 0.0)] };
+            }
         }
     }
 
