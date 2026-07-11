@@ -12,7 +12,7 @@ use objc2_app_kit::{
     NSImageScaling, NSImageView, NSPopUpButton, NSSlider, NSSwitch, NSTextAlignment, NSTextField,
     NSView,
 };
-use objc2_foundation::{NSPoint, NSRect, NSString};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use agent_light_core::Color;
 
@@ -233,6 +233,16 @@ pub(crate) fn add_text(
         // NSTextAlignmentCenter=2(此版本 bindings 未导出 Center 常量,保留裸值)。
         label.setAlignment(NSTextAlignment(2));
     }
+    // 文字垂直居中 frame:NSTextField 默认基线偏上,与同行控件(slider/switch 中心)不齐
+    // (macOS 官方最强调的 label-控件垂直居中)。sizeToFit 取文字自然高,再让文字中心 =
+    // frame 中心。调用方若需自定义几何(如 header title 再 sizeToFit+setFrame)会覆盖此处。
+    label.sizeToFit();
+    let text_h = label.frame().size.height;
+    let mid = frame.origin.y + frame.size.height / 2.0;
+    label.setFrame(NSRect::new(
+        NSPoint::new(frame.origin.x, mid - text_h / 2.0),
+        NSSize::new(frame.size.width, text_h),
+    ));
     pane.addSubview(&label);
     label
 }
