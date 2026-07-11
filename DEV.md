@@ -71,6 +71,19 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 跑法：`watch -n2 ./scripts/probe-openclaw.sh`，另开终端触发 openclaw 任务，对照 Asig 浮窗/面板。openclaw 升级后先跑此脚本回归（字段/表若变了，会先于 Asig 暴露不一致）。
 
+## 已修复的 Claude 状态判定误判
+
+Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑（按修复时间倒序，便于回溯）：
+
+| 误判现象 | 根因 | 修复 |
+|---|---|---|
+| 实际等用户（待决策）、Asig 显示运行中 | session `status=waiting`（Claude 等输入/授权，如工具 permission）`classify` 不识别，落 `_=>Working`；且 bg transcript 尾部是历史 `tool_use`，读 transcript 也给 Working | `classify` 在 status 层加 `waiting=>NeedsDeci`，优先于 transcript（5390228）|
+| 实际在运行、Asig 显示待决策 | `read_tail_stop_reason` 只读尾部最后一条 assistant `stop_reason`，忽略其后的 `user` 消息 → 上一轮 `end_turn` 残留被误读 | 改 `read_tail_signal`：尾部最后一条有意义事件（`type:user`→"user"；`type:assistant`→其 stop_reason）；`busy+user=>Working`（82a7a35）|
+| fork 任务到后台跑、主进程 idle 成 shell、显示不在运行 | 旧实现跳过所有 `kind:"bg"`，丢失 bg 的 busy 活跃度 | 按 cwd 聚合：interactive 作主、bg 活跃度合并（bb28c06）|
+| Claude REPL 空闲（shell）显示运行中 | `shell` status 被当未知 → Working | `classify` 加 `shell=>Done`（20579ca）|
+
+判定优先级（**status 层优先于 transcript**）：pid 死→Offline；活 `waiting`→NeedsDeci；活 `busy` 读 transcript 尾部信号（`end_turn`→NeedsDeci、`user`/`tool_use`/未知→Working）；活 `idle`/`shell`→Done。
+
 ## Design
 
 - 需要轮询的，默认3s轮询一次
