@@ -400,7 +400,7 @@ pub(crate) fn build_general_pane(
     }
     let total_w: CGFloat = theme_ws.iter().sum();
     let gap = if theme_ws.len() > 1 {
-        ((cw - total_w) / (theme_ws.len() - 1) as CGFloat).max(8.0)
+        ((cw - total_w) / (theme_ws.len() - 1) as CGFloat).max(0.0)
     } else {
         0.0
     };
