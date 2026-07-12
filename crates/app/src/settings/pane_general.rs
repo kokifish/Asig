@@ -371,38 +371,43 @@ pub(crate) fn build_general_pane(
         false,
     );
     // Theme(标签 + 横向 radio:跟随系统 / 深色 / 浅色;与「效果」同款单选)。
-    // radio 宽度按标题 sizeToFit 自适应并横向累计,避免长标题(「跟随系统」)被截断。
+    // 先建 3 个 radio + sizeToFit 拿各自宽,再按控件区 cw 算均匀 gap 横排——固定 gap 在
+    // label 列宽偏大(cw 变窄)时累计会超出卡片右边界(card 右 = cx + cw)。gap 自适应避免溢出。
     let theme_idx = theme_index(delegate.ivars().settings.borrow().theme);
-    let mut rx = cx;
+    let theme_row_y = row_center_y(y, 5 + agent_extra + launch_theme_off) - 11.0;
+    let mut theme_btns = Vec::new();
+    let mut theme_ws: Vec<CGFloat> = Vec::new();
     for (i, &opt) in st.theme_opts.iter().enumerate() {
         let btn = add_radio_button(
             &pane,
-            NSRect::new(
-                NSPoint::new(
-                    rx,
-                    row_center_y(y, 5 + agent_extra + launch_theme_off) - 11.0,
-                ),
-                NSSize::new(100.0, 22.0),
-            ),
+            NSRect::new(NSPoint::new(cx, theme_row_y), NSSize::new(100.0, 22.0)),
             opt,
             THEME_OFF + i as i64,
             delegate,
             sel!(changeTheme:),
         );
-        // sizeToFit 返回 void(就地改 frame),不是返回自适应尺寸——直接当 NSSize 读会拿到
-        // 垃圾值,算出错误的按钮宽,标题被裁掉(主题三个 radio 只见圆点不见名称的根因)。
-        // 正确做法:调完 sizeToFit 再读 frame 拿自适应宽。
+        // sizeToFit 返回 void(就地改 frame)——调完再读 frame 拿自适应宽(否则拿垃圾值裁标题)。
         btn.sizeToFit();
-        let fitted = btn.frame();
-        let w = fitted.size.width + 2.0;
+        let w = btn.frame().size.width + 2.0;
         btn.setFrameSize(NSSize::new(w, 22.0));
         if i == theme_idx {
-            // setState 取 NSControlStateValue enum;用裸值 1 表 on,保留 msg_send!。
             unsafe {
                 let _: () = msg_send![&btn, setState: 1i64];
             }
         }
-        rx += w + 28.0;
+        theme_btns.push(btn);
+        theme_ws.push(w);
+    }
+    let total_w: CGFloat = theme_ws.iter().sum();
+    let gap = if theme_ws.len() > 1 {
+        ((cw - total_w) / (theme_ws.len() - 1) as CGFloat).max(8.0)
+    } else {
+        0.0
+    };
+    let mut rx = cx;
+    for (btn, &w) in theme_btns.iter().zip(theme_ws.iter()) {
+        btn.setFrameOrigin(NSPoint::new(rx, theme_row_y));
+        rx += w + gap;
     }
 
     // pane 实际内容高度:group2 底 = y − card_height(g2_rows),加底部留白得 content_h。
