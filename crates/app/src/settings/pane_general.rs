@@ -47,7 +47,7 @@ pub(crate) fn build_general_pane(
     let x0 = CONTENT_PAD_X;
     let lx = x0 + 16.0; // 标签 x
     let cx = x0 + 16.0 + lw; // 控件 x(label 列自适应)
-    let cw = COL_W - 16.0 - lw; // 控件区宽
+    let cw = COL_W - 16.0 - lw - 16.0; // 控件区宽(card 左右内边距对称 16)
     let mut y = H - CONTENT_PAD_X - TOP_INSET;
 
     // header:齿轮图标 + 标题(DEV.md General Settings Card 的 icon + Name)。

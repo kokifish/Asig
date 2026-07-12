@@ -51,7 +51,7 @@ pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
     let lw = c.lw;
     let lx = x0 + 16.0;
     let cx = x0 + 16.0 + lw;
-    let cw = col_w - 16.0 - lw;
+    let cw = col_w - 16.0 - lw - 16.0; // card 左右内边距对称 16
     let step = SWATCH_D + COLOR_GAP; // 色块固定间距(恒定,不随宽度变)
     // 每行可容纳数:首块 + 后续 (step) 量出;放不下就换行(每行数量可不同)。
     let per_row = (((cw + COLOR_GAP) / step).floor() as usize).max(1);

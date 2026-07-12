@@ -413,7 +413,12 @@ pub fn build(
     window.setIgnoresMouseEvents(true); // 默认点击穿透
     window.setMovableByWindowBackground(true); // 关穿透时可拖
     window.setLevel(objc2_app_kit::NSFloatingWindowLevel); // 浮窗置顶
-    window.setCollectionBehavior(NSWindowCollectionBehavior::CanJoinAllSpaces);
+    // CanJoinAllSpaces 让浮窗进全屏 app 的 space;再加 fullScreenAuxiliary 标为「全屏辅助窗口」,
+    // 否则 macOS 会把它当成全屏 space 里的非辅助窗口,打断全屏 app 的菜单栏/Dock 自动隐藏。
+    window.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            .union(NSWindowCollectionBehavior::FullScreenAuxiliary),
+    );
     unsafe {
         // ARC 下手动 retain,需 unsafe。
         window.setReleasedWhenClosed(false);
