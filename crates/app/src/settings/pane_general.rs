@@ -48,6 +48,9 @@ pub(crate) fn build_general_pane(
     let lx = x0 + 16.0; // 标签 x
     let cx = x0 + 16.0 + lw; // 控件 x(label 列自适应)
     let cw = COL_W - 16.0 - lw - 16.0; // 控件区宽(card 左右内边距对称 16)
+    // NSSwitch 的 frame 比 alignmentRect(视觉 track)宽——左侧有 alignment inset,直接用 cx 做
+    // origin 会让 switch 视觉偏右、读作没和 slider/popup/chip 左对齐。switch origin 左移此 inset。
+    const SWITCH_INSET: CGFloat = 5.0;
     let mut y = H - CONTENT_PAD_X - TOP_INSET;
 
     // header:齿轮图标 + 标题(DEV.md General Settings Card 的 icon + Name)。
@@ -201,7 +204,7 @@ pub(crate) fn build_general_pane(
     add_switch(
         &pane,
         NSRect::new(
-            NSPoint::new(cx, row_center_y(y, 1) - 11.0),
+            NSPoint::new(cx - SWITCH_INSET, row_center_y(y, 1) - 11.0),
             NSSize::new(40.0, 22.0),
         ),
         *delegate.ivars().click_through.borrow(),
@@ -346,7 +349,7 @@ pub(crate) fn build_general_pane(
         &pane,
         NSRect::new(
             NSPoint::new(
-                cx,
+                cx - SWITCH_INSET,
                 row_center_y(y, 4 + agent_extra + launch_theme_off) - 11.0,
             ),
             NSSize::new(40.0, 22.0),
@@ -371,8 +374,7 @@ pub(crate) fn build_general_pane(
         false,
     );
     // Theme(标签 + 横向 radio:跟随系统 / 深色 / 浅色;与「效果」同款单选)。
-    // 先建 3 个 radio + sizeToFit 拿各自宽,再按控件区 cw 算均匀 gap 横排——固定 gap 在
-    // label 列宽偏大(cw 变窄)时累计会超出卡片右边界(card 右 = cx + cw)。gap 自适应避免溢出。
+    // 先建 3 个 radio + sizeToFit 拿各自宽,再固定 gap 横排(见下方 THEME_GAP 说明)。
     let theme_idx = theme_index(delegate.ivars().settings.borrow().theme);
     let theme_row_y = row_center_y(y, 5 + agent_extra + launch_theme_off) - 11.0;
     let mut theme_btns = Vec::new();
@@ -398,16 +400,13 @@ pub(crate) fn build_general_pane(
         theme_btns.push(btn);
         theme_ws.push(w);
     }
-    let total_w: CGFloat = theme_ws.iter().sum();
-    let gap = if theme_ws.len() > 1 {
-        ((cw - total_w) / (theme_ws.len() - 1) as CGFloat).max(0.0)
-    } else {
-        0.0
-    };
+    // radio 间距固定、整体左对齐(不填满 cw):W 加大后 cw 变宽,若按 (cw-total_w)/2 自适应
+    // 会把三个 radio 均匀撑满控件区、间距过宽读作离散。固定 gap 让它们紧凑成组贴其他控件。
+    const THEME_GAP: CGFloat = 20.0;
     let mut rx = cx;
     for (btn, &w) in theme_btns.iter().zip(theme_ws.iter()) {
         btn.setFrameOrigin(NSPoint::new(rx, theme_row_y));
-        rx += w + gap;
+        rx += w + THEME_GAP;
     }
 
     // pane 实际内容高度:group2 底 = y − card_height(g2_rows),加底部留白得 content_h。

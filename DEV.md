@@ -169,7 +169,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 ### Settings Panel
 
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
-- Position: 默认在屏幕中央，可以拖动；**可调整大小**（minSize = 默认 640×460;侧栏固定宽随高、右区 `NSScrollView` 随窗宽自适应）。**右区滚动 + 顶部锚定**:右区是 `NSScrollView`(documentView = `FlippedView` 顶锚 + 透明 ClipView 承玻璃),各 pane 内容超高自动出竖滚动条;缩放窗口时 pane 顶部固定不漂移,documentView 高 = 当前 pane 实际 content_h(切 tab 时设 + 滚顶)。紧凑编排:W=640 / SIDEBAR_W=160 / CONTENT_PAD_X=22;label 列宽 `label_col_width`(sizeToFit 测最宽文字,排除 reset 按钮),非固定值
+- Position: 默认在屏幕中央，可以拖动；**可调整大小**（minSize = 默认 780×460;侧栏固定宽随高、右区 `NSScrollView` 随窗宽自适应。780 宽让 General pane 的「监控的 Agent」3 chip 与「状态通知」5 chip 默认单行不换行,Group-2 card 只 7 行 content_h≈436 < 460,首屏完整不被窗口底截断）。**右区滚动 + 顶部锚定**:右区是 `NSScrollView`(documentView = `FlippedView` 顶锚 + 透明 ClipView 承玻璃),各 pane 内容超高自动出竖滚动条;缩放窗口时 pane 顶部固定不漂移,documentView 高 = 当前 pane 实际 content_h(切 tab 时设 + 滚顶)。紧凑编排:W=780 / SIDEBAR_W=160 / CONTENT_PAD_X=22;label 列宽 `label_col_width`(sizeToFit 测最宽文字,排除 reset 按钮),非固定值
 - Navigation: 左侧栏（顶部 tab 列表 + 底部图标行）+ 右侧 pane 切换。点 tab / 「关于」图标切换右侧 pane。
 - 材质：真·液态玻璃（macOS 26+ `NSGlassEffectView`，UI 必须放进其 `contentView`；旧系统回退 `NSVisualEffectView` vibrancy）。窗口 = 一整片主玻璃（透明标题栏，玻璃贯穿顶部）；**左侧栏是浮动玻璃面板**——独立一块 `NSGlassEffectView` 叠在主玻璃上，二次模糊自然更不透明，读作浮于内容之上的圆角玻璃块。刻意**不用** `NSGlassEffectContainerView`：它会合并重叠/相邻的玻璃成一次模糊，反而让浮动侧栏与主玻璃融为一体、失去「浮动」层次。**右侧内容区无外框、标题下无横线**；靠极淡连续圆角卡片（`quaternaryLabelColor`）分组（stats.app 式编排），用层级而非厚重描边区分。
 - Content:

@@ -10,7 +10,10 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use agent_light_core::{AgentKind, AgentStatus, Anim, Color, StyleKey, Theme};
 
-pub(crate) const W: CGFloat = 640.0;
+// 窗口最小宽度。加大到 780 让 General pane 的「监控的 Agent」(3 chip)与「状态通知」(5 chip)
+// 默认单行排开不换行 → Group-2 card 只 7 行(content_h≈436 < H=460),首屏完整显示,
+// Theme 行不再因 card 被窗口底截断而看似越界。
+pub(crate) const W: CGFloat = 780.0;
 pub(crate) const H: CGFloat = 460.0;
 pub(crate) const SIDEBAR_W: CGFloat = 160.0;
 pub const CONTENT_W: CGFloat = W - SIDEBAR_W;
