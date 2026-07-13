@@ -15,8 +15,8 @@ use std::cell::RefCell;
 use std::ptr::NonNull;
 
 use agent_light_core::{
-    Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN, LightAnim,
-    LightPosition, Theme,
+    Color, DOT_SIZE_MAX_PX, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN,
+    LightAnim, LightPosition, Theme,
 };
 use block2::RcBlock;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
@@ -540,7 +540,7 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32, layers: u8) {
     // 波纹从「最内层」(同心圆中心实心圆)外缘起扩散,而非整个圆点中心 —— 这样 layers>0
     // 时环从中心实心圆边缘出现、向外穿过半透明外层,视觉读作「从最内层扩散出去」
     // (最内层与环同色、重叠处本就不可辨,故起点贴其外缘)。layers=0 → L=1 → 最内层即整个
-    // 圆点,等价历史行为。scale 终值随 L 放大,保证不同层数都扩散到圆点外同一圈(MAX_SCALE×dot)。
+    // 圆点,等价历史行为。scale 终值随 L 放大,保证不同层数都扩散到同一圈(直径 DOT_SIZE_MAX_PX)。
     let l = layers as CGFloat + 1.0;
     let inner_d = dot / l; // 最内层直径
     let o = dot_origin(dot) + (dot - inner_d) / 2.0; // 最内层在圆点内居中
@@ -550,7 +550,9 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32, layers: u8) {
     // 环视图自身坐标圆心 = (inner_d/2, inner_d/2)(环描边内切于 inner_d×inner_d bounds)。
     let c = inner_d / 2.0;
     let from_t = scale_about(c, c, 1.0);
-    let to_t = scale_about(c, c, MAX_SCALE * l);
+    // 扩散终值:波纹环扩到「信号灯最大半径」(DOT_SIZE_MAX_PX/2)处——即终态直径 = DOT_SIZE_MAX_PX,
+    // 与当前 dot 大小无关(固定最大半径)。scale = 终态直径 / inner_d = DOT_SIZE_MAX_PX/(dot/l)。
+    let to_t = scale_about(c, c, DOT_SIZE_MAX_PX as CGFloat * l / dot);
 
     let mut rings = Vec::with_capacity(RIPPLE_RINGS);
     for i in 0..RIPPLE_RINGS {
@@ -600,9 +602,6 @@ fn ripple_anims(
     opacity.setRepeatCount(f32::INFINITY);
     layer.addAnimation_forKey(&opacity, Some(&NSString::from_str("rippleOpacity")));
 }
-
-/// 波纹环最大缩放倍数(扩到 2.6× 圆点直径,仍在 120px 窗口内不裁切)。
-const MAX_SCALE: CGFloat = 2.6;
 
 /// 构造「绕点 (cx, cy) 缩放 s 倍」的 2D 仿射 CATransform3D(s=1 即单位矩阵)。
 /// 不依赖 layer 的 anchorPoint,故对 layer-backed NSView 也稳定有效。
