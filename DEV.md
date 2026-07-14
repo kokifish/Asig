@@ -169,7 +169,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 ### Settings Panel
 
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
-- Position: 默认在屏幕中央，可以拖动；**可调整大小**（minSize = 默认 780×460;侧栏固定宽随高、右区 `NSScrollView` 随窗宽自适应。780 宽让 General pane 的「监控的 Agent」3 chip 与「状态通知」5 chip 默认单行不换行,Group-2 card 只 7 行 content_h≈436 < 460,首屏完整不被窗口底截断）。**右区滚动 + 顶部锚定**:右区是 `NSScrollView`(documentView = `FlippedView` 顶锚 + 透明 ClipView 承玻璃),各 pane 内容超高自动出竖滚动条;缩放窗口时 pane 顶部固定不漂移,documentView 高 = 当前 pane 实际 content_h(切 tab 时设 + 滚顶)。紧凑编排:W=780 / SIDEBAR_W=160 / CONTENT_PAD_X=22;label 列宽 `label_col_width`(sizeToFit 测最宽文字,排除 reset 按钮),非固定值
+- Position: 默认在屏幕中央，可以拖动；**可调整大小**（minSize = 默认 750×460;侧栏固定宽随高、右区 `NSScrollView` 随窗宽自适应。750 宽配合「点击穿透」label 去掉「则」字收窄 label 列(label_col_width 从 ~160 降到 ~139),让 General pane 的「监控的 Agent」3 chip 与「状态通知」5 chip 默认单行不换行,Group-2 card 只 7 行 content_h≈436 < 460,首屏完整不被窗口底截断）。**右区滚动 + 顶部锚定**:右区是 `NSScrollView`(documentView = `FlippedView` 顶锚 + 透明 ClipView 承玻璃),各 pane 内容超高自动出竖滚动条;缩放窗口时 pane 顶部固定不漂移,documentView 高 = 当前 pane 实际 content_h(切 tab 时设 + 滚顶)。紧凑编排:W=750 / SIDEBAR_W=160 / CONTENT_PAD_X=22;label 列宽 `label_col_width`(sizeToFit 测最宽文字,排除 reset 按钮),非固定值
 - Navigation: 左侧栏（顶部 tab 列表 + 底部图标行）+ 右侧 pane 切换。点 tab / 「关于」图标切换右侧 pane。
 - 材质：真·液态玻璃（macOS 26+ `NSGlassEffectView`，UI 必须放进其 `contentView`；旧系统回退 `NSVisualEffectView` vibrancy）。窗口 = 一整片主玻璃（透明标题栏，玻璃贯穿顶部）；**左侧栏是浮动玻璃面板**——独立一块 `NSGlassEffectView` 叠在主玻璃上，二次模糊自然更不透明，读作浮于内容之上的圆角玻璃块。刻意**不用** `NSGlassEffectContainerView`：它会合并重叠/相邻的玻璃成一次模糊，反而让浮动侧栏与主玻璃融为一体、失去「浮动」层次。**右侧内容区无外框、标题下无横线**；靠极淡连续圆角卡片（`quaternaryLabelColor`）分组（stats.app 式编排），用层级而非厚重描边区分。
 - Content:
@@ -199,7 +199,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - Reset All/重置所有: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值。在该group下居中
 - Group-2:
   - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围5-50px，默认25px
-  - Click-through/点击穿透(取消则可拖动): 开关。默认开
+  - Click-through/点击穿透(取消可拖动): 开关。默认开
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
   - Agent to monitor/监控的 Agent: 多选块(Claude Code / CodeBuddy / OpenClaw 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
   - Status notifications/状态通知: 多选块(已完成/运行中/待决策/错误/异常 横排圆角块,选中=转入该状态时弹 macOS 系统通知,点击 toggle)。默认 待决策+错误;数据结构 `notify_on: Vec<AgentStatus>`
