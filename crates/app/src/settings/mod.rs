@@ -197,7 +197,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     *delegate.ivars().state_controls.borrow_mut() = controls_map;
     update_selection(delegate, TAB_GENERAL);
 
-    // ASIG_TAB(dev):直接打开指定 pane(1..7),便于逐页截图;默认 0(常规)。
+    // ASIG_TAB(dev):直接打开指定 pane(1..=7),便于逐页截图;默认 0(常规)。
     if let Some(n) = std::env::var("ASIG_TAB")
         .ok()
         .and_then(|s| s.parse::<i64>().ok())

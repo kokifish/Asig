@@ -28,6 +28,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 **内核 `crates/core`：**
 
 - `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
+- `jsonl_tail.rs` — 只读 jsonl 尾部的取数工具（claude/openclaw 共用）
 - `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）；读 session 文件（camelCase 字段：`sessionId`/`kind`/`status`…，`rename_all`）+ pid 存活：按 **cwd 聚合** —— 同目录的多个 session（用户手开 interactive + claude `--fork-session` 派发的后台子 claude `kind:"bg"`）合并为**一个**会话：interactive 作主，bg 不单独显示但 busy 活跃度合并进主会话状态（否则 fork 任务到后台跑时主进程 idle 成 shell 会被误判不在运行），纯 bg 无 interactive 的目录整组跳过（避免与 OpenClaw source 重叠）；`waiting`（Claude 等用户输入/授权，如工具 permission）→NeedsDeci（status 层，优先于 transcript）；busy+transcript 尾部信号（`end_turn`→NeedsDeci；`user`（用户刚输入、Claude 处理中）/`tool_use`→Working；`end_turn` 后若已有 `user` 判 Working，不被残留 `end_turn` 误判）；idle/shell（空闲）→Done；pid 死→Offline
 - `openclaw.rs` — `OpenClawSource`：两套数据源 —— ① 只读 `~/.openclaw/state/openclaw.sqlite`（单一事实源、升级迁移目标），按 `agent_databases` 聚合 task/flow/subagent runs（ended_at NULL→Working、blocked 且 ended_at NULL→NeedsDeci、近期 failed→Error）；② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working）；主 agent `sessions_yield` 让出 + 文件以 `leaf` 结尾 = 协调后台子 agent：子 agent 在跑 → Working，子 agent 全 ended 或协调态超 30min → 卡死 → Error —— 子 agent 走 sessions 机制（`.trajectory.jsonl`）不进 `subagent_runs` 表，靠 leaf+yield 信号识别（GLM 下 yield 期间尾部 `assistant stop="stop"` 否则误判 Done）—— **不进主库，故单读**。否则 Done
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
@@ -38,12 +39,14 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 **UI 壳 `crates/app`（objc2/AppKit，纯 Rust，无 WebView）：**
 
 - `main.rs` — 入口：加载设置 → 建浮窗 → 建 `AppDelegate` → 状态栏 + tick 定时器
+- `cli.rs` — CLI 子命令（`probe-openclaw`：打印各 agent 诊断 + status，判定走 `openclaw::probe`）
 - `app_delegate.rs` — `AppDelegate`（`define_class!`）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽（`persist_light_pos` 改字段与落盘拆两个独立 borrow scope，避免 RefCell 重入 panic）
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
 - `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
 - `settings/` — Settings Panel（9 子模块）：`mod`（装配 build/show/view_with_tag + pub use 外部 API）、`strings`（本地化文案）、`tags`（几何/tag 常量 + helper）、`controls`（控件工厂 add_*）、`glass`（液态玻璃 GlassPane + 选中态药丸）、`layout`（StateControls + layout/refresh_*）、`pane_general`/`pane_state`/`pane_about`（各 pane builder）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)
 - `palette.rs` — 下拉面板会话列表用的状态 emoji(`status_emoji`)
+- `notify.rs` — macOS 系统通知（UserNotifications framework：授权 + 发送）
 
 ## Build and Run
 
@@ -57,11 +60,9 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 ## 测试
 
-分两层：一层锁代码逻辑（纯函数，不碰真实 openclaw），一层锁真实 openclaw 最新版（实机）。
-
 **代码单测（针对分析逻辑）**：`cargo test -p agent-light-core openclaw` —— 覆盖 `OpenClawSource` 的状态归并（task/flow/subagent 跨表 + 交互式 `message.stopReason`）、字段解析、边界（ended/未 ended、近期 failed 窗口、toolUse 跳闸门等）。改 `openclaw.rs` 后必跑；改判定逻辑时同步改对应单测断言。
 
-**真实 openclaw 实测（针对本机最新版）**：`./scripts/probe-openclaw.sh` 对真实状态库 + 各 agent 会话 jsonl 跑 Asig 同款判定，打印每 agent 应判状态（与 `openclaw.rs` 逐行对齐，改那边时务必同步改本脚本）。配合 `openclaw agent --agent <id> -m "..."` 触发各场景：
+**真实 openclaw 实测（针对本机最新版）**：`./scripts/probe-openclaw.sh` 是薄壳，判定走 `agent-light probe-openclaw` 子命令（即 `openclaw.rs` 单一事实源），对真实状态库跑同款判定、打印每 agent 应判状态。配合 `openclaw agent --agent <id> -m "..."` 触发各场景：
 
 | 目标状态 | prompt | 期望 |
 |---|---|---|
@@ -203,7 +204,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
   - Agent to monitor/监控的 Agent: 多选块(Claude Code / CodeBuddy / OpenClaw 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
   - Status notifications/状态通知: 多选块(已完成/运行中/待决策/错误/异常 横排圆角块,选中=转入该状态时弹 macOS 系统通知,点击 toggle)。默认 待决策+错误;数据结构 `notify_on: Vec<AgentStatus>`
-  - Launch at login/开机自启动(待实现): 开关。默认开
+  - Launch at login/开机自启动(待实现): 开关。默认关
   - Theme/主题: 横向单选按钮组 "跟随系统", "深色", "浅色"。默认"跟随系统"
 
 #### State Pane

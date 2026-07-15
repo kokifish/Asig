@@ -21,7 +21,7 @@ Asig = macOS 多 Agent 状态监控灯(菜单栏灯 + 全局置顶浮窗 + 弹�
 - **NeedsDeci(待决策)检测**:Claude session 文件 `status` 有 `busy`/`idle`/`shell`/`waiting`。`waiting`(Claude 等用户输入/授权,如工具 permission)→ 直接 NeedsDeci(status 层,优先于 transcript);`busy` 时光看 status 到不了 NeedsDeci(问问题仍 busy),靠会话 transcript(`~/.claude/projects/*/<sessionId>.jsonl`)尾部最后一条**有意义事件**:`busy + end_turn`→NeedsDeci(等你回)、`busy + user`(用户刚输入、Claude 正在处理)/`busy + tool_use`→Working(跑工具)、`idle`/`shell`→Done。关键:`end_turn` 之后若已有 `user` 消息则判 Working,不被残留 `end_turn` 误判 NeedsDeci(用户已回=Claude 在跑,不是等你)。`claude.rs::classify`/`read_tail_signal` 据此判定,只读尾部 ~16KB。OpenClaw 的 NeedsDeci 来自状态库 `~/.openclaw/state/openclaw.sqlite` 的 `flow_runs.status='blocked' 且 ended_at IS NULL`(已结束的 blocked 投递失败终态不计;准度有限,见 README),实现见 `openclaw.rs`。
 
 ## macOS / AppKit 坑(都踩过)
-- **layer-backed NSView 的 `anchorPoint`/`position` 由 AppKit 托管,运行时改会被重置**。要「绕中心缩放」别动 anchorPoint,改用绕圆心的 `CATransform3D`(`overlay::scale_about`)做 `transform` 动画。波纹居中就是这么修的(曾因改 anchorPoint 无效、环偏到圆点左下角)。
+- **layer-backed NSView 的 `anchorPoint`/`position` 由 AppKit 托管,运行时改会被重置**。要「绕中心缩放」别动 anchorPoint,改用绕圆心的 `CATransform3D` 做 `transform` 动画。波纹居中就是这么修的(曾因改 anchorPoint 无效、环偏到圆点左下角)。
 - **合成/程序化点击打不到菜单栏 `NSStatusItem`**,也触发不了真失焦 → 「点别处自动关」「菜单栏点击」这类只能真人交互验证。
 - 别在运行时对已显示的窗口乱发 `setFrame:` 等结构体消息(曾因 KVO setFrame 崩)。改浮窗位置走持久化的 `light_pos`。
 - 视觉改动(灯效/布局/颜色)**尽量像素级实测**,别只靠目测或图像分析器(分析器对小元素常看走眼 —— 这次波纹就误判过一次)。
@@ -31,11 +31,12 @@ Asig = macOS 多 Agent 状态监控灯(菜单栏灯 + 全局置顶浮窗 + 弹�
 - `ASIG_PANEL=1`:启动 0.5s 后自动开 Drop-down Panel。
 - `ASIG_SETTINGS=1`:自动开 Settings Panel。
 - `ASIG_NO_HIDE=1`:关掉 Drop-down 的「失焦自动关」,便于截图。
-- `ASIG_TAB=<1..7>`:Settings 直接开到指定 pane(1=DoneNotif … 6=Offline、7=About;默认 0=General),便于逐页截图。
+- `ASIG_TAB=<1..=7>`:直接开到指定 pane(1=DoneNotif/2=Done/3=Working/4=NeedsDeci/5=Error/6=Offline/7=About;不设=General),便于逐页截图。
+- `ASIG_PREVIEW=1`:跳过轮询,循环展示各状态默认灯效(便于动画截图)。
 - 用法:`ASIG_SETTINGS=1 ./build/Asig.app/Contents/MacOS/agent-light`(`open` 不透传 env)。
 
 ## 供应链检查(cargo-deny)
-- 配置在 `deny.toml`:许可证白名单(只放行宽松许可证 + MPL-2.0)+ RustSec 漏洞 + 禁用/重复版本/来源。
+- 配置在 `deny.toml`:许可证白名单(只放行宽松许可证 + MPL-2.0)+ RustSec 漏洞 + 重复版本/来源(仅警告)。
 - CI 里跑 `cargo deny check`(全量,联网拉 RustSec 库)。**cargo-deny 的 advisories 已覆盖 cargo-audit 的职责**(同源),所以没再单跑 cargo-audit。
 - 本地:`cargo install cargo-deny` 后 `cargo deny check`;若拉不到 RustSec 库(无网),可只跑不需联网的部分:`cargo deny check licenses bans sources`。
 - 加新依赖后若 license 被拒:看报错的 SPDX id,确认是宽松许可证就加进 `deny.toml` 的 `[licenses] allow`(并写明理由);是强 copyleft(GPL/AGPL)则不要引入。
