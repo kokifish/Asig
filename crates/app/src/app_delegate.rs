@@ -8,7 +8,9 @@ use agent_light_core::{
 };
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
-use objc2::{ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{
+    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
+};
 use objc2_app_kit::{
     NSAlert, NSApplication, NSApplicationDelegate, NSEventType, NSScrollView, NSStatusItem, NSView,
     NSWindow, NSWindowDelegate,
@@ -401,9 +403,18 @@ define_class!(
                     let _: () =
                         unsafe { msg_send![&doc, setFrameSize: NSSize::new(df.size.width, new_h)] };
                 }
-                let cv = scroll.contentView();
-                let _: () = unsafe { msg_send![&cv, setBoundsOrigin: NSPoint::new(0.0, 0.0)] };
             }
+            // 滚顶推到下一 runloop:doc.setFrameSize 触发 NSScrollView 的 layout pass
+            // (reflectScrolledClippedView)会覆盖同步 setBoundsOrigin,performSelector afterDelay:0
+            // 在 layout commit 后执行(见 scrollSettingsToTop:),根治切 tab 时 content 顶部漂移。
+            let _: () = unsafe {
+                msg_send![
+                    self,
+                    performSelector: sel!(scrollSettingsToTop:),
+                    withObject: std::ptr::null_mut::<NSObject>(),
+                    afterDelay: 0.0
+                ]
+            };
         }
 
         /// 常规页「轮询间隔」下拉 action。改完即时重排 tick 定时器。
@@ -491,6 +502,20 @@ define_class!(
         /// 占位 action(禁用的「开机启动」等无操作控件的兜底,实际不会触发)。
         #[unsafe(method(noop:))]
         fn noop(&self, _sender: *mut NSObject) {}
+
+        /// 把设置窗右区内容滚到顶(clipView setBoundsOrigin=(0,0);flipped doc 下即顶部)。
+        /// 单独成方法是为了让调用方用 performSelector:withObject:afterDelay:0 异步触发——
+        /// 同步 setBoundsOrigin 会被 doc.setFrameSize 触发的 NSScrollView layout pass
+        /// (reflectScrolledClippedView)覆盖,导致切 tab / 初始时 content 顶部漂移(General 初始
+        /// content 上移、State 切 tab content 落点偏)。afterDelay:0 推到下一轮 runloop,此时
+        /// layout 已 commit,setBoundsOrigin 稳得住,两 pane 顶部对齐。
+        #[unsafe(method(scrollSettingsToTop:))]
+        fn scroll_settings_to_top(&self, _sender: *mut NSObject) {
+            if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
+                let cv = scroll.contentView();
+                let _: () = unsafe { msg_send![&cv, setBoundsOrigin: NSPoint::new(0.0, 0.0)] };
+            }
+        }
 
         /// Settings 窗口尺寸变化:按右区 documentView 新宽度重排所有 state pane 的色块
         /// (固定间距 flow——宽度变时自动换行 / 很宽时合并为 1 行,色块间距恒定;

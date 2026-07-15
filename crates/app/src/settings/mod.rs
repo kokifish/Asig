@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use objc2::DefinedClass;
 use objc2::rc::{Allocated, Retained};
-use objc2::{MainThreadMarker, class, msg_send};
+use objc2::{MainThreadMarker, class, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSScrollView,
     NSTitlebarSeparatorStyle, NSView, NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
@@ -146,14 +146,17 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         pane.setAutoresizingMask(NSAutoresizingMaskOptions(2));
         doc.addSubview(pane);
     }
-    // 初始 documentView 高 = 当前选中 pane(General)的 content_h,滚到顶。
+    // 初始 documentView 高 = 当前选中 pane(General)的 content_h。滚到顶推到下一 runloop
+    // (见 AppDelegate::scrollSettingsToTop:)——同步 setBoundsOrigin 会被 show 后 layout 覆盖。
     doc.setFrameSize(NSSize::new(CONTENT_W, g_h));
-    {
-        let cv = content_area.contentView();
-        unsafe {
-            let _: () = msg_send![&cv, setBoundsOrigin: NSPoint::new(0.0, 0.0)];
-        }
-    }
+    let _: () = unsafe {
+        msg_send![
+            delegate,
+            performSelector: sel!(scrollSettingsToTop:),
+            withObject: std::ptr::null_mut::<objc2::runtime::NSObject>(),
+            afterDelay: 0.0
+        ]
+    };
 
     // 真·液态玻璃承载视图 root(普通 NSView;刻意不用 NSGlassEffectContainerView —— 它会把
     // 重叠/相邻的玻璃合并成一次模糊,令浮动侧栏失去层次)。root 内:主玻璃(满窗,承载右区内容)
@@ -227,9 +230,16 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
                     let _: () =
                         unsafe { msg_send![&doc, setFrameSize: NSSize::new(df.size.width, h)] };
                 }
-                let cv = scroll.contentView();
-                let _: () = unsafe { msg_send![&cv, setBoundsOrigin: NSPoint::new(0.0, 0.0)] };
             }
+            // 滚顶推到下一 runloop(同初始 General,见 AppDelegate::scrollSettingsToTop:)。
+            let _: () = unsafe {
+                msg_send![
+                    delegate,
+                    performSelector: sel!(scrollSettingsToTop:),
+                    withObject: std::ptr::null_mut::<objc2::runtime::NSObject>(),
+                    afterDelay: 0.0
+                ]
+            };
         }
     }
 
