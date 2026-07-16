@@ -29,8 +29,14 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 
 - `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
 - `jsonl_tail.rs` — 只读 jsonl 尾部的取数工具（claude/openclaw 共用）
-- `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）；读 session 文件（camelCase 字段：`sessionId`/`kind`/`status`…，`rename_all`）+ pid 存活：按 **cwd 聚合** —— 同目录的多个 session（用户手开 interactive + claude `--fork-session` 派发的后台子 claude `kind:"bg"`）合并为**一个**会话：interactive 作主，bg 不单独显示但 busy 活跃度合并进主会话状态（否则 fork 任务到后台跑时主进程 idle 成 shell 会被误判不在运行），纯 bg 无 interactive 的目录整组跳过（避免与 OpenClaw source 重叠）；`waiting`（Claude 等用户输入/授权，如工具 permission）→NeedsDeci（status 层，优先于 transcript）；busy+transcript 尾部信号（`end_turn`→NeedsDeci；`user`（用户刚输入、Claude 处理中）/`tool_use`→Working；`end_turn` 后若已有 `user` 判 Working，不被残留 `end_turn` 误判）；idle/shell（空闲）→Done；pid 死→Offline
-- `openclaw.rs` — `OpenClawSource`：两套数据源 —— ① 只读 `~/.openclaw/state/openclaw.sqlite`（单一事实源、升级迁移目标），按 `agent_databases` 聚合 task/flow/subagent runs（ended_at NULL→Working、blocked 且 ended_at NULL→NeedsDeci、近期 failed→Error）；② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working）；主 agent `sessions_yield` 让出 + 文件以 `leaf` 结尾 = 协调后台子 agent：子 agent 在跑 → Working，子 agent 全 ended 或协调态超 30min → 卡死 → Error —— 子 agent 走 sessions 机制（`.trajectory.jsonl`）不进 `subagent_runs` 表，靠 leaf+yield 信号识别（GLM 下 yield 期间尾部 `assistant stop="stop"` 否则误判 Done）—— **不进主库，故单读**。否则 Done
+- `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）。读 session 文件（camelCase 字段：`sessionId`/`kind`/`status`…，`rename_all`）+ pid 存活：
+  - **按 cwd 聚合** —— 同目录的多个 session（用户手开 interactive + claude `--fork-session` 派发的后台子 claude `kind:"bg"`）合并为**一个**会话：interactive 作主，bg 不单独显示但 busy 活跃度合并进主会话状态（否则 fork 任务到后台跑时主进程 idle 成 shell 会被误判不在运行），纯 bg 无 interactive 的目录整组跳过（避免与 OpenClaw source 重叠）
+  - **状态判定**（status 层，优先于 transcript）：`waiting`（Claude 等用户输入/授权，如工具 permission）→NeedsDeci；busy+transcript 尾部信号（`end_turn`→NeedsDeci；`user`（用户刚输入、Claude 处理中）/`tool_use`→Working；`end_turn` 后若已有 `user` 判 Working，不被残留 `end_turn` 误判）；idle/shell（空闲）→Done；pid 死→Offline
+- `openclaw.rs` — `OpenClawSource`：两套数据源：
+  - ① 只读 `~/.openclaw/state/openclaw.sqlite`（单一事实源、升级迁移目标），按 `agent_databases` 聚合 task/flow/subagent runs（ended_at NULL→Working、blocked 且 ended_at NULL→NeedsDeci、近期 failed→Error）
+  - ② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working）
+  - **协调后台子 agent**：主 agent `sessions_yield` 让出 + 文件以 `leaf` 结尾 = 协调后台子 agent——子 agent 在跑 → Working，子 agent 全 ended 或协调态超 30min → 卡死 → Error。子 agent 走 sessions 机制（`.trajectory.jsonl`）不进 `subagent_runs` 表，靠 leaf+yield 信号识别（GLM 下 yield 期间尾部 `assistant stop="stop"` 否则误判 Done）—— **不进主库，故单读**
+  - 否则 Done
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
 - `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
 - `config.rs` — `Settings` / `StyleKey` / `StateStyle` / `LightPosition`：可配置灯效 + 浮窗位置，serde 持久化（`load`/`save` 失败可见不静默：无文件静默默认、IO 错提示、JSON 损坏备份成 `settings.json.bad`，均回退默认绝不 panic）
@@ -44,7 +50,14 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
 - `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
-- `settings/` — Settings Panel（9 子模块）：`mod`（装配 build/show/view_with_tag + pub use 外部 API）、`strings`（本地化文案）、`tags`（几何/tag 常量 + helper）、`controls`（控件工厂 add_*）、`glass`（液态玻璃 GlassPane + 选中态药丸）、`layout`（StateControls + layout/refresh_*）、`pane_general`/`pane_state`/`pane_about`（各 pane builder）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)
+- `settings/` — Settings Panel（9 子模块）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)。子模块：
+  - `mod` — 装配 build/show/view_with_tag + pub use 外部 API
+  - `strings` — 本地化文案
+  - `tags` — 几何/tag 常量 + helper
+  - `controls` — 控件工厂 add_*
+  - `glass` — 液态玻璃 GlassPane + 选中态药丸
+  - `layout` — StateControls + layout/refresh_*
+  - `pane_general` / `pane_state` / `pane_about` — 各 pane builder
 - `palette.rs` — 下拉面板会话列表用的状态 emoji(`status_emoji`)
 - `notify.rs` — macOS 系统通知（UserNotifications framework：授权 + 发送）
 
@@ -118,7 +131,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 **全部交 CoreAnimation 在 render server 上驱动 GPU 插值，app 进程 ~0% CPU。**
 
 | 动效 | 英文 | 视觉 | 涉及的属性 |
-|---|---|---|---|---|
+|---|---|---|---|
 | 常亮 | Steady | 不变，纯色常亮 | 无周期，period_ms 置 0 |
 | 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
 | 波纹 | Ripple | 两圈环从**最内层外缘**起、错相(半周期)对称扩散并淡出（layers>0 时穿过半透明外层，视觉读作「从最内层扩散出去」；layers=0 → L=1 即整个圆点，等价历史行为） | `transform`（绕圆心缩放的 `CATransform3D`；scale 终值随 L 放大，保证不同层数都扩到圆点外同一圈 MAX_SCALE×dot）+ `opacity`（2 个错相 `RingView`），单程一次扩散 |
@@ -128,7 +141,9 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 - Configurable：Settings 里每状态独立改 动效 + 颜色 + 周期 + 渐变层数（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
 - Carrier：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用两个错相 `RingView` 子视图扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示自绘彩色圆点（`overlay::swatch_image`，`setTemplate:NO` 保留真彩），不可设动效。
 - 速度（周期）以 **Hz** 呈现给用户（`period_ms = 1000 / Hz`）；常亮（Steady）无周期、速度不可设。
-- **渐变层数（Gradient layers）**：圆点本体按半径等距分 L=layers+1 个同心环（slider 值 layers∈0..=4，默认 1），第 k 层（k=0 中心）透明度 α=1−k/L（中心最亮、向外线性递减；0=纯色单层=历史行为，1=两层外层 α=0.5，2=三层中 2/3·外 1/3）。每段画 even-odd 环（外圆+内圆 path）独立 α、互不重叠，避免 source-over 合成使中间层 α 累加。`layers` 与动画类型正交、且只被浮窗 `drawRect` 消费，故**不**放 `LightAnim` 枚举（避免随 `light()` 流经菜单栏图标 / 波纹环 / 色块等不分级消费者），而是作 `set_light` 的正交参数，由 `Settings::layers(snap)` 经 `StateStyle::layers()` 单独取。**仅作用于 Signal Light 浮窗圆点本体**；Signal Icon（菜单栏，18px 太小）与波纹环（`RingView` 扩散动画）不分级。Settings State pane 每状态独立设（整数拉杆，右侧显示 slider 值，0..=4，默认 1）；Reduce Motion 降级为 Steady 时保留层数。
+- **渐变层数（Gradient layers）**：圆点本体按半径等距分 L=layers+1 个同心环（slider 值 layers∈0..=4，默认 1），第 k 层（k=0 中心）透明度 α=1−k/L（中心最亮、向外线性递减；0=纯色单层=历史行为，1=两层外层 α=0.5，2=三层中 2/3·外 1/3）。每段画 even-odd 环（外圆+内圆 path）独立 α、互不重叠，避免 source-over 合成使中间层 α 累加。
+  - **不进 `LightAnim` 枚举**：`layers` 与动画类型正交、且只被浮窗 `drawRect` 消费，故**不**放 `LightAnim` 枚举（避免随 `light()` 流经菜单栏图标 / 波纹环 / 色块等不分级消费者），而是作 `set_light` 的正交参数，由 `Settings::layers(snap)` 经 `StateStyle::layers()` 单独取。
+  - **作用范围**：**仅作用于 Signal Light 浮窗圆点本体**；Signal Icon（菜单栏，18px 太小）与波纹环（`RingView` 扩散动画）不分级。Settings State pane 每状态独立设（整数拉杆，右侧显示 slider 值，0..=4，默认 1）；Reduce Motion 降级为 Steady 时保留层数。
 
 ### System Notifications（系统通知）
 
@@ -149,12 +164,15 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 ### Appearance（Theme + 颜色深浅自适应）
 
 - **Theme**（Settings → General）：跟随系统 / 深色 / 浅色（横向 radio 单选,与「效果」同款），默认跟随系统。改动即设 `NSApp.appearance`（FollowSystem→nil 继承系统）并重建 + 重绘；持久化在 `settings.json` 的 `theme` 字段（serde，旧配置无该字段回退默认）。
-- **颜色随外观自适应**：12 色每色含浅 / 深两档（Tailwind 500 / 400），经 `NSColor colorWithDynamicProvider` 包装——浮窗自绘 `drawRect` 每次重绘按当前 `NSAppearance` 取档；`PillView` / `RingView` 重写 `viewDidChangeEffectiveAppearance`，故系统深浅切换时浮窗**实时**重绘。菜单栏图标 / Settings 色块是栅格化位图（`swatch_image`），动态色在 `lockFocus` 时会被冻结，故改用「当前外观静态色」栅格化，并靠 tick 渲染签名并入 `effectiveAppearance`（同 reduce_motion 模式）在 ≤ 轮询周期内自动刷新。
+- **颜色随外观自适应**：12 色每色含浅 / 深两档（Tailwind 500 / 400），经 `NSColor colorWithDynamicProvider` 包装。
+  - 浮窗：自绘 `drawRect` 每次重绘按当前 `NSAppearance` 取档；`PillView` / `RingView` 重写 `viewDidChangeEffectiveAppearance`，故系统深浅切换时浮窗**实时**重绘。
+  - 菜单栏图标 / Settings 色块（栅格化位图 `swatch_image`）：动态色在 `lockFocus` 时会被冻结，故改用「当前外观静态色」栅格化，并靠 tick 渲染签名并入 `effectiveAppearance`（同 reduce_motion 模式）在 ≤ 轮询周期内自动刷新。
 
 ### Signal Light
 
 - Def: 在桌面上的可以配置动效、大小的叫 Signal Light
-- Default Position: 初始位置在主屏幕的左上角（红黄绿按钮下方一行）。**Position memory**：拖动后记住位置，下次启动**按存的坐标点定位其所在屏**来恢复（不依赖可能错配的 `screen_id`：`persist_light_pos` 存原点却按窗口中心判屏，拖动跨屏边界时原点与中心所在屏不一致，按 `screen_id` 恢复会把浮窗 clamp 进屏缝丢失）；接缝上的点归主屏（`screens[0]`），点不在任何屏（屏断开 / 坐标过期）则回退主屏左上角。记忆持久化在 `settings.json` 的 `light_pos` 字段。
+- Default Position: 初始位置在主屏幕的左上角（红黄绿按钮下方一行）。
+  - **Position memory**：拖动后记住位置，下次启动**按存的坐标点定位其所在屏**来恢复（不依赖可能错配的 `screen_id`：`persist_light_pos` 存原点却按窗口中心判屏，拖动跨屏边界时原点与中心所在屏不一致，按 `screen_id` 恢复会把浮窗 clamp 进屏缝丢失）；接缝上的点归主屏（`screens[0]`），点不在任何屏（屏断开 / 坐标过期）则回退主屏左上角。记忆持久化在 `settings.json` 的 `light_pos` 字段。
 
 ### Signal Icon
 
@@ -170,9 +188,15 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 ### Settings Panel
 
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
-- Position: 默认在屏幕中央，可以拖动；**可调整大小**（minSize = 默认 750×460;侧栏固定宽随高、右区 `NSScrollView` 随窗宽自适应。750 宽配合「点击穿透」label 去掉「则」字收窄 label 列(label_col_width 从 ~160 降到 ~139),让 General pane 的「监控的 Agent」3 chip 与「状态通知」5 chip 默认单行不换行,Group-2 card 只 7 行 content_h≈436 < 460,首屏完整不被窗口底截断）。**右区滚动 + 顶部锚定**:右区是 `NSScrollView`(documentView = `FlippedView` 顶锚 + 透明 ClipView 承玻璃),各 pane 内容超高自动出竖滚动条;缩放窗口时 pane 顶部固定不漂移,documentView 高 = max(clip 可视高, pane content_h)(切 tab / 窗口缩放时设 + 滚顶,见 `set_doc_height`):取 max 而非纯 content_h —— doc 矮于 clip 时 NSClipView 对翻转短文档(`FlippedView`)的顶部锚定会随 doc 高漂移(常规页内容曾比别的偏高 ~9pt);doc 始终 ≥ clip 则各 pane 顶部锚定一致(短内容下方留白融于玻璃)。紧凑编排:W=750 / SIDEBAR_W=160 / CONTENT_PAD_X=22;label 列宽 `label_col_width`(sizeToFit 测最宽文字,排除 reset 按钮),非固定值
+- Position: 默认在屏幕中央，可以拖动；**可调整大小**。
+  - **尺寸**：minSize = 默认 750×460；侧栏固定宽随高、右区 `NSScrollView` 随窗宽自适应。750 宽配合「点击穿透」label 去掉「则」字收窄 label 列（label_col_width 从 ~160 降到 ~139），让 General pane 的「监控的 Agent」3 chip 与「状态通知」5 chip 默认单行不换行，Group-2 card 只 7 行 content_h≈436 < 460，首屏完整不被窗口底截断。
+  - **右区滚动 + 顶部锚定**：右区是 `NSScrollView`（documentView = `FlippedView` 顶锚 + 透明 ClipView 承玻璃），各 pane 内容超高自动出竖滚动条；缩放窗口时 pane 顶部固定不漂移，documentView 高 = max(clip 可视高, pane content_h)（切 tab / 窗口缩放时设 + 滚顶，见 `set_doc_height`）。取 max 而非纯 content_h —— doc 矮于 clip 时 NSClipView 对翻转短文档（`FlippedView`）的顶部锚定会随 doc 高漂移（常规页内容曾比别的偏高 ~9pt）；doc 始终 ≥ clip 则各 pane 顶部锚定一致（短内容下方留白融于玻璃）。
+  - **紧凑编排**：W=750 / SIDEBAR_W=160 / CONTENT_PAD_X=22；label 列宽 `label_col_width`（sizeToFit 测最宽文字，排除 reset 按钮），非固定值。
 - Navigation: 左侧栏（顶部 tab 列表 + 底部图标行）+ 右侧 pane 切换。点 tab / 「关于」图标切换右侧 pane。
-- 材质：真·液态玻璃（macOS 26+ `NSGlassEffectView`，UI 必须放进其 `contentView`；旧系统回退 `NSVisualEffectView` vibrancy）。窗口 = 一整片主玻璃（透明标题栏，玻璃贯穿顶部）；**左侧栏是浮动玻璃面板**——独立一块 `NSGlassEffectView` 叠在主玻璃上，二次模糊自然更不透明，读作浮于内容之上的圆角玻璃块。刻意**不用** `NSGlassEffectContainerView`：它会合并重叠/相邻的玻璃成一次模糊，反而让浮动侧栏与主玻璃融为一体、失去「浮动」层次。**右侧内容区无外框、标题下无横线**；靠极淡连续圆角卡片（`quaternaryLabelColor`）分组（stats.app 式编排），用层级而非厚重描边区分。
+- 材质：真·液态玻璃（macOS 26+ `NSGlassEffectView`，UI 必须放进其 `contentView`；旧系统回退 `NSVisualEffectView` vibrancy）。
+  - 窗口 = 一整片主玻璃（透明标题栏，玻璃贯穿顶部）。
+  - **左侧栏是浮动玻璃面板**——独立一块 `NSGlassEffectView` 叠在主玻璃上，二次模糊自然更不透明，读作浮于内容之上的圆角玻璃块。刻意**不用** `NSGlassEffectContainerView`：它会合并重叠/相邻的玻璃成一次模糊，反而让浮动侧栏与主玻璃融为一体、失去「浮动」层次。
+  - **右侧内容区无外框、标题下无横线**；靠极淡连续圆角卡片（`quaternaryLabelColor`）分组（stats.app 式编排），用层级而非厚重描边区分。
 - Content:
   - 右侧内容区有自己的 **header**：标题固定在右侧内容区的左上方（State pane 的 Reset 按钮对齐到该 header 右侧），而不是漂在卡片列中央；标题下方不再有分隔线。
   - General pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、监控的 Agent（多选块；选中=监控,点击 toggle）、开机启动（占位，待实现）。详见 General Settings Card。
