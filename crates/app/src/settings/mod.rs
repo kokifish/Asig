@@ -146,9 +146,10 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         pane.setAutoresizingMask(NSAutoresizingMaskOptions(2));
         doc.addSubview(pane);
     }
-    // 初始 documentView 高 = 当前选中 pane(General)的 content_h。滚到顶推到下一 runloop
-    // (见 AppDelegate::scrollSettingsToTop:)——同步 setBoundsOrigin 会被 show 后 layout 覆盖。
-    doc.setFrameSize(NSSize::new(CONTENT_W, g_h));
+    // 初始 documentView 高 = max(clip 可视高, General content_h)。取 max 而非纯 content_h:
+    // doc 矮于 clip 时 NSClipView 对翻转短文档的顶部锚定会随 doc 高漂移,致各 pane 内容顶部不对齐
+    // (见 set_doc_height)。滚到顶推到下一 runloop(见 AppDelegate::scrollSettingsToTop:)。
+    set_doc_height(&content_area, g_h);
     let _: () = unsafe {
         msg_send![
             delegate,
@@ -216,7 +217,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
             }
             *delegate.ivars().settings_selected.borrow_mut() = n;
             update_selection(delegate, n);
-            // 同步 documentView 高度 = 该 pane content_h,并滚到顶。
+            // 同步 documentView 高度 = max(clip 可视高, 该 pane content_h),并滚到顶。
             let h = delegate
                 .ivars()
                 .settings_pane_heights
@@ -225,11 +226,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
                 .copied()
                 .unwrap_or(tags::H);
             if let Some(scroll) = delegate.ivars().settings_scroll.borrow().as_ref() {
-                if let Some(doc) = scroll.documentView() {
-                    let df = doc.frame();
-                    let _: () =
-                        unsafe { msg_send![&doc, setFrameSize: NSSize::new(df.size.width, h)] };
-                }
+                set_doc_height(scroll, h);
             }
             // 滚顶推到下一 runloop(同初始 General,见 AppDelegate::scrollSettingsToTop:)。
             let _: () = unsafe {
@@ -308,6 +305,25 @@ fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &String
 /// content view 里按 tag 找子视图(仅侧栏 tab 按钮;状态控件用 StateControls)。
 pub fn view_with_tag(view: &Retained<NSView>, tag: i64) -> Option<Retained<NSView>> {
     view.viewWithTag(tag as isize)
+}
+
+/// 设右区 documentView 高度 = max(scrollView 可视高, 内容高)。
+///
+/// 关键修复:doc 高随 pane 内容变(General 436、其余 ≤322)。doc 矮于 clip(≈460)时,NSClipView
+/// 对翻转(documentView isFlipped=YES)短文档的「顶部锚定」会钳制 boundsOrigin.y,且钳制值随 doc
+/// 高而变——接近 clip 高的(General)钳到 −(clip−doc)、矮得多的钳到 safe-area 下限,导致不同 pane
+/// 的内容顶部落在不同屏幕高度(常规页卡片比别的偏高 ~9pt)。让 doc 始终 ≥ clip 可视高即消除该
+/// 差异:内容短时 doc 填满 clip、顶部锚定一致(下方留白融于玻璃);超长时 doc = 内容高、照常滚动。
+/// scrollView 可视高读 contentView(NSClipView)的 bounds 高(windowDidResize 后随之变)。
+pub fn set_doc_height(scroll: &NSScrollView, content_h: CGFloat) {
+    let Some(doc) = scroll.documentView() else {
+        return;
+    };
+    let clip_h = scroll.contentView().bounds().size.height;
+    let floor = if clip_h > 0.0 { clip_h } else { tags::H };
+    let df: NSRect = unsafe { msg_send![&doc, frame] };
+    let _: () =
+        unsafe { msg_send![&doc, setFrameSize: NSSize::new(df.size.width, floor.max(content_h))] };
 }
 
 pub fn show(window: &NSWindow) {

@@ -16,7 +16,7 @@ use objc2_app_kit::{
     NSWindow, NSWindowDelegate,
 };
 use objc2_core_foundation::CGFloat;
-use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer};
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString, NSTimer};
 use std::collections::HashMap;
 
 use crate::overlay::PillView;
@@ -388,8 +388,9 @@ define_class!(
             }
             *self.ivars().settings_selected.borrow_mut() = new;
             crate::settings::update_selection(self, new);
-            // documentView 高度 = 新 pane 的 content_h(动态,每页独立滚动语义),并滚到顶
-            // (避免残留上一 pane 的滚动位置)。flipped doc 下 bounds origin y=0 即顶。
+            // documentView 高度 = max(clip 可视高, 新 pane content_h),并滚到顶(避免残留上一
+            // pane 的滚动位置)。取 max 而非纯 content_h:doc 矮于 clip 时 NSClipView 对翻转短文档
+            // 的顶部锚定随 doc 高漂移,致各 pane 内容顶部不对齐(见 settings::set_doc_height)。
             let new_h = self
                 .ivars()
                 .settings_pane_heights
@@ -398,11 +399,7 @@ define_class!(
                 .copied()
                 .unwrap_or(crate::settings::H);
             if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
-                if let Some(doc) = scroll.documentView() {
-                    let df: NSRect = unsafe { msg_send![&doc, frame] };
-                    let _: () =
-                        unsafe { msg_send![&doc, setFrameSize: NSSize::new(df.size.width, new_h)] };
-                }
+                crate::settings::set_doc_height(scroll, new_h);
             }
             // 滚顶推到下一 runloop:doc.setFrameSize 触发 NSScrollView 的 layout pass
             // (reflectScrolledClippedView)会覆盖同步 setBoundsOrigin,performSelector afterDelay:0
@@ -506,9 +503,8 @@ define_class!(
         /// 把设置窗右区内容滚到顶(clipView setBoundsOrigin=(0,0);flipped doc 下即顶部)。
         /// 单独成方法是为了让调用方用 performSelector:withObject:afterDelay:0 异步触发——
         /// 同步 setBoundsOrigin 会被 doc.setFrameSize 触发的 NSScrollView layout pass
-        /// (reflectScrolledClippedView)覆盖,导致切 tab / 初始时 content 顶部漂移(General 初始
-        /// content 上移、State 切 tab content 落点偏)。afterDelay:0 推到下一轮 runloop,此时
-        /// layout 已 commit,setBoundsOrigin 稳得住,两 pane 顶部对齐。
+        /// (reflectScrolledClippedView)覆盖,导致切 tab / 初始时 content 顶部漂移。afterDelay:0
+        /// 推到下一轮 runloop,此时 layout 已 commit,setBoundsOrigin 稳得住,各 pane 顶部对齐。
         #[unsafe(method(scrollSettingsToTop:))]
         fn scroll_settings_to_top(&self, _sender: *mut NSObject) {
             if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
@@ -538,6 +534,19 @@ define_class!(
             let controls = self.ivars().state_controls.borrow();
             for c in controls.values() {
                 crate::settings::layout_state_pane(c, pane_w);
+            }
+            // 窗口变高 → clip 可视高变大:重定 doc 高 = max(新 clip 高, 当前 pane content_h),
+            // 否则原本填满 clip 的 doc 可能又矮于新 clip,重新触发短文档锚定漂移(见 set_doc_height)。
+            let sel = *self.ivars().settings_selected.borrow();
+            let ch = self
+                .ivars()
+                .settings_pane_heights
+                .borrow()
+                .get(&sel)
+                .copied()
+                .unwrap_or(crate::settings::H);
+            if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
+                crate::settings::set_doc_height(scroll, ch);
             }
         }
     }
