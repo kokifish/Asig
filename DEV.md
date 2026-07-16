@@ -154,7 +154,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 ### Signal Light
 
 - Def: 在桌面上的可以配置动效、大小的叫 Signal Light
-- Default Position: 初始位置在主屏幕的左上角（红黄绿按钮下方一行）。**Position memory**：拖动后记住位置，下次启动自动恢复到上次位置（含所在屏幕，按 `CGDirectDisplayID` 匹配）；若该屏已断开则回退主屏左上角。记忆持久化在 `settings.json` 的 `light_pos` 字段。
+- Default Position: 初始位置在主屏幕的左上角（红黄绿按钮下方一行）。**Position memory**：拖动后记住位置，下次启动**按存的坐标点定位其所在屏**来恢复（不依赖可能错配的 `screen_id`：`persist_light_pos` 存原点却按窗口中心判屏，拖动跨屏边界时原点与中心所在屏不一致，按 `screen_id` 恢复会把浮窗 clamp 进屏缝丢失）；接缝上的点归主屏（`screens[0]`），点不在任何屏（屏断开 / 坐标过期）则回退主屏左上角。记忆持久化在 `settings.json` 的 `light_pos` 字段。
 
 ### Signal Icon
 

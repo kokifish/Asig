@@ -197,14 +197,6 @@ pub fn screen_id_at(pt: NSPoint) -> u32 {
     0
 }
 
-/// 按 display id 找屏;id=0 或屏已断开返回 None。
-fn screen_with_id(id: u32) -> Option<Retained<NSScreen>> {
-    if id == 0 {
-        return None;
-    }
-    screens().into_iter().find(|s| screen_device_id(s) == id)
-}
-
 /// 主屏(screens[0])左上角的默认 origin:borderless 浮窗贴可见区(visibleFrame,
 /// 已排除菜单栏 / Dock)左上,留小边距,大致落在窗口红黄绿按钮那一行。
 fn default_origin(win: CGFloat) -> NSPoint {
@@ -224,7 +216,13 @@ fn resolve_origin(saved: Option<LightPosition>, win: CGFloat) -> NSPoint {
     let Some(p) = saved else {
         return default_origin(win);
     };
-    let Some(s) = screen_with_id(p.screen_id) else {
+    // 按坐标点找它实际所在的屏来 clamp,而非存的 screen_id:persist_light_pos 按窗口「中心」判屏却
+    // 存「原点」(x,y),浮窗跨屏边界时(原点在 A 屏、中心越过接缝到 B 屏)会存成 (origin=A 屏坐标,
+    // screen_id=B 屏)——若按 screen_id clamp,原点被推到 B 屏边缘的接缝里,浮窗落到两屏之间不可见。
+    // 直接按坐标定位:落在哪屏就 clamp 到哪屏;screens()[0] 是主屏(Apple 保证),接缝上的点归主屏,
+    // 避免落到副屏边缘。点不在任何屏(屏断开 / 坐标过期)→ 默认主屏左上角。
+    let pt = NSPoint::new(p.x, p.y);
+    let Some(s) = screens().into_iter().find(|s| point_in_rect(s.frame(), pt)) else {
         return default_origin(win);
     };
     let vf = s.visibleFrame();
