@@ -369,6 +369,35 @@ define_class!(
             self.rebuild_settings();
         }
 
+        /// General 标题「重置」action:把本页 General 字段(灯大小/轮询/主题/agent/通知/点击穿透)
+        /// 恢复默认,不动语言与各状态样式(无确认,参照 state pane 的 reset)。
+        #[unsafe(method(resetGeneral:))]
+        fn reset_general(&self, _sender: *mut NSObject) {
+            {
+                let mut s = self.ivars().settings.borrow_mut();
+                let d = Settings::default();
+                s.dot_size = d.dot_size;
+                s.poll_interval_ms = d.poll_interval_ms;
+                s.theme = d.theme;
+                s.enabled_agents = d.enabled_agents;
+                s.notify_on = d.notify_on;
+            }
+            *self.ivars().click_through.borrow_mut() = true; // 默认点击穿透
+            self.ivars().settings.borrow().save();
+            // 重应用:灯大小 + 点击穿透 + 主题 + tick 重排
+            let dot = self.ivars().settings.borrow().dot_size;
+            if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
+                crate::overlay::set_size(view, dot);
+            }
+            self.apply_click_through();
+            crate::overlay::apply_theme(self.ivars().settings.borrow().theme);
+            let ms = self.ivars().settings.borrow().poll_interval_ms;
+            crate::tray::reschedule(self, ms as f64 / 1000.0);
+            self.rebuild_settings();
+            let snap = self.snap();
+            self.render(&snap);
+        }
+
         /// 侧栏 tab / 关于图标点击:切换右侧 pane。tag = pane id(0=常规 … 7=关于)。
         #[unsafe(method(switchSettingsTab:))]
         fn switch_settings_tab(&self, sender: *mut NSObject) {

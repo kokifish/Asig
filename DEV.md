@@ -109,7 +109,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 | 优先级 | 状态 | 状态名称 | 灯 | 默认动效 | 含义 |
 |:---:|---|---|:---:|---|---|
 | 5 | `Error` | 错误/Error | 🔴 红 | 快闪 | agent 报错且无法自动恢复 |
-| 4 | `NeedsDeci` | 待决策/Pending | 🟠 琥珀 | 慢闪 | 待决策（要权限 / 要输入） |
+| 4 | `NeedsDeci` | 待决策/Pending | 🟠 琥珀 | 波纹 | 待决策（要权限 / 要输入） |
 | 3 | `Offline` | 异常/Offline | 🟣 紫 | 常亮 | 异常 / 卡住 / 进程没了 / 未知 |
 | 2 | `Working` | 运行中/Working | 🟡 黄 | 呼吸-慢速 | 正在跑 |
 | 1 | `Done` | 已完成/Done | 🟢 绿 | 波纹 | 完成 / 空闲 / 初始默认态 |
@@ -134,9 +134,9 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 |---|---|---|---|
 | 常亮 | Steady | 不变，纯色常亮 | 无周期，period_ms 置 0 |
 | 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
-| 波纹 | Ripple | 两圈环从**最内层外缘**起、错相(半周期)对称扩散并淡出（layers>0 时穿过半透明外层，视觉读作「从最内层扩散出去」；layers=0 → L=1 即整个圆点，等价历史行为） | `transform`（绕圆心缩放的 `CATransform3D`；scale 终值随 L 放大，保证不同层数都扩到圆点外同一圈 MAX_SCALE×dot）+ `opacity`（2 个错相 `RingView`），单程一次扩散 |
+| 波纹 | Ripple | 两圈环从**最内层外缘**起、错相(半周期)对称扩散（layers>0 时穿过半透明外层，视觉读作「从最内层扩散出去」）；最大直径 = 灯直径（扩到灯边缘）；`opacity` 中段完全不透明（硬边）、仅末尾短淡出 | `transform`（绕圆心缩放的 `CATransform3D`；scale 终值 = l，终态直径 = dot）+ `opacity`（2 个错相 `RingView` 的 keyframe：中段 1.0、末尾淡到 0），单程一次扩散 |
 
-- Default period：`Error`=350（快闪）/ `NeedsDeci`=1000（慢闪）/ `Working`=1800（呼吸）/ `Done`=3333（波纹,≈0.3Hz）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
+- Default period：`Error`=350（快闪）/ `NeedsDeci`=2500（波纹,≈0.4Hz，比 Done 稍快）/ `Working`=1800（呼吸）/ `Done`=3333（波纹,≈0.3Hz）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（LightBlue，450ms）覆盖全局态。
 - Configurable：Settings 里每状态独立改 动效 + 颜色 + 周期 + 渐变层数（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
 - Carrier：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用两个错相 `RingView` 子视图扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示自绘彩色圆点（`overlay::swatch_image`，`setTemplate:NO` 保留真彩），不可设动效。
@@ -216,6 +216,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 
 - Name/名称: General Settings/常规设置
 - icon/图标: 常见的齿轮形状的macos纯色图标
+- 标题右侧 Reset/重置按钮: 把本页 General 字段(灯大小/轮询/主题/监控的 Agent/状态通知/点击穿透)恢复为默认值,不动语言与各状态样式;不弹确认(与 State pane 的 reset 一致)。与 Group-1 的「重置所有」并存(后者重置全部含语言+状态样式,弹确认)
 
 > Group不带名称，仅用于分组，以下描述顺序也是卡片内选项的从上至下的顺序
 
@@ -223,7 +224,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - Language/语言: 单行单选列表: English, 中文。默认中文
   - Reset All/重置所有: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值。在该group下居中
 - Group-2:
-  - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围5-50px，默认25px
+  - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围20-80px，默认25px
   - Click-through/点击穿透(取消可拖动): 开关。默认开
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
   - Agent to monitor/监控的 Agent: 多选块(Claude Code / CodeBuddy / OpenClaw 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`

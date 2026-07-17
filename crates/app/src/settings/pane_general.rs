@@ -85,6 +85,19 @@ pub(crate) fn build_general_pane(
         NSPoint::new(x0 + 28.0, band_center - fit_h / 2.0),
         NSSize::new(COL_W - 28.0, fit_h),
     ));
+    // 标题右侧「重置」按钮(与 state pane 一致:重置本页 General 字段,不含语言/状态样式)。
+    let reset = add_plain_button(
+        &pane,
+        NSRect::new(
+            NSPoint::new(CONTENT_W - CONTENT_PAD_X - 70.0, band_center - 12.0),
+            NSSize::new(70.0, 24.0),
+        ),
+        st.reset,
+        0,
+        sel!(resetGeneral:),
+        delegate,
+    );
+    reset.setAutoresizingMask(NSAutoresizingMaskOptions(1)); // 贴右(MinXMargin)
     y -= HEADER_GAP;
 
     // —— Group-1:语言 + 重置所有(DEV.md「Group 不带名称,仅分组」,顺序即从上至下)——
