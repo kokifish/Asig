@@ -48,7 +48,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `cli.rs` — CLI 子命令（`probe-openclaw`：打印各 agent 诊断 + status，判定走 `openclaw::probe`）
 - `app_delegate.rs` — `AppDelegate`（`define_class!`）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽（`persist_light_pos` 改字段与落盘拆两个独立 borrow scope，避免 RefCell 重入 panic）
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
-- `overlay.rs` — Signal Light 浮窗：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
+- `overlay.rs` — Signal Light 浮窗（`collectionBehavior` 据设置 `hide_in_fullscreen`:on → `Managed` 不进全屏 app 的 Space → 全屏自动消失 + 不打断菜单栏/Dock 自动隐藏;off → `CanJoinAllSpaces` 跨 Space 显示,含全屏）：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
 - `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
 - `settings/` — Settings Panel（9 子模块）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)。子模块：
   - `mod` — 装配 build/show/view_with_tag + pub use 外部 API
@@ -229,6 +229,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
   - Agent to monitor/监控的 Agent: 多选块(Claude Code / CodeBuddy / OpenClaw 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
   - Status notifications/状态通知: 多选块(已完成/运行中/待决策/错误/异常 横排圆角块,选中=转入该状态时弹 macOS 系统通知,点击 toggle)。默认 待决策+错误;数据结构 `notify_on: Vec<AgentStatus>`
+  - Hide in fullscreen/全屏自动隐藏: 开关。默认开。开启时浮窗 collectionBehavior=Managed(不进全屏 Space:全屏自动消失 + 不打断菜单栏);关闭时=CanJoinAllSpaces(跨 Space 显示,含全屏);数据结构 `hide_in_fullscreen: bool`
   - Launch at login/开机自启动(待实现): 开关。默认关
   - Theme/主题: 横向单选按钮组 "跟随系统", "深色", "浅色"。默认"跟随系统"
 

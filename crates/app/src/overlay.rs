@@ -390,6 +390,7 @@ impl FlippedView {
 pub fn build(
     dot_size: u32,
     saved: Option<LightPosition>,
+    hide_in_fullscreen: bool,
 ) -> (Retained<NSWindow>, Retained<PillView>) {
     let origin = resolve_origin(saved, WIN);
     let frame = NSRect::new(origin, NSSize::new(WIN, WIN));
@@ -412,12 +413,11 @@ pub fn build(
     window.setIgnoresMouseEvents(true); // 默认点击穿透
     window.setMovableByWindowBackground(true); // 关穿透时可拖
     window.setLevel(objc2_app_kit::NSFloatingWindowLevel); // 浮窗置顶
-    // CanJoinAllSpaces 让浮窗进全屏 app 的 space;再加 fullScreenAuxiliary 标为「全屏辅助窗口」,
-    // 否则 macOS 会把它当成全屏 space 里的非辅助窗口,打断全屏 app 的菜单栏/Dock 自动隐藏。
-    window.setCollectionBehavior(
-        NSWindowCollectionBehavior::CanJoinAllSpaces
-            .union(NSWindowCollectionBehavior::FullScreenAuxiliary),
-    );
+    // hide_in_fullscreen=true → 默认 managed(不进全屏 app 的 Space:全屏自动消失 + 不打断菜单栏 / Dock
+    // 自动隐藏);false → canJoinAllSpaces(浮窗跨所有 Space 显示,含全屏)。toggleHideInFullscreen 切换。
+    if !hide_in_fullscreen {
+        window.setCollectionBehavior(NSWindowCollectionBehavior::CanJoinAllSpaces);
+    }
     unsafe {
         // ARC 下手动 retain,需 unsafe。
         window.setReleasedWhenClosed(false);

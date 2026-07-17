@@ -175,6 +175,24 @@ define_class!(
             self.apply_click_through();
         }
 
+        /// General「全屏自动隐藏」开关 action。改完存盘 + 即时切换浮窗 collectionBehavior:
+        /// on → Managed(不进全屏 Space,全屏自动隐藏 + 不打断菜单栏);off → CanJoinAllSpaces(跨 Space)。
+        #[unsafe(method(toggleHideInFullscreen:))]
+        fn toggle_hide_in_fullscreen(&self, sender: *mut NSObject) {
+            let state: i64 = unsafe { msg_send![sender, state] };
+            let on = state == 1;
+            self.ivars().settings.borrow_mut().hide_in_fullscreen = on;
+            self.ivars().settings.borrow().save();
+            if let Some(w) = self.ivars().overlay_window.borrow().as_ref() {
+                let b = if on {
+                    objc2_app_kit::NSWindowCollectionBehavior::Managed
+                } else {
+                    objc2_app_kit::NSWindowCollectionBehavior::CanJoinAllSpaces
+                };
+                w.setCollectionBehavior(b);
+            }
+        }
+
         /// 设置面板「浮窗灯大小」滑块 action;同步刷新右侧 `xx px` 标签。
         #[unsafe(method(changeSize:))]
         fn change_size(&self, sender: *mut NSObject) {
@@ -381,6 +399,7 @@ define_class!(
                 s.theme = d.theme;
                 s.enabled_agents = d.enabled_agents;
                 s.notify_on = d.notify_on;
+                s.hide_in_fullscreen = d.hide_in_fullscreen;
             }
             *self.ivars().click_through.borrow_mut() = true; // 默认点击穿透
             self.ivars().settings.borrow().save();

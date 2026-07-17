@@ -342,7 +342,7 @@ pub(crate) fn build_general_pane(
     }
     let notify_extra = notify_row_count;
     // 卡片高度:原 6 行 + agent extra + notify 一行 + notify extra(换行行数)。
-    group2.setFrame(card_frame(x0, y, 6 + agent_extra + 1 + notify_extra));
+    group2.setFrame(card_frame(x0, y, 7 + agent_extra + 1 + notify_extra));
     // Launch at login(标签 + 开关,占位禁用)
     let launch_theme_off = 1 + notify_extra; // launch/theme 相对 agent_extra 之后的额外下移
     add_text(
@@ -421,10 +421,32 @@ pub(crate) fn build_general_pane(
         btn.setFrameOrigin(NSPoint::new(rx, theme_row_y));
         rx += w + THEME_GAP;
     }
+    // 全屏自动隐藏(开关;默认开)。放 theme 下一行 —— 与「点击穿透」同属浮窗行为开关。
+    let hif_row = 6 + agent_extra + launch_theme_off;
+    add_text(
+        &pane,
+        NSRect::new(
+            NSPoint::new(lx, row_center_y(y, hif_row) - 10.0),
+            NSSize::new(lw, 20.0),
+        ),
+        st.hide_in_fullscreen,
+        false,
+        false,
+    );
+    add_switch(
+        &pane,
+        NSRect::new(
+            NSPoint::new(cx - SWITCH_INSET, row_center_y(y, hif_row) - 11.0),
+            NSSize::new(40.0, 22.0),
+        ),
+        delegate.ivars().settings.borrow().hide_in_fullscreen,
+        sel!(toggleHideInFullscreen:),
+        delegate,
+    );
 
     // pane 实际内容高度:group2 底 = y − card_height(g2_rows),加底部留白得 content_h。
     // 此 y = after_g1(Header + Group-1 + gap 之后),Group-2 底 = y − card_height(g2_rows)。
-    let g2_rows = 6 + agent_extra + 1 + notify_extra;
+    let g2_rows = 7 + agent_extra + 1 + notify_extra;
     let content_h = (H - y) + card_height(g2_rows) + CONTENT_PAD_X;
     // 内容此前按 H(默认窗高)布置;pane 实际高 content_h 可能 ≠ H。把所有子视图统一 y 偏移
     // dy = content_h − H:dy > 0(content 超 H)→ 整体上移,group2 底落在 CONTENT_PAD_X、

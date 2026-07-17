@@ -221,6 +221,9 @@ pub struct Settings {
     /// 旧配置无此字段 → 回默认。
     #[serde(default = "default_notify_on")]
     pub notify_on: Vec<AgentStatus>,
+    /// 全屏(原生 + 非原生视频)时自动隐藏浮窗窗口。默认 true。serde 持久化。
+    #[serde(default = "default_hide_in_fullscreen")]
+    pub hide_in_fullscreen: bool,
 }
 
 fn default_poll_interval_ms() -> u32 {
@@ -237,6 +240,10 @@ fn default_enabled_agents() -> Vec<AgentKind> {
 
 fn default_notify_on() -> Vec<AgentStatus> {
     vec![AgentStatus::NeedsDeci, AgentStatus::Error]
+}
+
+fn default_hide_in_fullscreen() -> bool {
+    true
 }
 
 fn default_gradient_layers() -> u8 {
@@ -259,6 +266,7 @@ impl Default for Settings {
             done_notif_duration_s: default_done_notif_duration_s(),
             enabled_agents: default_enabled_agents(),
             notify_on: default_notify_on(),
+            hide_in_fullscreen: default_hide_in_fullscreen(),
         }
     }
 }
@@ -472,6 +480,7 @@ mod tests {
         let back: Settings = serde_json::from_str(&text).unwrap();
         assert_eq!(back.dot_size, 25);
         assert_eq!(back.poll_interval_ms, 3000);
+        assert!(back.hide_in_fullscreen); // 默认全屏自动隐藏浮窗
         assert_eq!(back.theme, Theme::FollowSystem); // 默认主题序列化往返
         assert_eq!(back.done_notif_duration_s, 30); // 默认持续时间往返
         assert!(back.styles.contains_key(&StyleKey::Done));
