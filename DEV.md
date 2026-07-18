@@ -50,16 +50,18 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗（`collectionBehavior` 据设置 `hide_in_fullscreen`:on → `Managed` 不进全屏 app 的 Space → 全屏自动消失 + 不打断菜单栏/Dock 自动隐藏;off → `CanJoinAllSpaces` 跨 Space 显示,含全屏）：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
 - `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
-- `settings/` — Settings Panel（9 子模块）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)。子模块：
+- `settings/` — Settings Panel（10 子模块）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)。子模块：
   - `mod` — 装配 build/show/view_with_tag + pub use 外部 API
   - `strings` — 本地化文案
-  - `tags` — 几何/tag 常量 + helper
+  - `consts` — 不可变常量（几何 / tag 编码 / 业务顺序 / 数值范围）
+  - `tags` — helper（card_height / card_frame / row_center_y / parse_control_tag / hz_of / poll_preset_index / theme_index / sf_symbol / label_col_width）
   - `controls` — 控件工厂 add_*
   - `glass` — 液态玻璃 GlassPane + 选中态药丸
   - `layout` — StateControls + layout/refresh_*
   - `pane_general` / `pane_state` / `pane_about` — 各 pane builder
 - `palette.rs` — 下拉面板会话列表用的状态 emoji(`status_emoji`)
 - `notify.rs` — macOS 系统通知（UserNotifications framework：授权 + 发送）
+- `logger.rs` — 极简 log 实现（`SimpleLogger`,core 的 `log::warn!` 经此输出 warn 到 stderr）
 
 ## Build and Run
 
