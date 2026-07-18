@@ -137,9 +137,9 @@ pub fn update_label(p: &Popover, snap: &Snapshot) {
             .iter()
             .map(|s| {
                 format!(
-                    "{} {:?} · {}",
+                    "{} {} · {}",
                     status_emoji(s.status),
-                    s.kind,
+                    s.kind.display_name(),
                     session_id_label(s)
                 )
             })

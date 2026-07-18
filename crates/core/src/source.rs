@@ -18,6 +18,16 @@ impl AgentKind {
     /// 全部已实现的 agent(chip 顺序 = 默认启用顺序)。Trae 暂未实现,不含。
     /// `config::default_enabled_agents` / `Monitor::default` / 设置 chip 共用此单一事实源。
     pub const IMPLEMENTED: [Self; 3] = [Self::Claude, Self::CodeBuddy, Self::OpenClaw];
+
+    /// 用户可见的全称(下拉会话列表等展示用)。变体名是简写,展示用全称(Claude → Claude Code)。
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::CodeBuddy => "CodeBuddy",
+            Self::OpenClaw => "OpenClaw",
+            Self::Trae => "Trae",
+        }
+    }
 }
 
 /// 一个被发现的 agent 会话(状态已由 source 内部解析归一)。
