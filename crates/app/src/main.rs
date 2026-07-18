@@ -2,6 +2,7 @@
 
 mod app_delegate;
 mod cli;
+mod logger;
 mod notify;
 mod overlay;
 mod palette;
@@ -15,11 +16,12 @@ use std::collections::HashMap;
 use app_delegate::{AppDelegate, AppIvars};
 use objc2::rc::Retained;
 use objc2::runtime::{Bool, NSObject, Sel};
-use objc2::{MainThreadMarker, class, msg_send, sel};
+use objc2::{DefinedClass, MainThreadMarker, class, msg_send, sel};
 use objc2_app_kit::NSApplication;
 use objc2_foundation::NSTimer;
 
 fn main() {
+    logger::init(); // 装载极简 logger(core 的 log::warn! 经此输出到 stderr)
     // CLI 子命令 probe-openclaw:打印各 agent 诊断 + status(单一判定源 core::openclaw::probe,
     // 替代 scripts/probe-openclaw.sh 的 bash 重新实现)。不开 GUI,打完即退。
     if std::env::args().nth(1).as_deref() == Some("probe-openclaw") {
@@ -68,7 +70,9 @@ fn main() {
     overlay::apply_theme(theme); // 应用主题外观(跟随系统 / 深 / 浅)
 
     tray::build(&delegate); // 状态栏 Signal Icon(点击弹 Drop-down)
-    tray::schedule_tick(&delegate); // NSTimer 每 3s 轮询内核
+    // NSTimer 按设置的轮询间隔(默认 3s)轮询内核。
+    let poll_secs = delegate.ivars().settings.borrow().poll_interval_ms as f64 / 1000.0;
+    tray::reschedule(&delegate, poll_secs);
 
     // 开发/测试钩子:绕过「合成点击无法触发菜单栏 NSStatusItem」的 macOS 限制——
     // 延迟 0.5s(run loop 起来、图标布局好之后)直接打开面板,便于自动截图核对。

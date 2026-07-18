@@ -1,8 +1,9 @@
 //! State pane 控件集合类型 + 按窗宽重排 + 按样式/Agent 状态刷新。
 
-use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSBox, NSButton, NSSlider, NSTextField};
+use objc2_app_kit::{
+    NSBox, NSButton, NSControlStateValueOff, NSControlStateValueOn, NSSlider, NSTextField,
+};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
@@ -10,10 +11,11 @@ use agent_light_core::{Anim, StateStyle, StyleKey};
 
 use crate::overlay::swatch_image;
 
-use super::tags::{
+use super::consts::{
     ANIM_ORDER, CARD_BOT_PAD, CARD_TOP_PAD, COLOR_GAP, COLOR_ORDER, CONTENT_PAD_X, HEADER_GAP,
-    ROW_H, SPEED_MAX, SPEED_MIN, SWATCH_D, TOP_INSET, hz_of,
+    ROW_H, SPEED_MAX, SPEED_MIN, SWATCH_D, TOP_INSET,
 };
+use super::tags::hz_of;
 
 /// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
 pub struct StateControls {
@@ -137,10 +139,11 @@ pub fn refresh_state_controls(c: &StateControls, style: StateStyle) {
     }
     for (i, btn) in c.anim.iter().enumerate() {
         let on = style.anim == ANIM_ORDER[i];
-        // setState 取 NSControlStateValue enum;用裸值 1/0 表 on/off,保留 msg_send!。
-        unsafe {
-            let _: () = msg_send![btn, setState: if on { 1i64 } else { 0 }];
-        }
+        btn.setState(if on {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
     }
     let hz = if steady {
         1.0

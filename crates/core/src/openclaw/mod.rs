@@ -72,7 +72,7 @@ impl AgentSource for OpenClawSource {
     fn discover(&self) -> Vec<AgentSession> {
         let Some(conn) = self.connect() else {
             // 打不开:没装 openclaw(静默)vs 库损坏(应可见)。提示路径便于排障。
-            eprintln!("Asig: openclaw 库打不开: {}", self.db_path().display());
+            log::warn!("openclaw 库打不开: {}", self.db_path().display());
             return Vec::new();
         };
         let signals = latest_session_signals(&self.root);

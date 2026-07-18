@@ -15,17 +15,17 @@ use agent_light_core::{
 
 use crate::app_delegate::AppDelegate;
 
+use super::consts::{
+    ANIM_OFF, CARD_BOT_PAD, CARD_TOP_PAD, COL_W, COLOR_GAP, COLOR_OFF, COLOR_ORDER,
+    CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, GRADIENT_LABEL_OFF, GRADIENT_OFF, H, HEADER_GAP,
+    RESET_OFF, ROW_H, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN, SPEED_OFF, SWATCH_D, TOP_INSET,
+};
 use super::controls::{
     add_card, add_plain_button, add_radio_button, add_slider, add_swatch_button, add_text, new_view,
 };
 use super::layout::{StateControls, layout_state_pane, refresh_duration, refresh_state_controls};
 use super::strings::Strings;
-use super::tags::{
-    ANIM_OFF, CARD_BOT_PAD, CARD_TOP_PAD, COL_W, COLOR_GAP, COLOR_OFF, COLOR_ORDER,
-    CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, GRADIENT_LABEL_OFF, GRADIENT_OFF, H, HEADER_GAP,
-    RESET_OFF, ROW_H, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN, SPEED_OFF, SWATCH_D, TOP_INSET,
-    label_col_width, tab_of_key,
-};
+use super::tags::{label_col_width, tab_of_key};
 
 /// State pane 一行「name 标签 + 滑块 + 右侧值标签」:三控件先占位零尺寸(frame 由 `layout_state_pane`
 /// 后设),slider/value 打 tag(base + off)。收口 speed/gradient 两处「slider + set_tag + 文本」样板。

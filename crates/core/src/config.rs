@@ -336,11 +336,11 @@ impl Settings {
             Ok(s) => s,
             Err(LoadError::Read(e)) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(LoadError::Read(e)) => {
-                eprintln!("Asig: 读取设置失败({e}),使用默认值: {}", path.display());
+                log::warn!("读取设置失败({e}),使用默认值: {}", path.display());
                 Self::default()
             }
             Err(LoadError::Parse(e)) => {
-                eprintln!("Asig: settings.json 解析失败({e}),已备份为 .bad 并使用默认值");
+                log::warn!("settings.json 解析失败({e}),已备份为 .bad 并使用默认值");
                 let _ = std::fs::rename(&path, format!("{}.bad", path.display()));
                 Self::default()
             }
@@ -355,19 +355,19 @@ impl Settings {
         };
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("Asig: 创建设置目录失败({e})");
+                log::warn!("创建设置目录失败({e})");
                 return;
             }
         }
         let text = match serde_json::to_string_pretty(self) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("Asig: 序列化设置失败({e})");
+                log::warn!("序列化设置失败({e})");
                 return;
             }
         };
         if let Err(e) = std::fs::write(&path, text) {
-            eprintln!("Asig: 写入设置失败({e}): {}", path.display());
+            log::warn!("写入设置失败({e}): {}", path.display());
         }
     }
 }

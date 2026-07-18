@@ -29,15 +29,17 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use crate::app_delegate::AppDelegate;
 use crate::overlay::{FlippedView, swatch_image};
 
+use consts::{STATE_KEYS, TAB_ABOUT, TAB_GENERAL};
 use controls::{add_icon_button, add_tab_button, new_view};
 use glass::{glass_pane, make_selection_pill};
 use pane_about::build_about_pane;
 use pane_general::build_general_pane;
 use pane_state::build_state_pane;
 use strings::{Strings, strings_for};
-use tags::{STATE_KEYS, TAB_ABOUT, TAB_GENERAL, sf_symbol};
+use tags::sf_symbol;
 
 // 子模块声明。
+mod consts;
 mod controls;
 mod glass;
 mod layout;
@@ -48,22 +50,22 @@ mod strings;
 mod tags;
 
 // ---- 外部(crate::settings::)所需的 pub use 重导出(收敛到 app 层实际引用)----
+pub(crate) use consts::H;
+pub use consts::{
+    AGENT_KIND_ORDER, AGENT_OFF, ANIM_OFF, ANIM_ORDER, COLOR_OFF, COLOR_ORDER, CONTENT_W,
+    LANG_EN_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, POLL_PRESETS_MS, SIZE_LABEL_TAG, THEME_OFF,
+};
 pub use glass::update_selection;
 pub use layout::{StateControls, layout_state_pane, refresh_duration, refresh_state_controls};
 pub use strings::reset_confirm_texts;
-pub(crate) use tags::H;
-pub use tags::{
-    AGENT_KIND_ORDER, AGENT_OFF, ANIM_OFF, ANIM_ORDER, COLOR_OFF, COLOR_ORDER, CONTENT_W,
-    LANG_EN_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, POLL_PRESETS_MS, SIZE_LABEL_TAG, THEME_OFF,
-    parse_control_tag,
-};
+pub use tags::parse_control_tag;
 
 pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     let lang = delegate.ivars().settings.borrow().lang;
     let st = strings_for(lang);
 
     // 窗口:titled | closable | miniaturizable | resizable | fullSizeContentView(内容贯穿标题栏)
-    let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(tags::W, tags::H));
+    let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(consts::W, consts::H));
     let alloc: Allocated<NSWindow> = unsafe { msg_send![class!(NSWindow), alloc] };
     let window = unsafe {
         NSWindow::initWithContentRect_styleMask_backing_defer(
@@ -89,7 +91,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     window.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None); // 玻璃贯穿标题栏,无顶部分隔线
     window.setMovable(true);
-    window.setMinSize(NSSize::new(tags::W, tags::H));
+    window.setMinSize(NSSize::new(consts::W, consts::H));
     // AppDelegate 兼作窗口 delegate:windowDidResize: 触发 state pane 色块按新宽度重排。
     // setDelegate 需 ProtocolObject<dyn NSWindowDelegate>,构造繁琐,保留 msg_send!。
     unsafe {
@@ -100,8 +102,8 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     // 8 pane 叠在 documentView(FlippedView,isFlipped=>YES)上 —— 不翻则内容贴底(NSScrollView
     // documentView 默认底锚),翻后 y=0 在顶、内容从顶部排布。
     let scroll_frame = NSRect::new(
-        NSPoint::new(tags::SIDEBAR_W, 0.0),
-        NSSize::new(CONTENT_W, tags::H),
+        NSPoint::new(consts::SIDEBAR_W, 0.0),
+        NSSize::new(CONTENT_W, consts::H),
     );
     let scroll_alloc: Allocated<NSScrollView> = unsafe { msg_send![class!(NSScrollView), alloc] };
     let content_area = NSScrollView::initWithFrame(scroll_alloc, scroll_frame);
@@ -116,7 +118,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     // documentView:FlippedView(翻坐标系),宽跟 scrollView、高动态(切 pane 时设)。
     let doc = FlippedView::new(NSRect::new(
         NSPoint::new(0.0, 0.0),
-        NSSize::new(CONTENT_W, tags::H),
+        NSSize::new(CONTENT_W, consts::H),
     ));
     // 只宽随 scrollView(2 = widthSizable),高固定 —— 切 pane 时由 switchSettingsTab 设高。
     doc.setAutoresizingMask(NSAutoresizingMaskOptions(2));
@@ -163,13 +165,13 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     // 重叠/相邻的玻璃合并成一次模糊,令浮动侧栏失去层次)。root 内:主玻璃(满窗,承载右区内容)
     // + 浮动侧栏玻璃(左侧圆角,承载 tab/图标)两块独立玻璃叠放;侧栏因四周留白 + 二次模糊
     // 读作浮动玻璃面板,内容在主玻璃上无外框。
-    let full = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(tags::W, tags::H));
+    let full = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(consts::W, consts::H));
     let root = new_view(full);
     let main = glass_pane(full, 0.0, 12); // 主玻璃满窗(窗口自裁圆角);回退 material=WindowBackground
     let sidebar = glass_pane(
         NSRect::new(
-            NSPoint::new(tags::SIDEBAR_INSET, tags::SIDEBAR_INSET),
-            NSSize::new(tags::SIDEBAR_PANE_W, tags::SIDEBAR_PANE_H),
+            NSPoint::new(consts::SIDEBAR_INSET, consts::SIDEBAR_INSET),
+            NSSize::new(consts::SIDEBAR_PANE_W, consts::SIDEBAR_PANE_H),
         ),
         14.0, // 浮动玻璃圆角
         7,    // 回退 material=Sidebar
@@ -224,7 +226,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
                 .borrow()
                 .get(&n)
                 .copied()
-                .unwrap_or(tags::H);
+                .unwrap_or(consts::H);
             if let Some(scroll) = delegate.ivars().settings_scroll.borrow().as_ref() {
                 set_doc_height(scroll, h);
             }
@@ -252,8 +254,8 @@ fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &String
     sidebar.addSubview(&pill);
     *delegate.ivars().settings_selection.borrow_mut() = Some(pill);
 
-    let tab_w = tags::SIDEBAR_PANE_W - 16.0;
-    let top = tags::SIDEBAR_PANE_H - 14.0 - 28.0; // 顶部留白 14 + tab 高 28
+    let tab_w = consts::SIDEBAR_PANE_W - 16.0;
+    let top = consts::SIDEBAR_PANE_H - 14.0 - 28.0; // 顶部留白 14 + tab 高 28
     // General tab = 齿轮(template SF Symbol)+ 常规设置;选中时 update_selection 把齿轮转白。
     let gear = sf_symbol("gearshape");
     gear.setTemplate(true);
@@ -286,7 +288,7 @@ fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &String
         ("heart", 10, false),
         ("power", 11, false),
     ];
-    let icon_w = (tags::SIDEBAR_PANE_W - 16.0) / icons.len() as CGFloat;
+    let icon_w = (consts::SIDEBAR_PANE_W - 16.0) / icons.len() as CGFloat;
     for (i, (sym, tag, enabled)) in icons.iter().enumerate() {
         let x = 8.0 + i as CGFloat * icon_w;
         let btn = add_icon_button(
@@ -320,7 +322,7 @@ pub fn set_doc_height(scroll: &NSScrollView, content_h: CGFloat) {
         return;
     };
     let clip_h = scroll.contentView().bounds().size.height;
-    let floor = if clip_h > 0.0 { clip_h } else { tags::H };
+    let floor = if clip_h > 0.0 { clip_h } else { consts::H };
     let df = doc.frame();
     doc.setFrameSize(NSSize::new(df.size.width, floor.max(content_h)));
 }
