@@ -3,6 +3,7 @@
 mod app_delegate;
 mod cli;
 mod logger;
+mod menu;
 mod notify;
 mod overlay;
 mod palette;

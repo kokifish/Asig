@@ -12,8 +12,8 @@ use objc2::{
     ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
 };
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSApplicationDelegate, NSEventType, NSScrollView, NSStatusItem, NSView,
-    NSWindow, NSWindowDelegate,
+    NSAlert, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSEventType,
+    NSScrollView, NSStatusItem, NSView, NSWindow, NSWindowDelegate,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString, NSTimer};
@@ -153,6 +153,16 @@ define_class!(
                 let w = crate::settings::build(self);
                 *self.ivars().settings_window.borrow_mut() = Some(w);
             }
+            // 打开设置窗期间切 regular:Asig 本是 accessory 菜单栏 app(LSUIElement,不占 Dock /
+            // 不在 Cmd+Tab 切换器);切 regular 后出现在 Dock + Cmd+Tab + 主菜单栏,可正常窗口切换。
+            // 关闭时由 windowWillClose: 切回 accessory。
+            let mtm = MainThreadMarker::new().expect("openSettings 须主线程");
+            let app = NSApplication::sharedApplication(mtm);
+            let _: Bool = unsafe {
+                msg_send![&app, setActivationPolicy: NSApplicationActivationPolicy::Regular]
+            };
+            // 首次建最小主菜单(App 菜单系统补 Quit ⌘Q + File 菜单 Close ⌘W)。
+            crate::menu::ensure_main_menu(self.ivars().settings.borrow().lang);
             if let Some(w) = self.ivars().settings_window.borrow().as_ref() {
                 crate::settings::show(w);
             }
@@ -591,6 +601,17 @@ define_class!(
             if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
                 crate::settings::set_doc_height(scroll, ch);
             }
+        }
+
+        /// 设置窗即将关闭:切回 accessory(LSUIElement 默认),退回纯菜单栏(不占 Dock / 不在 Cmd+Tab)。
+        /// AppDelegate 仅被设为设置窗的 window delegate,故本回调只由设置窗触发,无需判断 object。
+        #[unsafe(method(windowWillClose:))]
+        fn window_will_close(&self, _notif: *mut NSObject) {
+            let mtm = MainThreadMarker::new().expect("windowWillClose 须主线程");
+            let app = NSApplication::sharedApplication(mtm);
+            let _: Bool = unsafe {
+                msg_send![&app, setActivationPolicy: NSApplicationActivationPolicy::Accessory]
+            };
         }
     }
 

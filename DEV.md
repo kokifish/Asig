@@ -50,6 +50,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗（`collectionBehavior` 据设置 `hide_in_fullscreen`:on → `Managed` 不进全屏 app 的 Space → 全屏自动消失 + 不打断菜单栏/Dock 自动隐藏;off → `CanJoinAllSpaces` 跨 Space 显示,含全屏）：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
 - `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
+- `menu.rs` — 最小主菜单：仅切 regular（开设置窗）时显示。App 菜单留空（系统补 Quit ⌘Q 等）+ File 菜单 Close ⌘W（`performClose:` 走 responder chain 关设置窗 → 触发 `windowWillClose:` 切回 accessory）
 - `settings/` — Settings Panel（10 子模块）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)。子模块：
   - `mod` — 装配 build/show/view_with_tag + pub use 外部 API
   - `strings` — 本地化文案
@@ -192,6 +193,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 ### Settings Panel
 
 - Def: 点击 Drop-down Panel 的设置按钮后的用于配置显示效果的面板
+- Activation: Asig 是 accessory 菜单栏 app（`Info.plist` 的 `LSUIElement=true`，不占 Dock / 不在 Cmd+Tab 切换器）。**设置窗打开期间临时 `setActivationPolicy(.regular)`** —— 出现在 Dock + Cmd+Tab + 主菜单栏，可正常窗口切换；**关闭时（`windowWillClose:`）切回 `.accessory`** 退回纯菜单栏。AppDelegate 仅被设为设置窗的 window delegate，故 `windowWillClose:` 只由设置窗触发，无需判断 object。首次切 regular 时建最小主菜单（`menu.rs`：App 菜单留空由系统补 Quit ⌘Q + File 菜单 Close ⌘W → `performClose:`），让无主菜单的 accessory app 在 regular 期间也有关窗 / 退出快捷键。
 - Position: 默认在屏幕中央，可以拖动；**可调整大小**。
   - **尺寸**：minSize = 默认 750×460；侧栏固定宽随高、右区 `NSScrollView` 随窗宽自适应。750 宽配合「点击穿透」label 去掉「则」字收窄 label 列（label_col_width 从 ~160 降到 ~139），让 General pane 的「监控的 Agent」3 chip 与「状态通知」5 chip 默认单行不换行，Group-2 card 只 7 行 content_h≈436 < 460，首屏完整不被窗口底截断。
   - **右区滚动 + 顶部锚定**：右区是 `NSScrollView`（documentView = `FlippedView` 顶锚 + 透明 ClipView 承玻璃），各 pane 内容超高自动出竖滚动条；缩放窗口时 pane 顶部固定不漂移，documentView 高 = max(clip 可视高, pane content_h)（切 tab / 窗口缩放时设 + 滚顶，见 `set_doc_height`）。取 max 而非纯 content_h —— doc 矮于 clip 时 NSClipView 对翻转短文档（`FlippedView`）的顶部锚定会随 doc 高漂移（常规页内容曾比别的偏高 ~9pt）；doc 始终 ≥ clip 则各 pane 顶部锚定一致（短内容下方留白融于玻璃）。
