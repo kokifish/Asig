@@ -41,11 +41,12 @@ impl Snapshot {
     /// 压成字符串指纹:任一关键字段(全局态/done_notif/会话 id+status)变 → 指纹变。
     /// app 层 tick 据此跳过无变化的 render(省 CPU,压到 ~0%)。
     pub fn signature(&self) -> String {
-        let mut s = format!("{:?}|{}|", self.global, self.done_notif);
-        for sess in &self.sessions {
-            s.push_str(&format!("{}:{:?};", sess.id, sess.status));
-        }
-        s
+        let sessions: String = self
+            .sessions
+            .iter()
+            .map(|s| format!("{}:{:?};", s.id, s.status))
+            .collect();
+        format!("{:?}|{}|{}", self.global, self.done_notif, sessions)
     }
 }
 
@@ -76,9 +77,29 @@ impl Default for Monitor {
 }
 
 impl Monitor {
-    /// 按启用的 agent 列表构造 source —— General「监控的 Agent」下拉切换时重建 Monitor 用。
-    /// Trae 暂未实现,即便在列表里也不装配。某工具没装(`new()` 返回 None)→ 自然跳过。
+    /// 按启用的 agent 列表构造 —— General「监控的 Agent」切换时重建 Monitor 用。
     pub fn with_enabled(kinds: &[AgentKind]) -> Self {
+        Self::new_with_sources(Self::build_sources(kinds))
+    }
+
+    /// 用给定 source 构造(测试用;生产走 `Default`)。
+    pub fn with_sources(sources: Vec<Box<dyn AgentSource>>) -> Self {
+        Self::new_with_sources(sources)
+    }
+
+    /// 字段初始化只此一处(`with_enabled` / `with_sources` 共用)。
+    fn new_with_sources(sources: Vec<Box<dyn AgentSource>>) -> Self {
+        Self {
+            sources,
+            latched: RefCell::new(HashMap::new()),
+            prev_global: RefCell::new(AgentStatus::Done),
+            done_since: RefCell::new(None),
+        }
+    }
+
+    /// 按 agent 列表装配 source。Trae 暂未实现,即便在列表里也不装配;
+    /// 某工具没装(`new()` 返回 None)→ 自然跳过。
+    fn build_sources(kinds: &[AgentKind]) -> Vec<Box<dyn AgentSource>> {
         let mut sources: Vec<Box<dyn AgentSource>> = Vec::new();
         if kinds.contains(&AgentKind::Claude) {
             if let Some(s) = claude::ClaudeLikeSource::claude() {
@@ -95,22 +116,7 @@ impl Monitor {
                 sources.push(Box::new(s));
             }
         }
-        Self {
-            sources,
-            latched: RefCell::new(HashMap::new()),
-            prev_global: RefCell::new(AgentStatus::Done),
-            done_since: RefCell::new(None),
-        }
-    }
-
-    /// 用给定 source 构造(测试用;生产走 `Default`)。
-    pub fn with_sources(sources: Vec<Box<dyn AgentSource>>) -> Self {
-        Self {
-            sources,
-            latched: RefCell::new(HashMap::new()),
-            prev_global: RefCell::new(AgentStatus::Done),
-            done_since: RefCell::new(None),
-        }
+        sources
     }
 
     /// 扫描所有 source,跑 sticky 状态机,返回快照。`done_notif_duration` = Done-Notification
@@ -121,8 +127,23 @@ impl Monitor {
         for src in &self.sources {
             raw.extend(src.discover());
         }
+        // 2-3) sticky 状态机 + 宽限裁剪
+        let sessions = self.apply_state_machine(raw);
+        // 4) 聚合全局灯态
+        let global = aggregate::global_status(&sessions);
+        // 5) Done Notification 边沿
+        let done_notif = self.detect_done_notif(global, Instant::now(), done_notif_duration);
+        Snapshot {
+            sessions,
+            global,
+            done_notif,
+        }
+    }
 
-        // 2) 状态机:叠加到 latched,得到本会话当前状态
+    /// sticky 状态机(步骤 2-3):本轮原始观测叠加到 latched 锁定态得各会话当前态,
+    /// 再按 `LATCH_GRACE` 宽限裁掉本轮未出现的会话——文件原子替换/瞬时改名时 live 会短暂
+    /// 不含它,立即删会让下轮重现以 Done 为基线、丢失锁定态(违反 sticky);连续超宽限才删。
+    fn apply_state_machine(&self, raw: Vec<AgentSession>) -> Vec<AgentSession> {
         let mut latched = self.latched.borrow_mut();
         let mut sessions: Vec<AgentSession> = Vec::with_capacity(raw.len());
         for mut s in raw {
@@ -141,10 +162,6 @@ impl Monitor {
             s.status = new;
             sessions.push(s);
         }
-
-        // 3) 剪掉本轮没出现的会话(进程/文件已消失)—— 但给锁定态 LATCH_GRACE 轮宽限:
-        //    会话文件原子替换/瞬时改名时 live 会短暂不含它,立即删会让下轮重现以 Done 为
-        //    基线,丢失锁定态(违反 sticky「不因抖动清」)。连续超宽限才删,避免幻影堆积。
         let live: HashSet<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
         latched.retain(|id, l| {
             if live.contains(id.as_str()) {
@@ -154,17 +171,14 @@ impl Monitor {
                 l.misses <= LATCH_GRACE
             }
         });
-        drop(latched);
+        sessions
+    }
 
-        // 4) 聚合全局灯态
-        let global = aggregate::global_status(&sessions);
-
-        // 5) Done Notification 边沿检测:全局态从「非 Done」转入「Done」时
-        //    记下时刻;在随后 done_notif_duration 内 done_notif=true。离开 Done 即
-        //    清零,下次再进重新计时。
-        let now = Instant::now();
+    /// Done Notification 边沿(步骤 5):全局态从非 Done 转入 Done 时记时刻;随后
+    /// `duration` 内 done_notif=true,离开 Done 即清零(下次再进重新计时)。
+    fn detect_done_notif(&self, global: AgentStatus, now: Instant, duration: Duration) -> bool {
         let entered_done =
-            { *self.prev_global.borrow() != AgentStatus::Done && global == AgentStatus::Done };
+            *self.prev_global.borrow() != AgentStatus::Done && global == AgentStatus::Done;
         {
             let mut ds = self.done_since.borrow_mut();
             if entered_done {
@@ -174,17 +188,12 @@ impl Monitor {
                 *ds = None;
             }
         }
-        let done_notif = match *self.done_since.borrow() {
-            Some(t) => global == AgentStatus::Done && now.duration_since(t) < done_notif_duration,
+        let in_window = match *self.done_since.borrow() {
+            Some(t) => global == AgentStatus::Done && now.duration_since(t) < duration,
             None => false,
         };
         *self.prev_global.borrow_mut() = global;
-
-        Snapshot {
-            sessions,
-            global,
-            done_notif,
-        }
+        in_window
     }
 
     /// 推荐轮询间隔。DEV.md Design:默认 3s。

@@ -5,7 +5,7 @@
 
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::Sel;
-use objc2::{MainThreadMarker, Message, class, msg_send, sel};
+use objc2::{MainThreadMarker, class, msg_send, sel};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBezelStyle, NSBox, NSBoxType, NSButton, NSButtonType,
     NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSImage,
@@ -45,12 +45,6 @@ pub(crate) fn new_view(frame: NSRect) -> Retained<NSView> {
     let v = NSView::new(mtm);
     v.setFrame(frame);
     v
-}
-
-pub(crate) fn set_tag<T: Message>(view: &Retained<T>, tag: i64) {
-    unsafe {
-        let _: () = msg_send![view, setTag: tag];
-    }
 }
 
 /// 无边框按钮(Reset):标题 + action。

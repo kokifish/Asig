@@ -413,11 +413,9 @@ pub fn build(
     window.setIgnoresMouseEvents(true); // 默认点击穿透
     window.setMovableByWindowBackground(true); // 关穿透时可拖
     window.setLevel(objc2_app_kit::NSFloatingWindowLevel); // 浮窗置顶
-    // hide_in_fullscreen=true → 默认 managed(不进全屏 app 的 Space:全屏自动消失 + 不打断菜单栏 / Dock
-    // 自动隐藏);false → canJoinAllSpaces(浮窗跨所有 Space 显示,含全屏)。toggleHideInFullscreen 切换。
-    if !hide_in_fullscreen {
-        window.setCollectionBehavior(NSWindowCollectionBehavior::CanJoinAllSpaces);
-    }
+    // hide_in_fullscreen=true → Managed(不进全屏 app 的 Space:全屏自动消失 + 不打断菜单栏 / Dock
+    // 自动隐藏);false → CanJoinAllSpaces(浮窗跨所有 Space 显示,含全屏)。toggleHideInFullscreen 切换。
+    set_hide_in_fullscreen(&window, hide_in_fullscreen);
     unsafe {
         // ARC 下手动 retain,需 unsafe。
         window.setReleasedWhenClosed(false);
@@ -441,15 +439,21 @@ pub fn set_click_through(window: &NSWindow, on: bool) {
     window.setIgnoresMouseEvents(on);
 }
 
+/// 切换全屏自动隐藏:on=true → Managed(不进全屏 app 的 Space,全屏自动消失 + 不打断菜单栏 / Dock
+/// 自动隐藏);on=false → CanJoinAllSpaces(跨所有 Space 显示,含全屏)。build 与 toggle 共用此单一入口。
+pub fn set_hide_in_fullscreen(window: &NSWindow, on: bool) {
+    let b = if on {
+        NSWindowCollectionBehavior::Managed
+    } else {
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+    };
+    window.setCollectionBehavior(b);
+}
+
 /// 改圆点大小:更新 dot、拆掉按旧尺寸建的波纹环(下次 set_light 重建)、重绘。
 pub fn set_size(view: &PillView, dot_size: u32) {
-    {
-        let mut st = view.ivars().borrow_mut();
-        st.dot = dot_size as CGFloat;
-        for ring in st.rings.drain(..) {
-            ring.removeFromSuperview();
-        }
-    }
+    view.ivars().borrow_mut().dot = dot_size as CGFloat;
+    drain_rings(view);
     view.setNeedsDisplay(true);
 }
 
@@ -470,12 +474,7 @@ pub fn set_light(view: &PillView, anim: LightAnim, layers: u8) {
     // 先清掉旧的:opacity 动画 + 波纹环子视图。
     layer.removeAnimationForKey(&NSString::from_str("pulse"));
     layer.setOpacity(1.0);
-    {
-        let mut st = view.ivars().borrow_mut();
-        for ring in st.rings.drain(..) {
-            ring.removeFromSuperview();
-        }
-    }
+    drain_rings(view);
 
     match anim {
         LightAnim::Pulse { period_ms, .. } => add_pulse(&layer, period_ms),
@@ -500,6 +499,13 @@ impl PillView {
             self.ivars().borrow_mut().layers = layers;
             self.setNeedsDisplay(true);
         }
+    }
+}
+
+/// 拆掉所有波纹环子视图(set_size 改尺寸 / set_light 换灯效时清旧环),两处共用。
+fn drain_rings(view: &PillView) {
+    for ring in view.ivars().borrow_mut().rings.drain(..) {
+        ring.removeFromSuperview();
     }
 }
 

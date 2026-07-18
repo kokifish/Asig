@@ -184,12 +184,7 @@ define_class!(
             self.ivars().settings.borrow_mut().hide_in_fullscreen = on;
             self.ivars().settings.borrow().save();
             if let Some(w) = self.ivars().overlay_window.borrow().as_ref() {
-                let b = if on {
-                    objc2_app_kit::NSWindowCollectionBehavior::Managed
-                } else {
-                    objc2_app_kit::NSWindowCollectionBehavior::CanJoinAllSpaces
-                };
-                w.setCollectionBehavior(b);
+                crate::overlay::set_hide_in_fullscreen(w, on);
             }
         }
 

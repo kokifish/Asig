@@ -36,7 +36,7 @@ pub struct AgentSession {
 /// 每个工具实现一个。
 ///
 /// - **poll 路径**:`discover()` 立即扫描并返回(当前实现)。
-/// - **push 路径**(hook / 文件监听,Phase 2/3):降低延迟、拿到精准的
+/// - **push 路径**(hook / 文件监听,未来路线):降低延迟、拿到精准的
 ///   needs-decision / error。届时扩展本 trait(见 README),核心循环不变。
 pub trait AgentSource: Send + Sync {
     fn kind(&self) -> AgentKind;

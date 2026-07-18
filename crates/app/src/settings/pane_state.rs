@@ -16,8 +16,7 @@ use agent_light_core::{
 use crate::app_delegate::AppDelegate;
 
 use super::controls::{
-    add_card, add_plain_button, add_radio_button, add_slider, add_swatch_button, add_text,
-    new_view, set_tag,
+    add_card, add_plain_button, add_radio_button, add_slider, add_swatch_button, add_text, new_view,
 };
 use super::layout::{StateControls, layout_state_pane, refresh_duration, refresh_state_controls};
 use super::strings::Strings;
@@ -51,9 +50,9 @@ fn add_state_slider(
     let zero = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0));
     let name_lbl = add_text(pane, zero, name, false, false);
     let slider = add_slider(pane, zero, min, max, val, action, delegate);
-    set_tag(&slider, base + slider_off);
+    slider.setTag((base + slider_off) as isize);
     let value_lbl = add_text(pane, zero, value_text, false, false);
-    set_tag(&value_lbl, base + label_off);
+    value_lbl.setTag((base + label_off) as isize);
     (slider, value_lbl, name_lbl)
 }
 

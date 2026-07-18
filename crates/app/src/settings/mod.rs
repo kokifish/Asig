@@ -321,9 +321,8 @@ pub fn set_doc_height(scroll: &NSScrollView, content_h: CGFloat) {
     };
     let clip_h = scroll.contentView().bounds().size.height;
     let floor = if clip_h > 0.0 { clip_h } else { tags::H };
-    let df: NSRect = unsafe { msg_send![&doc, frame] };
-    let _: () =
-        unsafe { msg_send![&doc, setFrameSize: NSSize::new(df.size.width, floor.max(content_h))] };
+    let df = doc.frame();
+    doc.setFrameSize(NSSize::new(df.size.width, floor.max(content_h)));
 }
 
 pub fn show(window: &NSWindow) {

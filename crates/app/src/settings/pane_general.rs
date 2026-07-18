@@ -2,8 +2,11 @@
 
 use objc2::DefinedClass;
 use objc2::rc::Retained;
-use objc2::{msg_send, sel};
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSView};
+use objc2::runtime::Sel;
+use objc2::sel;
+use objc2_app_kit::{
+    NSAutoresizingMaskOptions, NSControlStateValueOff, NSControlStateValueOn, NSView,
+};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
@@ -13,7 +16,7 @@ use crate::app_delegate::AppDelegate;
 
 use super::controls::{
     add_card, add_header_icon, add_plain_button, add_popup, add_radio_button, add_slider,
-    add_switch, add_text, add_toggle_chip, set_tag,
+    add_switch, add_text, add_toggle_chip,
 };
 use super::strings::Strings;
 use super::tags::{
@@ -22,6 +25,56 @@ use super::tags::{
     THEME_OFF, TOP_INSET, card_frame, card_height, label_col_width, poll_preset_index,
     row_center_y, theme_index,
 };
+
+/// 多选 chip flow:sizeToFit 自适应宽 + 固定间距,超出控件区右边界换行。返回换行行数。
+/// agent chip(T=AgentKind)与 notify chip(T=AgentStatus)共用,消除两段近乎一致的重复。
+#[allow(clippy::too_many_arguments)]
+fn flow_chips<T: PartialEq>(
+    pane: &Retained<NSView>,
+    delegate: &AppDelegate,
+    items: &[&str],
+    tag_off: i64,
+    action: Sel,
+    order: &[T],
+    enabled: &[T],
+    cx: CGFloat,
+    chip_max_x: CGFloat,
+    row0_center: CGFloat,
+    chip_gap: CGFloat,
+    chip_vgap: CGFloat,
+) -> usize {
+    let mut x = cx;
+    let mut row_count: usize = 0;
+    let mut h: CGFloat = 22.0;
+    for (i, &name) in items.iter().enumerate() {
+        // 先以临时 origin 建好 chip 拿 sizeToFit 尺寸,再按 flow 定位 + 设初始选中态。
+        let btn = add_toggle_chip(
+            pane,
+            NSPoint::new(0.0, 0.0),
+            name,
+            tag_off + i as i64,
+            delegate,
+            action,
+        );
+        let bf = btn.frame();
+        h = h.max(bf.size.height);
+        let on = enabled.contains(&order[i]);
+        btn.setState(if on {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
+        let bw = bf.size.width;
+        if x + bw > chip_max_x && x > cx {
+            row_count += 1;
+            x = cx;
+        }
+        let row_center = row0_center - row_count as CGFloat * (h + chip_vgap);
+        btn.setFrameOrigin(NSPoint::new(x, row_center - bf.size.height / 2.0));
+        x += bw + chip_gap;
+    }
+    row_count
+}
 
 pub(crate) fn build_general_pane(
     delegate: &AppDelegate,
@@ -53,11 +106,10 @@ pub(crate) fn build_general_pane(
     const SWITCH_INSET: CGFloat = 5.0;
     let mut y = H - CONTENT_PAD_X - TOP_INSET;
 
-    // header:齿轮图标 + 标题(DEV.md General Settings Card 的 icon + Name)。
-    // 关键:按「墨迹中心」而非「框中心」对齐——NSTextField 在偏高的框里会按基线把文字画到
-    // 下部(墨迹低于框中心 ~6px),而 NSImageView 几何居中其 image;若只把两者框中心对齐,
-    // 文字会读作比齿轮低(实测低 ~4px)。故标题先 sizeToFit 取文字自然高,再把 tight 框与
-    // 齿轮框都居中到同一条 band_center,让两者的墨迹中心落到同一水平线。
+    // header:齿轮图标 + 标题。按「墨迹中心」而非「框中心」对齐——NSTextField 在偏高的框里按基线
+    // 把文字画到下部(墨迹低于框中心 ~6px),而 NSImageView 几何居中其 image;只把两者框中心对齐,
+    // 文字会读作比齿轮低。故标题先 sizeToFit 取自然高,再把 tight 框与齿轮框都居中到同一条
+    // band_center,让两者墨迹中心落到同一水平线。
     let band_center = y + CONTENT_HEADER_H / 2.0;
     let gear_s = 20.0;
     add_header_icon(
@@ -79,13 +131,12 @@ pub(crate) fn build_general_pane(
         true,
     );
     title.sizeToFit();
-    let fit = title.frame();
-    let fit_h = fit.size.height;
+    let fit_h = title.frame().size.height;
     title.setFrame(NSRect::new(
         NSPoint::new(x0 + 28.0, band_center - fit_h / 2.0),
         NSSize::new(COL_W - 28.0, fit_h),
     ));
-    // 标题右侧「重置」按钮(与 state pane 一致:重置本页 General 字段,不含语言/状态样式)。
+    // 标题右侧「重置」按钮(重置本页 General 字段,不含语言/状态样式;与 state pane 一致)。
     let reset = add_plain_button(
         &pane,
         NSRect::new(
@@ -113,7 +164,8 @@ pub(crate) fn build_general_pane(
         false,
         false,
     );
-    add_radio_button(
+    let lang = delegate.ivars().settings.borrow().lang;
+    let en_btn = add_radio_button(
         &pane,
         NSRect::new(
             NSPoint::new(cx, row_center_y(y, 0) - 11.0),
@@ -124,7 +176,7 @@ pub(crate) fn build_general_pane(
         delegate,
         sel!(changeLanguage:),
     );
-    add_radio_button(
+    let zh_btn = add_radio_button(
         &pane,
         NSRect::new(
             NSPoint::new(cx + 100.0, row_center_y(y, 0) - 11.0),
@@ -135,20 +187,16 @@ pub(crate) fn build_general_pane(
         delegate,
         sel!(changeLanguage:),
     );
-    let lang = delegate.ivars().settings.borrow().lang;
-    let want_tag = if lang == Lang::En {
-        LANG_EN_TAG
+    en_btn.setState(if lang == Lang::En {
+        NSControlStateValueOn
     } else {
-        LANG_ZH_TAG
-    };
-    for t in [LANG_EN_TAG, LANG_ZH_TAG] {
-        if let Some(b) = super::view_with_tag(&pane, t) {
-            // setState 取 NSControlStateValue enum;此处用裸值 1/0 表 on/off,保留 msg_send!。
-            unsafe {
-                let _: () = msg_send![&b, setState: if t == want_tag { 1i64 } else { 0 }];
-            }
-        }
-    }
+        NSControlStateValueOff
+    });
+    zh_btn.setState(if lang == Lang::Zh {
+        NSControlStateValueOn
+    } else {
+        NSControlStateValueOff
+    });
     // Reset All(按钮 → 确认对话框 → 重置全部自定义:语言 + 各状态灯效)
     let _ = add_plain_button(
         &pane,
@@ -163,13 +211,20 @@ pub(crate) fn build_general_pane(
     );
     y -= card_height(2) + CARD_GAP;
 
-    // —— Group-2:浮窗灯大小 / 点击穿透 / Agent状态轮询间隔 / 开机自启动 ——
+    // —— Group-2:灯大小 / 点击穿透 / 轮询 / Agent chip / 通知 chip / 开机启动 / Theme / 全屏隐藏 ——
+    // 行号用游标 `row` 递增(替代硬编码行号 + agent_extra/notify_extra/launch_theme_off offset 链);
+    // chip 占多行时 row 跳过换行数。group2 card 高度据最终 row(g2_rows)设。
     let group2 = add_card(&pane, card_frame(x0, y, 6));
+    const CHIP_GAP: CGFloat = 10.0;
+    const CHIP_VGAP: CGFloat = 6.0;
+    let chip_max_x = cx + cw;
+    let mut row: usize = 0;
+
     // Light size(标签 + 滑块 + 右侧 `xx px` 实时标签)
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 0) - 10.0),
+            NSPoint::new(lx, row_center_y(y, row) - 10.0),
             NSSize::new(lw, 20.0),
         ),
         st.light_size,
@@ -180,7 +235,7 @@ pub(crate) fn build_general_pane(
     let size_slider = add_slider(
         &pane,
         NSRect::new(
-            NSPoint::new(cx, row_center_y(y, 0) - 11.0),
+            NSPoint::new(cx, row_center_y(y, row) - 11.0),
             NSSize::new(cw - 60.0, 22.0),
         ),
         DOT_SIZE_MIN_PX as f64,
@@ -192,22 +247,24 @@ pub(crate) fn build_general_pane(
     let size_label = add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(cx + cw - 52.0, row_center_y(y, 0) - 10.0),
+            NSPoint::new(cx + cw - 52.0, row_center_y(y, row) - 10.0),
             NSSize::new(52.0, 20.0),
         ),
         &format!("{} px", dot),
         false,
         false,
     );
-    set_tag(&size_label, SIZE_LABEL_TAG);
-    // 滑块宽度随 pane 拉伸,右侧 `xx px` 标签贴右(MinXMargin);两者间距恒定。
+    size_label.setTag(SIZE_LABEL_TAG as isize);
+    // 滑块宽随 pane 拉伸,右侧 `xx px` 标签贴右(MinXMargin);两者间距恒定。
     size_slider.setAutoresizingMask(NSAutoresizingMaskOptions(2));
     size_label.setAutoresizingMask(NSAutoresizingMaskOptions(1));
+    row += 1;
+
     // Click-through(标签 + 开关;与 Drop-down「锁定」同步同一开关)
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 1) - 10.0),
+            NSPoint::new(lx, row_center_y(y, row) - 10.0),
             NSSize::new(lw, 20.0),
         ),
         st.click_through,
@@ -217,18 +274,20 @@ pub(crate) fn build_general_pane(
     add_switch(
         &pane,
         NSRect::new(
-            NSPoint::new(cx - SWITCH_INSET, row_center_y(y, 1) - 11.0),
+            NSPoint::new(cx - SWITCH_INSET, row_center_y(y, row) - 11.0),
             NSSize::new(40.0, 22.0),
         ),
         *delegate.ivars().click_through.borrow(),
         sel!(toggleClickThrough:),
         delegate,
     );
+    row += 1;
+
     // Agent poll interval(标签 + 下拉;1/2/3/5/10/15 秒)
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 2) - 10.0),
+            NSPoint::new(lx, row_center_y(y, row) - 10.0),
             NSSize::new(lw, 20.0),
         ),
         st.poll_interval,
@@ -239,7 +298,7 @@ pub(crate) fn build_general_pane(
     add_popup(
         &pane,
         NSRect::new(
-            NSPoint::new(cx, row_center_y(y, 2) - 13.0),
+            NSPoint::new(cx, row_center_y(y, row) - 13.0),
             NSSize::new(120.0, 26.0),
         ),
         &st.poll_opts,
@@ -248,12 +307,13 @@ pub(crate) fn build_general_pane(
         delegate,
         0,
     );
-    // Agent to monitor(标签 + 多选 chip:Claude Code / CodeBuddy / OpenClaw;选中=监控,点击 toggle)。
-    // chip=圆角块(选中=强调色边框+浅底,未选=细边框),宽按文字 sizeToFit 自适应;控件区放不下换行。
+    row += 1;
+
+    // Agent to monitor(标签 + 多选 chip:Claude Code / CodeBuddy / OpenClaw;选中=监控,放不下换行)
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(lx, row_center_y(y, 3) - 10.0),
+            NSPoint::new(lx, row_center_y(y, row) - 10.0),
             NSSize::new(lw, 20.0),
         ),
         st.agent_monitor,
@@ -261,50 +321,28 @@ pub(crate) fn build_general_pane(
         false,
     );
     let enabled = delegate.ivars().settings.borrow().enabled_agents.clone();
-    // chip flow:cx 起、固定间距,超出控件区右边界(cx+cw)换行。recessed button 宽按 sizeToFit
-    // 自适应(各不同),故按实际宽累计(不等宽 flow),放不下换到下一行。
-    const CHIP_GAP: CGFloat = 10.0;
-    const CHIP_VGAP: CGFloat = 6.0;
-    let chip_max_x = cx + cw;
-    let row0_center = row_center_y(y, 3);
-    let mut ax = cx;
-    let mut chip_row: usize = 0;
-    let mut chip_h: CGFloat = 22.0;
-    for (i, &name) in st.agent_opts.iter().enumerate() {
-        // 先以临时 origin 建好 chip 拿 sizeToFit 尺寸,再按 flow 定位 + 设初始选中态。
-        let btn = add_toggle_chip(
-            &pane,
-            NSPoint::new(0.0, 0.0),
-            name,
-            AGENT_OFF + i as i64,
-            delegate,
-            sel!(changeEnabledAgents:),
-        );
-        let bf = btn.frame();
-        chip_h = chip_h.max(bf.size.height);
-        let on = enabled.contains(&AGENT_KIND_ORDER[i]);
-        unsafe {
-            let _: () = msg_send![&btn, setState: if on { 1i64 } else { 0 }];
-        }
-        let bw = bf.size.width;
-        if ax + bw > chip_max_x && ax > cx {
-            chip_row += 1;
-            ax = cx;
-        }
-        let row_center = row0_center - chip_row as CGFloat * (chip_h + CHIP_VGAP);
-        btn.setFrameOrigin(NSPoint::new(ax, row_center - bf.size.height / 2.0));
-        ax += bw + CHIP_GAP;
-    }
-    // agent chip 占 chip_row+1 行;超出 1 行(agent_extra)让后续行下移。
-    let agent_extra = chip_row;
-    // —— 状态通知(标签 + 5 个 AgentStatus chip:Done/Working/NeedsDeci/Error/Offline;
-    // 选中=转入该状态时弹系统通知,默认 [NeedsDeci, Error])。置于 agent chip 之后、launch 之前,
-    // 同款 chip flow(sizeToFit 自适应 + 放不下换行)。notify 一行 + notify_extra 换行行数。 ——
-    let notify_row = 4 + agent_extra;
+    let agent_extra = flow_chips(
+        &pane,
+        delegate,
+        &st.agent_opts,
+        AGENT_OFF,
+        sel!(changeEnabledAgents:),
+        &AGENT_KIND_ORDER,
+        &enabled,
+        cx,
+        chip_max_x,
+        row_center_y(y, row),
+        CHIP_GAP,
+        CHIP_VGAP,
+    );
+    row += 1 + agent_extra;
+
+    // Status notifications(标签 + 5 个 AgentStatus chip:Done/Working/NeedsDeci/Error/Offline;
+    // 选中=转入该状态时弹系统通知,默认 [NeedsDeci, Error]。同款 chip flow。)
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(lx, row_center_y(y, notify_row) - 10.0),
+            NSPoint::new(lx, row_center_y(y, row) - 10.0),
             NSSize::new(lw, 20.0),
         ),
         st.notify,
@@ -312,46 +350,27 @@ pub(crate) fn build_general_pane(
         false,
     );
     let notify_on = delegate.ivars().settings.borrow().notify_on.clone();
-    let nrow0_center = row_center_y(y, notify_row);
-    let mut nx = cx;
-    let mut notify_row_count: usize = 0;
-    let mut notify_h: CGFloat = 22.0;
-    for (i, &name) in st.notify_opts.iter().enumerate() {
-        let btn = add_toggle_chip(
-            &pane,
-            NSPoint::new(0.0, 0.0),
-            name,
-            NOTIFY_OFF + i as i64,
-            delegate,
-            sel!(changeNotifyOn:),
-        );
-        let bf = btn.frame();
-        notify_h = notify_h.max(bf.size.height);
-        let on = notify_on.contains(&NOTIFY_STATUS_ORDER[i]);
-        unsafe {
-            let _: () = msg_send![&btn, setState: if on { 1i64 } else { 0 }];
-        }
-        let bw = bf.size.width;
-        if nx + bw > chip_max_x && nx > cx {
-            notify_row_count += 1;
-            nx = cx;
-        }
-        let row_center = nrow0_center - notify_row_count as CGFloat * (notify_h + CHIP_VGAP);
-        btn.setFrameOrigin(NSPoint::new(nx, row_center - bf.size.height / 2.0));
-        nx += bw + CHIP_GAP;
-    }
-    let notify_extra = notify_row_count;
-    // 卡片高度:原 6 行 + agent extra + notify 一行 + notify extra(换行行数)。
-    group2.setFrame(card_frame(x0, y, 7 + agent_extra + 1 + notify_extra));
+    let notify_extra = flow_chips(
+        &pane,
+        delegate,
+        &st.notify_opts,
+        NOTIFY_OFF,
+        sel!(changeNotifyOn:),
+        &NOTIFY_STATUS_ORDER,
+        &notify_on,
+        cx,
+        chip_max_x,
+        row_center_y(y, row),
+        CHIP_GAP,
+        CHIP_VGAP,
+    );
+    row += 1 + notify_extra;
+
     // Launch at login(标签 + 开关,占位禁用)
-    let launch_theme_off = 1 + notify_extra; // launch/theme 相对 agent_extra 之后的额外下移
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(
-                lx,
-                row_center_y(y, 4 + agent_extra + launch_theme_off) - 10.0,
-            ),
+            NSPoint::new(lx, row_center_y(y, row) - 10.0),
             NSSize::new(lw, 20.0),
         ),
         st.launch_login,
@@ -361,10 +380,7 @@ pub(crate) fn build_general_pane(
     let launch = add_switch(
         &pane,
         NSRect::new(
-            NSPoint::new(
-                cx - SWITCH_INSET,
-                row_center_y(y, 4 + agent_extra + launch_theme_off) - 11.0,
-            ),
+            NSPoint::new(cx - SWITCH_INSET, row_center_y(y, row) - 11.0),
             NSSize::new(40.0, 22.0),
         ),
         false,
@@ -372,26 +388,25 @@ pub(crate) fn build_general_pane(
         delegate,
     );
     launch.setEnabled(false);
-    // Theme(标签 + 下拉:跟随系统 / 深色 / 浅色)
+    row += 1;
+
+    // Theme(标签 + 横向 radio:跟随系统 / 深色 / 浅色)。radio 间距固定、整体左对齐(不填满 cw):
+    // W 加大后 cw 变宽,若按 (cw-total_w)/2 自适应会把三个 radio 均匀撑满控件区、间距过宽读作离散。
+    // 固定 gap 让它们紧凑成组贴其他控件。先 sizeToFit 拿各自宽,再固定 gap 横排。
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(
-                lx,
-                row_center_y(y, 5 + agent_extra + launch_theme_off) - 10.0,
-            ),
+            NSPoint::new(lx, row_center_y(y, row) - 10.0),
             NSSize::new(lw, 20.0),
         ),
         st.theme,
         false,
         false,
     );
-    // Theme(标签 + 横向 radio:跟随系统 / 深色 / 浅色;与「效果」同款单选)。
-    // 先建 3 个 radio + sizeToFit 拿各自宽,再固定 gap 横排(见下方 THEME_GAP 说明)。
     let theme_idx = theme_index(delegate.ivars().settings.borrow().theme);
-    let theme_row_y = row_center_y(y, 5 + agent_extra + launch_theme_off) - 11.0;
-    let mut theme_btns = Vec::new();
-    let mut theme_ws: Vec<CGFloat> = Vec::new();
+    let theme_row_y = row_center_y(y, row) - 11.0;
+    const THEME_GAP: CGFloat = 20.0;
+    let mut rx = cx;
     for (i, &opt) in st.theme_opts.iter().enumerate() {
         let btn = add_radio_button(
             &pane,
@@ -401,32 +416,25 @@ pub(crate) fn build_general_pane(
             delegate,
             sel!(changeTheme:),
         );
-        // sizeToFit 返回 void(就地改 frame)——调完再读 frame 拿自适应宽(否则拿垃圾值裁标题)。
+        // sizeToFit 就地改 frame,调完再读拿自适应宽(否则拿垃圾值裁标题);+2 留呼吸。
         btn.sizeToFit();
         let w = btn.frame().size.width + 2.0;
         btn.setFrameSize(NSSize::new(w, 22.0));
-        if i == theme_idx {
-            unsafe {
-                let _: () = msg_send![&btn, setState: 1i64];
-            }
-        }
-        theme_btns.push(btn);
-        theme_ws.push(w);
-    }
-    // radio 间距固定、整体左对齐(不填满 cw):W 加大后 cw 变宽,若按 (cw-total_w)/2 自适应
-    // 会把三个 radio 均匀撑满控件区、间距过宽读作离散。固定 gap 让它们紧凑成组贴其他控件。
-    const THEME_GAP: CGFloat = 20.0;
-    let mut rx = cx;
-    for (btn, &w) in theme_btns.iter().zip(theme_ws.iter()) {
         btn.setFrameOrigin(NSPoint::new(rx, theme_row_y));
+        btn.setState(if i == theme_idx {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
         rx += w + THEME_GAP;
     }
-    // 全屏自动隐藏(开关;默认开)。放 theme 下一行 —— 与「点击穿透」同属浮窗行为开关。
-    let hif_row = 6 + agent_extra + launch_theme_off;
+    row += 1;
+
+    // Hide in fullscreen(开关;默认开)。与「点击穿透」同属浮窗行为开关。
     add_text(
         &pane,
         NSRect::new(
-            NSPoint::new(lx, row_center_y(y, hif_row) - 10.0),
+            NSPoint::new(lx, row_center_y(y, row) - 10.0),
             NSSize::new(lw, 20.0),
         ),
         st.hide_in_fullscreen,
@@ -436,22 +444,23 @@ pub(crate) fn build_general_pane(
     add_switch(
         &pane,
         NSRect::new(
-            NSPoint::new(cx - SWITCH_INSET, row_center_y(y, hif_row) - 11.0),
+            NSPoint::new(cx - SWITCH_INSET, row_center_y(y, row) - 11.0),
             NSSize::new(40.0, 22.0),
         ),
         delegate.ivars().settings.borrow().hide_in_fullscreen,
         sel!(toggleHideInFullscreen:),
         delegate,
     );
+    row += 1;
 
-    // pane 实际内容高度:group2 底 = y − card_height(g2_rows),加底部留白得 content_h。
-    // 此 y = after_g1(Header + Group-1 + gap 之后),Group-2 底 = y − card_height(g2_rows)。
-    let g2_rows = 7 + agent_extra + 1 + notify_extra;
+    // Group-2 实际行数 = 游标最终值(= 8 + agent_extra + notify_extra)。据此设 card 高 + pane 内容高。
+    let g2_rows = row;
+    group2.setFrame(card_frame(x0, y, g2_rows));
     let content_h = (H - y) + card_height(g2_rows) + CONTENT_PAD_X;
     // 内容此前按 H(默认窗高)布置;pane 实际高 content_h 可能 ≠ H。把所有子视图统一 y 偏移
-    // dy = content_h − H:dy > 0(content 超 H)→ 整体上移,group2 底落在 CONTENT_PAD_X、
-    // header 落在 content_h − CONTENT_PAD_X − TOP_INSET;dy < 0(content 不足 H)→ 整体下移。
-    // 这样 pane 高 = content_h 时内容上下都不裁、留白对称。
+    // dy = content_h − H:dy > 0(content 超 H)→ 整体上移,group2 底落在 CONTENT_PAD_X、header 落在
+    // content_h − CONTENT_PAD_X − TOP_INSET;dy < 0(不足 H)→ 整体下移。pane 高 = content_h 时
+    // 上下都不裁、留白对称。
     let dy = content_h - H;
     for sv in pane.subviews().iter() {
         let f = sv.frame();

@@ -291,27 +291,28 @@ impl Settings {
         self.style_for(StyleKey::from(s)).to_light()
     }
 
-    /// 一次快照应渲染的灯效:Done-Notification(可配)优先于 global 默认。
-    pub fn light(&self, snap: &Snapshot) -> LightAnim {
-        if snap.done_notif {
-            self.style_for(StyleKey::DoneNotif).to_light()
-        } else {
-            self.light_for(snap.global)
-        }
-    }
-
     /// 某个真实状态对应的渐变层数。
     pub fn layers_for(&self, s: AgentStatus) -> u8 {
         self.style_for(StyleKey::from(s)).layers()
     }
 
-    /// 一次快照应渲染的渐变层数(与 `light()` 同优先级:DoneNotif 优先于 global)。
-    pub fn layers(&self, snap: &Snapshot) -> u8 {
+    /// 一次快照对应的状态键:Done-Notification 优先于 global(灯效与渐变层数同此规则)。
+    fn style_key_of(&self, snap: &Snapshot) -> StyleKey {
         if snap.done_notif {
-            self.style_for(StyleKey::DoneNotif).layers()
+            StyleKey::DoneNotif
         } else {
-            self.layers_for(snap.global)
+            StyleKey::from(snap.global)
         }
+    }
+
+    /// 一次快照应渲染的灯效。
+    pub fn light(&self, snap: &Snapshot) -> LightAnim {
+        self.style_for(self.style_key_of(snap)).to_light()
+    }
+
+    /// 一次快照应渲染的渐变层数。
+    pub fn layers(&self, snap: &Snapshot) -> u8 {
+        self.style_for(self.style_key_of(snap)).layers()
     }
 
     fn path() -> Option<PathBuf> {
