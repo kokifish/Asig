@@ -140,9 +140,8 @@ impl Monitor {
         }
     }
 
-    /// sticky 状态机(步骤 2-3):本轮原始观测叠加到 latched 锁定态得各会话当前态,
-    /// 再按 `LATCH_GRACE` 宽限裁掉本轮未出现的会话——文件原子替换/瞬时改名时 live 会短暂
-    /// 不含它,立即删会让下轮重现以 Done 为基线、丢失锁定态(违反 sticky);连续超宽限才删。
+    /// sticky 状态机:本轮观测叠加到 latched 锁定态;未出现的会话给 `LATCH_GRACE` 轮宽限
+    /// 才裁(防文件原子替换/改名抖动清掉锁定态)。
     fn apply_state_machine(&self, raw: Vec<AgentSession>) -> Vec<AgentSession> {
         let mut latched = self.latched.borrow_mut();
         let mut sessions: Vec<AgentSession> = Vec::with_capacity(raw.len());

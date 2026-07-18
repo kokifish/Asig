@@ -136,8 +136,7 @@ pub(crate) fn build_general_pane(
 
     // pane 实际内容高:Group-2 底 = y − card_height(g2_rows),加底部留白得 content_h。
     let content_h = (H - y) + card_height(g2_rows) + CONTENT_PAD_X;
-    // 内容此前按 H(默认窗高)布置;pane 实际高 content_h 可能 ≠ H。整体 y 偏移 dy = content_h − H
-    // 让上下留白对称(dy>0 整体上移、dy<0 下移),pane 高 = content_h 时上下都不裁。
+    // 内容按 H 布置但 pane 实际高 content_h 可能 ≠ H;整体平移 dy = content_h − H 让上下留白对称。
     let dy = content_h - H;
     for sv in pane.subviews().iter() {
         let f = sv.frame();
@@ -155,9 +154,8 @@ fn build_header(
     g: &Geom,
     y: CGFloat,
 ) {
-    // 按「墨迹中心」而非「框中心」对齐——NSTextField 在偏高的框里按基线把文字画到下部
-    // (墨迹低于框中心 ~6px),而 NSImageView 几何居中其 image。故标题 sizeToFit 取自然高,
-    // 再把 tight 框与齿轮框都居中到同一条 band_center,让两者墨迹中心落到同一水平线。
+    // 按「墨迹中心」对齐:NSTextField 文字墨迹低于框中心 ~6px,标题 sizeToFit 取自然高后
+    // 与齿轮都居中到 band_center,让两者墨迹(而非框)同高。
     let band_center = y + CONTENT_HEADER_H / 2.0;
     let gear_s = 20.0;
     add_header_icon(

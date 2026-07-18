@@ -56,7 +56,8 @@ pub use consts::{
     LANG_EN_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, POLL_PRESETS_MS, SIZE_LABEL_TAG, THEME_OFF,
 };
 pub use glass::update_selection;
-pub use layout::{StateControls, layout_state_pane, refresh_duration, refresh_state_controls};
+pub use layout::{layout_state_pane, refresh_duration, refresh_state_controls};
+pub use pane_state::StateControls;
 pub use strings::reset_confirm_texts;
 pub use tags::parse_control_tag;
 

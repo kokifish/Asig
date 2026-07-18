@@ -531,15 +531,11 @@ fn add_pulse(layer: &CALayer, period_ms: u32) {
 /// 波纹环数量。两环错相半个周期 → 视觉上连续扩散。
 const RIPPLE_RINGS: usize = 2;
 
-/// 波纹:N 个自绘环子视图错相扩散。每个环 transform 从 1.0 扩到 l(终态直径 = dot,即灯边缘);
-/// opacity 用 keyframe——中段保持完全不透明(硬边)、仅末 15% 短淡出(掩盖 scale 单程回弹的瞬间
-/// 跳变)。多环用 timeOffset 错开相位,环以更密节奏接连出现。
+/// 波纹:N 个自绘环子视图错相扩散;transform 从 1.0 扩到 l(终态直径 = dot),opacity keyframe
+/// 中段完全不透明(硬边)、末 15% 短淡出(掩盖 scale 单程回弹跳变)。
 ///
-/// 居中关键:layer-backed NSView 的 anchorPoint/position 由 AppKit 托管、运行时改会被
-/// 重置(故早先「改 anchorPoint 到中心」无效,环仍从左下角缩放、圆心偏离圆点)。这里
-/// 不动锚点,改用一个「绕环自身圆心缩放」的 CATransform3D 作动画
-/// (translate(+c)·scale·translate(-c)),无论 anchorPoint 在哪,环都在缩放时圆心始终
-/// 对齐圆点圆心,对称向外扩散。
+/// 居中:layer-backed NSView 的 anchorPoint/position 由 AppKit 托管(改了会被重置),故不动锚点,
+/// 改用「绕环圆心缩放」的 CATransform3D(translate·scale·translate),圆心始终对齐圆点。
 fn add_ripple(view: &PillView, color: Color, period_ms: u32, layers: u8) {
     let dot = view.ivars().borrow().dot;
     // 波纹从「最内层」(同心圆中心实心圆)外缘起扩散,而非整个圆点中心 —— 这样 layers>0

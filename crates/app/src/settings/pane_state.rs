@@ -4,7 +4,7 @@ use objc2::DefinedClass;
 use objc2::rc::Retained;
 use objc2::runtime::Sel;
 use objc2::sel;
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSButton, NSSlider, NSTextField, NSView};
+use objc2_app_kit::{NSAutoresizingMaskOptions, NSBox, NSButton, NSSlider, NSTextField, NSView};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
@@ -23,9 +23,33 @@ use super::consts::{
 use super::controls::{
     add_card, add_plain_button, add_radio_button, add_slider, add_swatch_button, add_text, new_view,
 };
-use super::layout::{StateControls, layout_state_pane, refresh_duration, refresh_state_controls};
+use super::layout::{layout_state_pane, refresh_duration, refresh_state_controls};
 use super::strings::Strings;
 use super::tags::{label_col_width, tab_of_key};
+
+/// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
+pub struct StateControls {
+    pub key: StyleKey,
+    /// label 列宽(build 时测一次;layout 读它,避免每次重测)。
+    pub lw: CGFloat,
+    /// pane 内容高(build 时按初始宽度算定;pane 高不随窗变 autoresizing=2)。
+    pub pane_h: CGFloat,
+    pub card: Retained<NSBox>,
+    pub color: Vec<Retained<NSButton>>,
+    pub color_lbl: Retained<NSTextField>,
+    pub anim: Vec<Retained<NSButton>>,
+    pub anim_lbl: Retained<NSTextField>,
+    pub speed: Retained<NSSlider>,
+    pub speed_lbl: Retained<NSTextField>,
+    pub speed_label: Retained<NSTextField>,
+    pub gradient: Retained<NSSlider>,
+    pub gradient_lbl: Retained<NSTextField>,
+    pub gradient_label: Retained<NSTextField>,
+    /// DoneNotif 专属:持续时间拉杆 + 标签 + 右侧 `xx s`。其余状态为 None。
+    pub duration: Option<Retained<NSSlider>>,
+    pub duration_lbl: Option<Retained<NSTextField>>,
+    pub duration_label: Option<Retained<NSTextField>>,
+}
 
 /// State pane 一行「name 标签 + 滑块 + 右侧值标签」:三控件先占位零尺寸(frame 由 `layout_state_pane`
 /// 后设),slider/value 打 tag(base + off)。收口 speed/gradient 两处「slider + set_tag + 文本」样板。
