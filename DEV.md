@@ -6,7 +6,7 @@
 - Troubleshooting: 通用故障排查与修复经验沉淀在 [FIX.md](./FIX.md)。
 
 Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸浮窗。
-监控 Claude Code / CodeBuddy / OpenClaw，Trae 待支持。
+监控 Claude Code / CodeBuddy / OpenClaw / Hermes，Trae 待支持。
 
 ## Principals
 
@@ -37,6 +37,10 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
   - ② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working）
   - **协调后台子 agent**：主 agent `sessions_yield` 让出 + 文件以 `leaf` 结尾 = 协调后台子 agent——子 agent 在跑 → Working，子 agent 全 ended 或协调态超 30min → 卡死 → Error。子 agent 走 sessions 机制（`.trajectory.jsonl`）不进 `subagent_runs` 表，靠 leaf+yield 信号识别（GLM 下 yield 期间尾部 `assistant stop="stop"` 否则误判 Done）—— **不进主库，故单读**
   - 否则 Done
+- `hermes/` — `HermesSource`（子模块：`db` 只读 sqlite 查询 / `gateway` 进程存活探测 / `tests`）。数据源：
+  - ① 只读 `~/.hermes/state.db`（sqlite，WAL，gateway 持续写）：`sessions`（cli/tui，未 archived）+ `messages` 尾部信号（`tool_calls`/`user`/`tool`→Working；`assistant+stop`+`active_agents==0`+最后消息>10min→Done、≤10min→NeedsDeci；`active_agents>0` 时 stop 保守算 Working）+ `async_delegations`（state=failed→Error）
+  - ② `~/.hermes/gateway_state.json` 的 pid 配 `kill(pid,0)`：gateway 不活→空 discover（该 kind Offline，与 OpenClaw/Claude 一致）
+  - 会话过滤：`ended_at IS NULL`（排除已 cli_close / new_session 等）+ 最后消息 30min 内（滤 cli 僵尸——关终端窗口不触发 cli_close、会话永远 OPEN）+ 只 cli/tui（排除 feishu 等远程平台）；label = display_name ‖ title ‖ cwd basename ‖ id
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
 - `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
 - `config.rs` — `Settings` / `StyleKey` / `StateStyle` / `LightPosition`：可配置灯效 + 浮窗位置，serde 持久化（`load`/`save` 失败可见不静默：无文件静默默认、IO 错提示、JSON 损坏备份成 `settings.json.bad`，均回退默认绝不 panic）
@@ -233,7 +237,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围20-80px，默认25px
   - Click-through/点击穿透(取消可拖动): 开关。默认开
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
-  - Agent to monitor/监控的 Agent: 多选块(Claude Code / CodeBuddy / OpenClaw 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
+  - Agent to monitor/监控的 Agent: 多选块(Claude Code / CodeBuddy / OpenClaw / Hermes 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
   - Status notifications/状态通知: 多选块(已完成/运行中/待决策/错误/异常 横排圆角块,选中=转入该状态时弹 macOS 系统通知,点击 toggle)。默认 待决策+错误;数据结构 `notify_on: Vec<AgentStatus>`
   - Hide in fullscreen/全屏自动隐藏: 开关。默认开。开启时浮窗 collectionBehavior=Managed(不进全屏 Space:全屏自动消失 + 不打断菜单栏);关闭时=CanJoinAllSpaces(跨 Space 显示,含全屏);数据结构 `hide_in_fullscreen: bool`
   - Launch at login/开机自启动(待实现): 开关。默认关

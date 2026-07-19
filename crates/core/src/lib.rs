@@ -6,6 +6,7 @@
 pub mod aggregate;
 pub mod claude;
 pub mod config;
+pub mod hermes;
 pub mod openclaw;
 pub mod source;
 pub mod status;
@@ -113,6 +114,11 @@ impl Monitor {
         }
         if kinds.contains(&AgentKind::OpenClaw) {
             if let Some(s) = openclaw::OpenClawSource::new() {
+                sources.push(Box::new(s));
+            }
+        }
+        if kinds.contains(&AgentKind::Hermes) {
+            if let Some(s) = hermes::HermesSource::new() {
                 sources.push(Box::new(s));
             }
         }

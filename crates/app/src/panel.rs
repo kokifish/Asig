@@ -153,7 +153,7 @@ pub fn update_label(p: &Popover, snap: &Snapshot) {
 /// Claude/CodeBuddy 显示工作目录名(比 session UUID 易读)。
 fn session_id_label(s: &AgentSession) -> String {
     match s.kind {
-        AgentKind::OpenClaw => s.label.clone().unwrap_or_else(|| "-".into()),
+        AgentKind::OpenClaw | AgentKind::Hermes => s.label.clone().unwrap_or_else(|| "-".into()),
         _ => s
             .cwd
             .as_ref()

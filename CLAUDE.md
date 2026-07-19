@@ -18,7 +18,7 @@ Asig = macOS 多 Agent 状态监控灯(菜单栏灯 + 全局置顶浮窗 + 弹�
 - `msg_send!` 在 0.6 统管对象/基本类型返回(`msg_send_id!` 已废弃)。多参数选择子参数间要**逗号**:`addAnimation:x, forKey:y`。
 - 0.6 起 **`CGFloat` / CG 类型搬到 `objc2-core-foundation`**(已加为依赖);`NSRect`/`NSPoint`/`NSSize` 仍在 `objc2-foundation`(NSGeometry feature)。框架自带方法(如 `NSBezierPath::...`、`path.fill()`)在 0.6 多为**安全**调用,别再套 `unsafe {}`(clippy 会报 `unused_unsafe`)。
 - **`NSView` 只有 `tag()`/`viewWithTag:`,没有 `setTag:`**(给纯 `NSView` 实例打 tag 会 debug panic「method not found」;release 因关校验能跑,但别依赖)。`NSControl` 子类(`NSSlider`/`NSTextField`/`NSPopUpButton`/`NSButton`)才有 `setTag/tag`。所以**纯 `NSView`(如设置窗 pane)按 `Vec` 索引切、别打 tag**;控件才能打 tag + 用 `viewWithTag:` 反查。
-- **NeedsDeci(待决策)检测**:Claude session 文件 `status` 有 `busy`/`idle`/`shell`/`waiting`。`waiting`(Claude 等用户输入/授权,如工具 permission)→ 直接 NeedsDeci(status 层,优先于 transcript);`busy` 时光看 status 到不了 NeedsDeci(问问题仍 busy),靠会话 transcript(`~/.claude/projects/*/<sessionId>.jsonl`)尾部最后一条**有意义事件**:`busy + end_turn`→NeedsDeci(等你回)、`busy + user`(用户刚输入、Claude 正在处理)/`busy + tool_use`→Working(跑工具)、`idle`/`shell`→Done。关键:`end_turn` 之后若已有 `user` 消息则判 Working,不被残留 `end_turn` 误判 NeedsDeci(用户已回=Claude 在跑,不是等你)。`claude.rs::classify`/`read_tail_signal` 据此判定,只读尾部 ~16KB。OpenClaw 的 NeedsDeci 来自状态库 `~/.openclaw/state/openclaw.sqlite` 的 `flow_runs.status='blocked' 且 ended_at IS NULL`(已结束的 blocked 投递失败终态不计;准度有限,见 README),实现见 `openclaw.rs`。
+- **NeedsDeci(待决策)检测**:Claude session 文件 `status` 有 `busy`/`idle`/`shell`/`waiting`。`waiting`(Claude 等用户输入/授权,如工具 permission)→ 直接 NeedsDeci(status 层,优先于 transcript);`busy` 时光看 status 到不了 NeedsDeci(问问题仍 busy),靠会话 transcript(`~/.claude/projects/*/<sessionId>.jsonl`)尾部最后一条**有意义事件**:`busy + end_turn`→NeedsDeci(等你回)、`busy + user`(用户刚输入、Claude 正在处理)/`busy + tool_use`→Working(跑工具)、`idle`/`shell`→Done。关键:`end_turn` 之后若已有 `user` 消息则判 Working,不被残留 `end_turn` 误判 NeedsDeci(用户已回=Claude 在跑,不是等你)。`claude.rs::classify`/`read_tail_signal` 据此判定,只读尾部 ~16KB。OpenClaw 的 NeedsDeci 来自状态库 `~/.openclaw/state/openclaw.sqlite` 的 `flow_runs.status='blocked' 且 ended_at IS NULL`(已结束的 blocked 投递失败终态不计;准度有限,见 README),实现见 `openclaw.rs`。Hermes(cli/tui 会话)的 NeedsDeci 来自 `~/.hermes/state.db` 的 `messages` 尾部 `assistant+stop`(无 tool_calls)+ `gateway_state.json` 的 `active_agents==0` + 最后消息 ≤10min(>10min 判 Done);尾部 `tool_calls`/`user`/`tool`→Working;实现见 `hermes/`。
 
 ## macOS / AppKit 坑(都踩过)
 - **layer-backed NSView 的 `anchorPoint`/`position` 由 AppKit 托管,运行时改会被重置**。要「绕中心缩放」别动 anchorPoint,改用绕圆心的 `CATransform3D` 做 `transform` 动画。波纹居中就是这么修的(曾因改 anchorPoint 无效、环偏到圆点左下角)。
@@ -33,6 +33,7 @@ Asig = macOS 多 Agent 状态监控灯(菜单栏灯 + 全局置顶浮窗 + 弹�
 - `ASIG_NO_HIDE=1`:关掉 Drop-down 的「失焦自动关」,便于截图。
 - `ASIG_TAB=<1..=7>`:直接开到指定 pane(1=DoneNotif/2=Done/3=Working/4=NeedsDeci/5=Error/6=Offline/7=About;不设=General),便于逐页截图。
 - `ASIG_PREVIEW=1`:跳过轮询,循环展示各状态默认灯效(便于动画截图)。
+- `ASIG_HERMES_ROOT=<dir>`:HermesSource 指向测试用 hermes 目录(构造小 `state.db` + `gateway_state.json` 做端到端三态验证,见 `hermes/tests.rs` 的 `#[ignore] probe_env`);生产不设 → 默认 `~/.hermes`。
 - 用法:`ASIG_SETTINGS=1 ./build/Asig.app/Contents/MacOS/agent-light`(`open` 不透传 env)。
 
 ## 供应链检查(cargo-deny)

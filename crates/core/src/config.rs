@@ -606,10 +606,7 @@ mod tests {
     #[test]
     fn enabled_agents_default_and_roundtrip() {
         let s = Settings::default();
-        assert_eq!(
-            s.enabled_agents,
-            vec![AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw]
-        );
+        assert_eq!(s.enabled_agents, AgentKind::IMPLEMENTED.to_vec());
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.enabled_agents, s.enabled_agents);
     }
@@ -619,10 +616,7 @@ mod tests {
         // 旧配置无 enabled_agents → 默认全部(现有行为不变)
         let old = r#"{"dot_size":16,"styles":{}}"#;
         let s: Settings = serde_json::from_str(old).unwrap();
-        assert_eq!(
-            s.enabled_agents,
-            vec![AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw]
-        );
+        assert_eq!(s.enabled_agents, AgentKind::IMPLEMENTED.to_vec());
     }
 
     #[test]

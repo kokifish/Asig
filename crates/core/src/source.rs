@@ -11,13 +11,15 @@ pub enum AgentKind {
     Claude,
     CodeBuddy,
     OpenClaw,
+    Hermes,
     Trae, // 暂未实现;Accessibility 路线见 README 长期目标。
 }
 
 impl AgentKind {
     /// 全部已实现的 agent(chip 顺序 = 默认启用顺序)。Trae 暂未实现,不含。
     /// `config::default_enabled_agents` / `Monitor::default` / 设置 chip 共用此单一事实源。
-    pub const IMPLEMENTED: [Self; 3] = [Self::Claude, Self::CodeBuddy, Self::OpenClaw];
+    pub const IMPLEMENTED: [Self; 4] =
+        [Self::Claude, Self::CodeBuddy, Self::OpenClaw, Self::Hermes];
 
     /// 用户可见的全称(下拉会话列表等展示用)。变体名是简写,展示用全称(Claude → Claude Code)。
     pub fn display_name(self) -> &'static str {
@@ -25,6 +27,7 @@ impl AgentKind {
             Self::Claude => "Claude Code",
             Self::CodeBuddy => "CodeBuddy",
             Self::OpenClaw => "OpenClaw",
+            Self::Hermes => "Hermes",
             Self::Trae => "Trae",
         }
     }
