@@ -9,17 +9,16 @@ use std::path::PathBuf;
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     Claude,
-    CodeBuddy,
+    CodeBuddy, // 暂不支持(实现保留,见 claude.rs);保留 variant 保 serde 向后兼容。
     OpenClaw,
     Hermes,
     Trae, // 暂未实现;Accessibility 路线见 README 长期目标。
 }
 
 impl AgentKind {
-    /// 全部已实现的 agent(chip 顺序 = 默认启用顺序)。Trae 暂未实现,不含。
+    /// 全部已支持的 agent(chip 顺序 = 默认启用顺序)。CodeBuddy 暂不支持、Trae 暂未实现,均不含。
     /// `config::default_enabled_agents` / `Monitor::default` / 设置 chip 共用此单一事实源。
-    pub const IMPLEMENTED: [Self; 4] =
-        [Self::Claude, Self::CodeBuddy, Self::OpenClaw, Self::Hermes];
+    pub const IMPLEMENTED: [Self; 3] = [Self::Claude, Self::OpenClaw, Self::Hermes];
 
     /// 用户可见的全称(下拉会话列表等展示用)。变体名是简写,展示用全称(Claude → Claude Code)。
     pub fn display_name(self) -> &'static str {

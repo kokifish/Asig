@@ -150,7 +150,7 @@ pub fn update_label(p: &Popover, snap: &Snapshot) {
 }
 
 /// 会话列表每行的标识:OpenClaw 显示 agent 名(main/munger/kotomi);
-/// Claude/CodeBuddy 显示工作目录名(比 session UUID 易读)。
+/// Claude 显示工作目录名(比 session UUID 易读)。
 fn session_id_label(s: &AgentSession) -> String {
     match s.kind {
         AgentKind::OpenClaw | AgentKind::Hermes => s.label.clone().unwrap_or_else(|| "-".into()),

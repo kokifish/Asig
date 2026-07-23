@@ -48,11 +48,11 @@ pub const COLOR_ORDER: [Color; 12] = [
 pub const POLL_PRESETS_MS: [u32; 6] = [1000, 2000, 3000, 5000, 10000, 15000];
 
 // ===== 控件 tag 编码 =====
-/// General pane「监控的 Agent」多选 chip 的 tag 基数(+0/1/2/3 = Claude/CodeBuddy/OpenClaw/Hermes)。
+/// General pane「监控的 Agent」多选 chip 的 tag 基数(+0/1/2 = Claude/OpenClaw/Hermes)。
 /// 避让 LANG 50x / SIZE_LABEL 503 / THEME 600。
 pub const AGENT_OFF: i64 = 700;
 /// Agent chip 顺序;引用 core 的 `AgentKind::IMPLEMENTED` 单一事实源(= 默认启用列表)。
-pub const AGENT_KIND_ORDER: [AgentKind; 4] = AgentKind::IMPLEMENTED;
+pub const AGENT_KIND_ORDER: [AgentKind; 3] = AgentKind::IMPLEMENTED;
 
 /// General pane「状态通知」多选 chip 的 tag 基数(+0..4 = 5 个 AgentStatus)。
 /// 避让 AGENT_OFF 700 / THEME 600。

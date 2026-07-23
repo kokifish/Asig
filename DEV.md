@@ -6,7 +6,7 @@
 - Troubleshooting: 通用故障排查与修复经验沉淀在 [FIX.md](./FIX.md)。
 
 Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸浮窗。
-监控 Claude Code / CodeBuddy / OpenClaw / Hermes，Trae 待支持。
+监控 Claude Code / OpenClaw / Hermes;CodeBuddy 暂不支持、Trae 待支持。
 
 ## Principals
 
@@ -29,7 +29,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 
 - `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
 - `jsonl_tail.rs` — 只读 jsonl 尾部的取数工具（claude/openclaw 共用）
-- `claude.rs` — `ClaudeLikeSource`：Claude / CodeBuddy 共用（参数化根目录）。读 session 文件（camelCase 字段：`sessionId`/`kind`/`status`…，`rename_all`）+ pid 存活：
+- `claude.rs` — `ClaudeLikeSource`：Claude 的会话状态 source（参数化 root 保留,CodeBuddy 暂不支持）。读 session 文件（camelCase 字段：`sessionId`/`kind`/`status`…，`rename_all`）+ pid 存活：
   - **按 cwd 聚合** —— 同目录的多个 session（用户手开 interactive + claude `--fork-session` 派发的后台子 claude `kind:"bg"`）合并为**一个**会话：interactive 作主，bg 不单独显示但 busy 活跃度合并进主会话状态（否则 fork 任务到后台跑时主进程 idle 成 shell 会被误判不在运行），纯 bg 无 interactive 的目录整组跳过（避免与 OpenClaw source 重叠）
   - **状态判定**（status 层，优先于 transcript）：`waiting`（Claude 等用户输入/授权，如工具 permission）→NeedsDeci；busy+transcript 尾部信号（`end_turn`→NeedsDeci；`user`（用户刚输入、Claude 处理中）/`tool_use`→Working；`end_turn` 后若已有 `user` 判 Working，不被残留 `end_turn` 误判）；idle/shell（空闲）→Done；pid 死→Offline
 - `openclaw/` — `OpenClawSource`（子模块：`db` 只读 sqlite 归并 / `sessions` jsonl 尾部信号 / `probe` CLI 诊断 DTO）。两套数据源：
@@ -237,7 +237,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围20-80px，默认25px
   - Click-through/点击穿透(取消可拖动): 开关。默认开
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
-  - Agent to monitor/监控的 Agent: 多选块(Claude Code / CodeBuddy / OpenClaw / Hermes 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
+  - Agent to monitor/监控的 Agent: 多选块(Claude Code / OpenClaw / Hermes 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
   - Status notifications/状态通知: 多选块(已完成/运行中/待决策/错误/异常 横排圆角块,选中=转入该状态时弹 macOS 系统通知,点击 toggle)。默认 待决策+错误;数据结构 `notify_on: Vec<AgentStatus>`
   - Hide in fullscreen/全屏自动隐藏: 开关。默认开。开启时浮窗 collectionBehavior=Managed(不进全屏 Space:全屏自动消失 + 不打断菜单栏);关闭时=CanJoinAllSpaces(跨 Space 显示,含全屏);数据结构 `hide_in_fullscreen: bool`
   - Launch at login/开机自启动(待实现): 开关。默认关
