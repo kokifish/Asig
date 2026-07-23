@@ -34,7 +34,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
   - **状态判定**（status 层，优先于 transcript）：`waiting`（Claude 等用户输入/授权，如工具 permission）→NeedsDeci；busy+transcript 尾部信号（`end_turn`→NeedsDeci；`user`（用户刚输入、Claude 处理中）/`tool_use`→Working；`end_turn` 后若已有 `user` 判 Working，不被残留 `end_turn` 误判）；idle/shell（空闲）→Done；pid 死→Offline
 - `openclaw/` — `OpenClawSource`（子模块：`db` 只读 sqlite 归并 / `sessions` jsonl 尾部信号 / `probe` CLI 诊断 DTO）。两套数据源：
   - ① 只读 `~/.openclaw/state/openclaw.sqlite`（单一事实源、升级迁移目标），按 `agent_databases` 聚合 task/flow/subagent runs（ended_at NULL→Working、blocked 且 ended_at NULL→NeedsDeci、近期 failed→Error）
-  - ② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working）
+  - ② 交互式会话 `agents/<id>/sessions/*.jsonl` 尾部 `message.stopReason`（toolUse/user/toolResult→Working;近期 error→Error）
   - **协调后台子 agent**：主 agent `sessions_yield` 让出 + 文件以 `leaf` 结尾 = 协调后台子 agent——子 agent 在跑 → Working，子 agent 全 ended 或协调态超 30min → 卡死 → Error。子 agent 走 sessions 机制（`.trajectory.jsonl`）不进 `subagent_runs` 表，靠 leaf+yield 信号识别（GLM 下 yield 期间尾部 `assistant stop="stop"` 否则误判 Done）—— **不进主库，故单读**
   - 否则 Done
 - `hermes/` — `HermesSource`（子模块：`db` 只读 sqlite 查询 / `gateway` 进程存活探测 / `tests`）。数据源：
