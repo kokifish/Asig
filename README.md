@@ -4,12 +4,12 @@
 [![CodeQL](https://github.com/kokifish/Asig/actions/workflows/codeql.yml/badge.svg)](https://github.com/kokifish/Asig/security/code-scanning)
 [![Release](https://img.shields.io/github/v/release/kokifish/Asig)](https://github.com/kokifish/Asig/releases/latest)
 
-macOS 上的多 Agent 状态监控灯。把 Claude Code / CodeBuddy / OpenClaw / Hermes 的实时状态,变成屏幕上一眼就懂的灯。
+macOS 上的多 Agent 状态监控灯。把 Claude Code / OpenClaw / Hermes 的实时状态,变成屏幕上一眼就懂的灯。
 
 **三种形态**:菜单栏状态灯 + 全局置顶的动态药丸浮窗 + 点灯弹出的详情/设置面板。
 **目标**:切到别的窗口干活,瞄一眼就知道 —— 在跑 / 完成了 / 要你决策 / 出错了。
 
-> 当前为早期版本(Phase 1–2)。Claude Code / CodeBuddy / OpenClaw / Hermes 已支持;Trae 暂未支持。
+> 当前为早期版本(Phase 1–2)。Claude Code / OpenClaw / Hermes 已支持;CodeBuddy / Trae 暂不支持。
 
 ---
 
@@ -75,7 +75,7 @@ cp -R build/Asig.app /Applications/ # 安装
 | Agent | 支持 | 怎么读状态 |
 |---|---|---|
 | Claude Code | ✅ | `~/.claude/sessions/<pid>.json`(`busy`/`idle`/`shell`/`waiting`) + transcript 尾部信号(`waiting` 或 `busy`+`end_turn`→🟠) |
-| CodeBuddy | ✅ | `~/.codebuddy/sessions/<pid>.json` |
+| CodeBuddy | ⏳ 暂不支持 | (实现已保留,待恢复;见 DEV.md) |
 | OpenClaw | ✅ | `~/.openclaw/state/openclaw.sqlite`(按 agent 聚合 task/flow/subagent runs) |
 | Hermes | ✅ | `~/.hermes/state.db`(cli/tui 会话 messages 尾部 `tool_calls`/`stop` 信号)+ `gateway_state.json`(gateway 存活 / `active_agents`) |
 | Trae | ⏳ 暂未 | (闭源,需 Accessibility,见 DEV.md) |
