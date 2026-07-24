@@ -89,7 +89,7 @@ jobs:
         run: ./scripts/make-app.sh
 
       - name: Upload Asig.app
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Asig-app
           path: build/Asig.app
