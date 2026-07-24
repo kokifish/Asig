@@ -1,0 +1,23 @@
+# mdformat 配置 —— 不依赖 LLM 的确定性 Markdown 格式化器(CommonMark + GFM)
+# 文档: https://mdformat.readthedocs.io/en/stable/users/configuration_file.html
+#
+# 查找规则:mdformat 从「被格式化文件所在目录」向上查找本文件;CLI 参数优先级更高。
+# 当前取值与 mdformat 默认一致 —— 显式写出来是为了锁定意图、防止默认值随版本漂移、
+# 让团队 / CI 行为一致。需要非默认行为时改这里。
+
+# 不折行:保留手工换行(中文 prose / 手动拆分的长列表项不会被 reflow 打乱)
+wrap = "keep"
+
+# 行尾统一 LF
+end_of_line = "lf"
+
+# 有序列表不强改连续编号(保留原文写法)
+number = false
+
+# 渲染 HTML 一致性校验:防止格式化改变语义(默认 true)
+validate = true
+
+# 扩展「所有已装的自动启用」——已装 mdformat-gfm(= gfm + tables),
+# 故 GFM 表格 / 任务列表 / 删除线自动支持。将来装 mdformat-frontmatter 等也会自动生效。
+# 需要锁定白名单时取消注释:
+# extensions = ["gfm", "tables"]

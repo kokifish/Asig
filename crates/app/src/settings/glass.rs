@@ -5,17 +5,17 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, NSObject};
 use objc2::{MainThreadMarker, class, msg_send};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBox, NSBoxType, NSColor, NSView, NSVisualEffectBlendingMode,
-    NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSAutoresizingMaskOptions, NSColor, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+    NSVisualEffectState, NSVisualEffectView,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSString};
 
 use crate::app_delegate::AppDelegate;
 
+use super::consts::{STATE_KEYS, TAB_GENERAL};
 use super::controls::new_view;
 use super::strings::strings_for;
-use super::tags::{STATE_KEYS, TAB_GENERAL};
 
 /// 运行时是否存在真·液态玻璃类(macOS 26+)。minos=11.0,旧系统无此类,须回退 vibrancy。
 pub(crate) fn glass_available() -> bool {
@@ -36,6 +36,7 @@ pub(crate) fn glass_pane(
     corner_radius: CGFloat,
     fallback_material: i64,
 ) -> GlassPane {
+    let mtm = MainThreadMarker::new().expect("glass_pane 须主线程");
     // Reduce Transparency 开启时跳过 NSGlassEffectView,改走 NSVisualEffectView 分支
     // (它在 Reduce Transparency 下自动变不透明实色),保证文字可读。
     if glass_available() && !crate::overlay::reduce_transparency_on() {
@@ -51,9 +52,8 @@ pub(crate) fn glass_pane(
         content.setAutoresizingMask(NSAutoresizingMaskOptions(18));
         GlassPane { view: g, content }
     } else {
-        let alloc: Allocated<NSVisualEffectView> =
-            unsafe { msg_send![class!(NSVisualEffectView), alloc] };
-        let v = NSVisualEffectView::initWithFrame(alloc, frame);
+        let v = NSVisualEffectView::new(mtm);
+        v.setFrame(frame);
         v.setMaterial(NSVisualEffectMaterial(fallback_material as isize));
         v.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow); // 模糊窗口背后
         v.setState(NSVisualEffectState::Active);
@@ -73,18 +73,10 @@ pub(crate) fn glass_pane(
 /// 读作「选中」。一个共享视图,选中时移到对应 tab 行(见 update_selection)。初始隐藏。
 pub(crate) fn make_selection_pill() -> Retained<NSView> {
     let mtm = MainThreadMarker::new().expect("make_selection_pill 须主线程");
-    let b = NSBox::new(mtm);
-    b.setBoxType(NSBoxType::Custom);
-    b.setCornerRadius(8.0);
-    b.setBorderWidth(0.0);
-    b.setFillColor(&NSColor::controlAccentColor());
-    b.setTitle(&NSString::from_str(""));
-    b.setWantsLayer(true);
-    if let Some(layer) = b.layer() {
-        layer.setCornerCurve(&NSString::from_str("continuous"));
-    }
+    // 实心强调色圆角块(复用 controls::make_rounded_box 的圆角样板,cornerRadius=8 + accent 填充)。
+    let b = super::controls::make_rounded_box(mtm, 8.0, &NSColor::controlAccentColor());
     b.setHidden(true); // 初始隐藏,update_selection 时显示
-    b.into_super() // NSBox → NSView(调用方按 NSView 用)
+    b.into_super()
 }
 
 /// 给 borderless tab 按钮设文字色:选中 = 白、否则 = labelColor。用 attributedTitle

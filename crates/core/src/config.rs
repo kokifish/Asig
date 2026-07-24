@@ -29,7 +29,7 @@ pub enum Anim {
 /// 渲染层 draw_rect 据此画等距同心环;仅作用于浮窗圆点本体,菜单栏图标不分级。
 pub const GRADIENT_LAYERS_MIN: u8 = 0;
 pub const GRADIENT_LAYERS_MAX: u8 = 4;
-pub const GRADIENT_LAYERS_DEFAULT: u8 = 1;
+pub const GRADIENT_LAYERS_DEFAULT: u8 = 2;
 
 /// 单个状态的可配置样式:颜色 + 动画 + 周期 + 渐变层数。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -39,7 +39,7 @@ pub struct StateStyle {
     /// 动画周期(ms)。Steady 时无意义,置 0。
     pub period_ms: u32,
     /// 渐变层数(slider 值 0..=4,见 `status::GRADIENT_LAYERS_*`)。浮窗圆点据此画 layers+1 同心环;
-    /// 旧配置缺此字段 → 默认 1(两层渐变)。
+    /// 旧配置缺此字段 → 默认 2(三层渐变)。
     #[serde(default = "default_gradient_layers")]
     pub gradient_layers: u8,
 }
@@ -186,8 +186,8 @@ pub const DONE_NOTIF_DURATION_DEFAULT_S: u32 = 30;
 
 /// 浮窗圆点直径(px)的合法范围与默认。app 层 slider 以 MIN/MAX 为边界、changeSize 读取时
 /// clamp 到此范围,默认值兜底 —— slider 与 clamp 共用同一组常量,避免边界两处分写而漂移。
-pub const DOT_SIZE_MIN_PX: u32 = 5;
-pub const DOT_SIZE_MAX_PX: u32 = 50;
+pub const DOT_SIZE_MIN_PX: u32 = 20;
+pub const DOT_SIZE_MAX_PX: u32 = 80;
 pub const DOT_SIZE_DEFAULT_PX: u32 = 25;
 
 /// 全部设置。
@@ -221,6 +221,9 @@ pub struct Settings {
     /// 旧配置无此字段 → 回默认。
     #[serde(default = "default_notify_on")]
     pub notify_on: Vec<AgentStatus>,
+    /// 全屏(原生 + 非原生视频)时自动隐藏浮窗窗口。默认 true。serde 持久化。
+    #[serde(default = "default_hide_in_fullscreen")]
+    pub hide_in_fullscreen: bool,
 }
 
 fn default_poll_interval_ms() -> u32 {
@@ -237,6 +240,10 @@ fn default_enabled_agents() -> Vec<AgentKind> {
 
 fn default_notify_on() -> Vec<AgentStatus> {
     vec![AgentStatus::NeedsDeci, AgentStatus::Error]
+}
+
+fn default_hide_in_fullscreen() -> bool {
+    true
 }
 
 fn default_gradient_layers() -> u8 {
@@ -259,6 +266,7 @@ impl Default for Settings {
             done_notif_duration_s: default_done_notif_duration_s(),
             enabled_agents: default_enabled_agents(),
             notify_on: default_notify_on(),
+            hide_in_fullscreen: default_hide_in_fullscreen(),
         }
     }
 }
@@ -283,27 +291,28 @@ impl Settings {
         self.style_for(StyleKey::from(s)).to_light()
     }
 
-    /// 一次快照应渲染的灯效:Done-Notification(可配)优先于 global 默认。
-    pub fn light(&self, snap: &Snapshot) -> LightAnim {
-        if snap.done_notif {
-            self.style_for(StyleKey::DoneNotif).to_light()
-        } else {
-            self.light_for(snap.global)
-        }
-    }
-
     /// 某个真实状态对应的渐变层数。
     pub fn layers_for(&self, s: AgentStatus) -> u8 {
         self.style_for(StyleKey::from(s)).layers()
     }
 
-    /// 一次快照应渲染的渐变层数(与 `light()` 同优先级:DoneNotif 优先于 global)。
-    pub fn layers(&self, snap: &Snapshot) -> u8 {
+    /// 一次快照对应的状态键:Done-Notification 优先于 global(灯效与渐变层数同此规则)。
+    fn style_key_of(&self, snap: &Snapshot) -> StyleKey {
         if snap.done_notif {
-            self.style_for(StyleKey::DoneNotif).layers()
+            StyleKey::DoneNotif
         } else {
-            self.layers_for(snap.global)
+            StyleKey::from(snap.global)
         }
+    }
+
+    /// 一次快照应渲染的灯效。
+    pub fn light(&self, snap: &Snapshot) -> LightAnim {
+        self.style_for(self.style_key_of(snap)).to_light()
+    }
+
+    /// 一次快照应渲染的渐变层数。
+    pub fn layers(&self, snap: &Snapshot) -> u8 {
+        self.style_for(self.style_key_of(snap)).layers()
     }
 
     fn path() -> Option<PathBuf> {
@@ -327,11 +336,11 @@ impl Settings {
             Ok(s) => s,
             Err(LoadError::Read(e)) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(LoadError::Read(e)) => {
-                eprintln!("Asig: 读取设置失败({e}),使用默认值: {}", path.display());
+                log::warn!("读取设置失败({e}),使用默认值: {}", path.display());
                 Self::default()
             }
             Err(LoadError::Parse(e)) => {
-                eprintln!("Asig: settings.json 解析失败({e}),已备份为 .bad 并使用默认值");
+                log::warn!("settings.json 解析失败({e}),已备份为 .bad 并使用默认值");
                 let _ = std::fs::rename(&path, format!("{}.bad", path.display()));
                 Self::default()
             }
@@ -346,19 +355,19 @@ impl Settings {
         };
         if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("Asig: 创建设置目录失败({e})");
+                log::warn!("创建设置目录失败({e})");
                 return;
             }
         }
         let text = match serde_json::to_string_pretty(self) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!("Asig: 序列化设置失败({e})");
+                log::warn!("序列化设置失败({e})");
                 return;
             }
         };
         if let Err(e) = std::fs::write(&path, text) {
-            eprintln!("Asig: 写入设置失败({e}): {}", path.display());
+            log::warn!("写入设置失败({e}): {}", path.display());
         }
     }
 }
@@ -472,6 +481,7 @@ mod tests {
         let back: Settings = serde_json::from_str(&text).unwrap();
         assert_eq!(back.dot_size, 25);
         assert_eq!(back.poll_interval_ms, 3000);
+        assert!(back.hide_in_fullscreen); // 默认全屏自动隐藏浮窗
         assert_eq!(back.theme, Theme::FollowSystem); // 默认主题序列化往返
         assert_eq!(back.done_notif_duration_s, 30); // 默认持续时间往返
         assert!(back.styles.contains_key(&StyleKey::Done));
@@ -500,8 +510,8 @@ mod tests {
                 ..
             }
         ));
-        // 旧 styles 子对象缺 gradient_layers → serde 默认 1(两层渐变)
-        assert_eq!(s.style_for(StyleKey::Done).gradient_layers, 1);
+        // 旧 styles 子对象缺 gradient_layers → serde 默认 2(三层渐变)
+        assert_eq!(s.style_for(StyleKey::Done).gradient_layers, 2);
     }
 
     #[test]
@@ -523,8 +533,8 @@ mod tests {
 
     #[test]
     fn gradient_layers_clamped_and_default() {
-        // 默认 = 1(两层渐变)
-        assert_eq!(Settings::default().style_for(StyleKey::Done).layers(), 1);
+        // 默认 = 2(三层渐变)
+        assert_eq!(Settings::default().style_for(StyleKey::Done).layers(), 2);
         // 越界值(手改配置)经 StateStyle::layers() clamp 回 [0, 4]
         let mut s = Settings::default();
         s.styles.insert(
@@ -596,10 +606,7 @@ mod tests {
     #[test]
     fn enabled_agents_default_and_roundtrip() {
         let s = Settings::default();
-        assert_eq!(
-            s.enabled_agents,
-            vec![AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw]
-        );
+        assert_eq!(s.enabled_agents, AgentKind::IMPLEMENTED.to_vec());
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back.enabled_agents, s.enabled_agents);
     }
@@ -609,10 +616,7 @@ mod tests {
         // 旧配置无 enabled_agents → 默认全部(现有行为不变)
         let old = r#"{"dot_size":16,"styles":{}}"#;
         let s: Settings = serde_json::from_str(old).unwrap();
-        assert_eq!(
-            s.enabled_agents,
-            vec![AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::OpenClaw]
-        );
+        assert_eq!(s.enabled_agents, AgentKind::IMPLEMENTED.to_vec());
     }
 
     #[test]
