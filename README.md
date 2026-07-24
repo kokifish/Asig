@@ -4,12 +4,12 @@
 [![CodeQL](https://github.com/kokifish/Asig/actions/workflows/codeql.yml/badge.svg)](https://github.com/kokifish/Asig/security/code-scanning)
 [![Release](https://img.shields.io/github/v/release/kokifish/Asig)](https://github.com/kokifish/Asig/releases/latest)
 
-macOS 上的多 Agent 状态监控灯。把 Claude Code / CodeBuddy / OpenClaw 的实时状态,变成屏幕上一眼就懂的灯。
+macOS 上的多 Agent 状态监控灯。把 Claude Code / OpenClaw / Hermes 的实时状态,变成屏幕上一眼就懂的灯。
 
 **三种形态**:菜单栏状态灯 + 全局置顶的动态药丸浮窗 + 点灯弹出的详情/设置面板。
 **目标**:切到别的窗口干活,瞄一眼就知道 —— 在跑 / 完成了 / 要你决策 / 出错了。
 
-> 当前为早期版本(Phase 1–2)。Claude Code / CodeBuddy / OpenClaw 已支持;Trae 暂未支持。
+> 当前为早期版本(Phase 1–2)。Claude Code / OpenClaw / Hermes 已支持;CodeBuddy / Trae 暂不支持。
 
 ---
 
@@ -19,7 +19,7 @@ macOS 上的多 Agent 状态监控灯。把 Claude Code / CodeBuddy / OpenClaw �
 |:---:|:---:|---|---|---|
 | 5 | 🔴 红 | Error | 快闪 | 报错且无法自动恢复 |
 | 4 | 🟠 琥珀 | NeedsDeci | 慢闪 | 待决策(要权限 / 要输入) |
-| 3 | 🟣 紫 | Offline | 常亮 | 异常 / 卡住 / 进程没了 / 不可观测 |
+| 3 | 🟣 紫 | Offline | 常亮 | 不可观测 / 卡住 / 进程没了 / 未知 |
 | 2 | 🟡 黄 | Working | 慢呼吸 | 正在跑 |
 | 1 | 🟢 绿 | Done | 波纹 | 完成 / 空闲 / 初始默认态 |
 
@@ -74,9 +74,10 @@ cp -R build/Asig.app /Applications/ # 安装
 
 | Agent | 支持 | 怎么读状态 |
 |---|---|---|
-| Claude Code | ✅ | `~/.claude/sessions/<pid>.json`(`busy`/`idle`) + transcript 尾部 `stop_reason`(判 🟠 待决策) |
-| CodeBuddy | ✅ | `~/.codebuddy/sessions/<pid>.json` |
+| Claude Code | ✅ | `~/.claude/sessions/<pid>.json`(`busy`/`idle`/`shell`/`waiting`) + transcript 尾部信号(`waiting` 或 `busy`+`end_turn`→🟠) |
+| CodeBuddy | ⏳ 暂不支持 | (实现已保留,待恢复;见 DEV.md) |
 | OpenClaw | ✅ | `~/.openclaw/state/openclaw.sqlite`(按 agent 聚合 task/flow/subagent runs) |
+| Hermes | ✅ | `~/.hermes/state.db`(cli/tui 会话 messages 尾部 `tool_calls`/`stop` 信号)+ `gateway_state.json`(gateway 存活 / `active_agents`) |
 | Trae | ⏳ 暂未 | (闭源,需 Accessibility,见 DEV.md) |
 
 ## 隐私
@@ -86,7 +87,7 @@ cp -R build/Asig.app /Applications/ # 安装
 ## 已知限制
 
 - 药丸浮窗默认点击穿透;想用鼠标拖动浮窗,可在 **Drop-down 的「锁定」** 或 **设置 → 浮窗点击穿透** 任一处取消勾选(两处同步同一开关)。
-- 🟣(异常 / 不可观测):所有会话都消失时自然出现;另外 **Asig 见过的 Claude 进程若崩溃/被杀**(残留 session 文件)也会标 🟣。🟠(需决策)Claude Code 已支持:读 transcript 尾部 `stop_reason`(`end_turn`→🟠、`tool_use`→🟡),无需 hook;🔴(报错)Claude Code 状态文件不提供,仍需 hook 精准触发(详见 DEV.md)。
+- 🟣(异常 / 不可观测):所有会话都消失时自然出现;另外 **Asig 见过的 Claude 进程若崩溃/被杀**(残留 session 文件)也会标 🟣。🟠(需决策)Claude Code 已支持:`status=waiting` 或 `busy`+transcript 尾部 `end_turn`→🟠(`tool_use`/`user`→🟡),无需 hook;🔴(报错)Claude Code 状态文件不提供,仍需 hook 精准触发(详见 DEV.md)。
 - OpenClaw:`flow_runs.status='blocked'` → 🟠 待决策(可能含投递卡住等非「等用户输入」情形,准度待 trajectory 解析补强)。
 - 设置面板(菜单栏灯 → 设置…):浮窗外观(大小/颜色/动画/速度)、轮询间隔、主题、完成通知等均可配;界面随系统无障碍开关自适应。改动即时生效并持久化到 `~/Library/Application Support/Asig/settings.json`。开机自启动等待补。
 

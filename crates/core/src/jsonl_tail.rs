@@ -1,6 +1,6 @@
 //! jsonl 尾部读取共用工具。
 //!
-//! `claude.rs`(read_tail_stop_reason)与 `openclaw.rs`(read_tail_signals)都要「读 jsonl
+//! `claude.rs`(read_tail_signal)与 `openclaw.rs`(read_tail_signals)都要「读 jsonl
 //! 文件末尾 N 字节、丢首行、逐行解析为事件」,仅提取的字段不同。抽此模块消除重复,并让
 //! 尾部边界处理(首行截断丢弃、lossy 解码、跳过空行/解析失败)只在一处测试。
 
@@ -20,13 +20,11 @@ pub(crate) fn read_tail_lines(path: &Path, tail_bytes: u64) -> Option<Vec<serde_
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).ok()?;
     let text = String::from_utf8_lossy(&buf);
-    let mut lines: Vec<&str> = text.lines().collect();
-    if start > 0 {
-        lines.remove(0); // 起点非文件首 → 首行多半被截断,丢弃
-    }
+    // 起点非文件首(start>0)→ 首行多半被截断,跳过。
+    let skip_first = if start > 0 { 1 } else { 0 };
     Some(
-        lines
-            .iter()
+        text.lines()
+            .skip(skip_first)
             .map(|l| l.trim())
             .filter(|l| !l.is_empty())
             .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())

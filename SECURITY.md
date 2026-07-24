@@ -74,10 +74,10 @@ Or email **k0k1fish@outlook.com** (please prefix the subject with `[Asig Securit
 ## 范围 / Scope
 
 In-scope: `crates/core`、`crates/app`、`scripts/make-app.sh`、Release 产物(`.app`)。
-Out-of-scope: 第三方 agent(Claude Code / CodeBuddy / OpenClaw / Trae)自身的漏洞,以及运行 Asig 的 macOS 系统本身。
+Out-of-scope: 第三方 agent(Claude Code / OpenClaw / Hermes / Trae)自身的漏洞,以及运行 Asig 的 macOS 系统本身。
 
 In-scope: `crates/core`, `crates/app`, `scripts/make-app.sh`, release artifacts (`.app`).
-Out-of-scope: bugs in third-party agents (Claude Code / CodeBuddy / OpenClaw / Trae) and in macOS itself.
+Out-of-scope: bugs in third-party agents (Claude Code / OpenClaw / Hermes / Trae) and in macOS itself.
 
 ---
 

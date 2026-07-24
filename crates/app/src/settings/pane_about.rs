@@ -5,12 +5,12 @@ use objc2_app_kit::NSView;
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
+use super::consts::{
+    COL_W, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, GITHUB_URL, HEADER_GAP, TOP_INSET,
+};
 use super::controls::{add_card, add_text, new_view};
 use super::strings::Strings;
-use super::tags::{
-    COL_W, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, GITHUB_URL, HEADER_GAP, TOP_INSET,
-    card_frame, card_height, row_center_y,
-};
+use super::tags::{card_frame, card_height, row_center_y};
 
 pub(crate) fn build_about_pane(st: &Strings) -> (Retained<NSView>, CGFloat) {
     // pane 实际内容高:header + gap + 3 行卡片 + 顶/底留白。

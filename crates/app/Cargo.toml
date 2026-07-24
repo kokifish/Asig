@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 agent-light-core = { path = "../core" }
+log              = "0.4"
 
 # objc2 生态:保持在最新发布线(0.6 / framework 0.3)。define_class! 新宏语法。
 # ⚠️ 类型/协议默认藏在 cargo feature 后,必须按需开启。

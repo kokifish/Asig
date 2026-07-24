@@ -3,15 +3,16 @@
 //! 这些函数被 pane_general / pane_state / pane_about / glass(mod.rs sidebar) 跨模块复用,
 //! 故统一 pub(crate)。原文件内为私有,拆分后仅提升到 crate 内可见。
 
-use objc2::rc::{Allocated, Retained};
+use objc2::rc::Retained;
 use objc2::runtime::Sel;
-use objc2::{MainThreadMarker, Message, class, msg_send, sel};
+use objc2::{MainThreadMarker, Message, msg_send, sel};
 use objc2_app_kit::{
     NSAutoresizingMaskOptions, NSBezelStyle, NSBox, NSBoxType, NSButton, NSButtonType,
     NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSImage,
     NSImageScaling, NSImageView, NSPopUpButton, NSSlider, NSSwitch, NSTextAlignment, NSTextField,
     NSView,
 };
+use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use agent_light_core::Color;
@@ -19,22 +20,43 @@ use agent_light_core::Color;
 use crate::app_delegate::AppDelegate;
 use crate::overlay::swatch_image;
 
-use super::tags::{SWATCH_D, sf_symbol};
+use super::consts::SWATCH_D;
+use super::tags::sf_symbol;
 
-/// 分组圆角卡片背景(NSBox custom:细边 + 圆角 + 浅填充),置于行后面。返回卡片引用(layout 重排用)。
-pub(crate) fn add_card(pane: &Retained<NSView>, frame: NSRect) -> Retained<NSBox> {
-    let mtm = MainThreadMarker::new().expect("add_card 须主线程");
+/// 给控件配 target(=delegate)+ action。收口各 add_* 里重复的 setTarget/setAction
+/// (setTarget:/setAction: 在所有 NSControl 子类都响应,用 msg_send! 绕过具体子类类型)。
+fn wire_action<T: Message>(control: &Retained<T>, delegate: &AppDelegate, action: Sel) {
+    unsafe {
+        let _: () = msg_send![control, setTarget: delegate];
+        let _: () = msg_send![control, setAction: action];
+    }
+}
+
+/// 圆角填充 NSBox(setBoxType Custom + cornerRadius + 连续圆角 + wantsLayer)。
+/// add_card 与 glass::make_selection_pill 共用(仅 cornerRadius / fillColor 不同)。
+pub(crate) fn make_rounded_box(
+    mtm: MainThreadMarker,
+    corner_radius: CGFloat,
+    fill: &NSColor,
+) -> Retained<NSBox> {
     let b = NSBox::new(mtm);
     b.setBoxType(NSBoxType::Custom);
-    b.setCornerRadius(10.0);
+    b.setCornerRadius(corner_radius);
     b.setBorderWidth(0.0);
-    b.setFillColor(&NSColor::quaternaryLabelColor());
+    b.setFillColor(fill);
     b.setTitle(&NSString::from_str(""));
-    b.setFrame(frame);
     b.setWantsLayer(true);
     if let Some(layer) = b.layer() {
         layer.setCornerCurve(&NSString::from_str("continuous"));
     }
+    b
+}
+
+/// 分组圆角卡片背景(NSBox custom:细边 + 圆角 + 浅填充),置于行后面。返回卡片引用(layout 重排用)。
+pub(crate) fn add_card(pane: &Retained<NSView>, frame: NSRect) -> Retained<NSBox> {
+    let mtm = MainThreadMarker::new().expect("add_card 须主线程");
+    let b = make_rounded_box(mtm, 10.0, &NSColor::quaternaryLabelColor());
+    b.setFrame(frame);
     b.setAutoresizingMask(NSAutoresizingMaskOptions(2)); // 宽度随 pane(state 卡片高度由 layout 重排覆盖)
     pane.addSubview(&b);
     b
@@ -45,12 +67,6 @@ pub(crate) fn new_view(frame: NSRect) -> Retained<NSView> {
     let v = NSView::new(mtm);
     v.setFrame(frame);
     v
-}
-
-pub(crate) fn set_tag<T: Message>(view: &Retained<T>, tag: i64) {
-    unsafe {
-        let _: () = msg_send![view, setTag: tag];
-    }
 }
 
 /// 无边框按钮(Reset):标题 + action。
@@ -67,10 +83,7 @@ pub(crate) fn add_plain_button(
     btn.setBezelStyle(NSBezelStyle::Push);
     btn.setTitle(&NSString::from_str(title));
     btn.setTag(tag as isize);
-    unsafe {
-        btn.setTarget(Some(delegate));
-        btn.setAction(Some(action));
-    }
+    wire_action(&btn, delegate, action);
     btn.setFrame(frame);
     pane.addSubview(&btn);
     btn
@@ -97,10 +110,7 @@ pub(crate) fn add_toggle_chip(
     btn.setBordered(true);
     btn.setTitle(&NSString::from_str(title));
     btn.setTag(tag as isize);
-    unsafe {
-        btn.setTarget(Some(delegate));
-        btn.setAction(Some(action));
-    }
+    wire_action(&btn, delegate, action);
     btn.sizeToFit();
     let fit = btn.frame();
     btn.setFrame(NSRect::new(origin, fit.size));
@@ -127,10 +137,7 @@ pub(crate) fn add_tab_button(
         btn.setImagePosition(NSCellImagePosition::ImageLeft);
     }
     btn.setTag(tag as isize);
-    unsafe {
-        btn.setTarget(Some(delegate));
-        btn.setAction(Some(sel!(switchSettingsTab:)));
-    }
+    wire_action(&btn, delegate, sel!(switchSettingsTab:));
     btn.setFrame(frame);
     pane.addSubview(&btn);
     btn
@@ -152,10 +159,7 @@ pub(crate) fn add_icon_button(
     btn.setImage(Some(&img));
     btn.setImagePosition(NSCellImagePosition::ImageAbove);
     btn.setTag(tag as isize);
-    unsafe {
-        btn.setTarget(Some(delegate));
-        btn.setAction(Some(sel!(switchSettingsTab:)));
-    }
+    wire_action(&btn, delegate, sel!(switchSettingsTab:));
     btn.setFrame(frame);
     pane.addSubview(&btn);
     btn
@@ -177,10 +181,7 @@ pub(crate) fn add_swatch_button(
     btn.setImage(Some(&img));
     btn.setImagePosition(NSCellImagePosition::ImageAbove);
     btn.setTag(tag as isize);
-    unsafe {
-        btn.setTarget(Some(delegate));
-        btn.setAction(Some(sel!(changeColor:)));
-    }
+    wire_action(&btn, delegate, sel!(changeColor:));
     btn.setFrame(frame);
     pane.addSubview(&btn);
     btn
@@ -200,10 +201,7 @@ pub(crate) fn add_radio_button(
     btn.setButtonType(NSButtonType::Radio);
     btn.setTitle(&NSString::from_str(title));
     btn.setTag(tag as isize);
-    unsafe {
-        btn.setTarget(Some(delegate));
-        btn.setAction(Some(action));
-    }
+    wire_action(&btn, delegate, action);
     btn.setFrame(frame);
     pane.addSubview(&btn);
     btn
@@ -216,10 +214,9 @@ pub(crate) fn add_text(
     center: bool,
     bold: bool,
 ) -> Retained<NSTextField> {
-    // 用 alloc/initWithFrame 构造(而非 labelWithString:)—— 后者创建的 label 不响应
-    // setAlignment(实测右对齐不生效),标准 NSTextField 才能可靠设对齐。
-    let alloc: Allocated<NSTextField> = unsafe { msg_send![class!(NSTextField), alloc] };
-    let label = NSTextField::initWithFrame(alloc, frame);
+    // 标准 NSTextField(而非 labelWithString:——后者不响应 setAlignment,实测右对齐不生效)。
+    let mtm = MainThreadMarker::new().expect("add_text 须主线程");
+    let label = NSTextField::new(mtm);
     label.setStringValue(&NSString::from_str(text));
     label.setBezeled(false);
     label.setDrawsBackground(false);
@@ -256,16 +253,14 @@ pub(crate) fn add_slider(
     action: Sel,
     delegate: &AppDelegate,
 ) -> Retained<NSSlider> {
-    let alloc: Allocated<NSSlider> = unsafe { msg_send![class!(NSSlider), alloc] };
-    let slider = NSSlider::initWithFrame(alloc, frame);
+    let mtm = MainThreadMarker::new().expect("add_slider 须主线程");
+    let slider = NSSlider::new(mtm);
+    slider.setFrame(frame);
     slider.setMinValue(min);
     slider.setMaxValue(max);
     slider.setDoubleValue(val);
     slider.setContinuous(true);
-    unsafe {
-        slider.setTarget(Some(delegate));
-        slider.setAction(Some(action));
-    }
+    wire_action(&slider, delegate, action);
     pane.addSubview(&slider);
     slider
 }
@@ -285,10 +280,7 @@ pub(crate) fn add_switch(
     } else {
         NSControlStateValueOff
     });
-    unsafe {
-        sw.setTarget(Some(delegate));
-        sw.setAction(Some(action));
-    }
+    wire_action(&sw, delegate, action);
     sw.setFrame(frame);
     pane.addSubview(&sw);
     sw
@@ -303,17 +295,16 @@ pub(crate) fn add_popup(
     delegate: &AppDelegate,
     tag: i64,
 ) -> Retained<NSPopUpButton> {
-    let alloc: Allocated<NSPopUpButton> = unsafe { msg_send![class!(NSPopUpButton), alloc] };
-    let pop = NSPopUpButton::initWithFrame_pullsDown(alloc, frame, false);
+    let mtm = MainThreadMarker::new().expect("add_popup 须主线程");
+    // NSPopUpButton::new 默认 pullsDown=NO(标准 pop-up,非 pull-down),与原 initWithFrame_pullsDown(false) 等价。
+    let pop = NSPopUpButton::new(mtm);
+    pop.setFrame(frame);
     for it in items {
         pop.addItemWithTitle(&NSString::from_str(it));
     }
     pop.selectItemAtIndex(selected as isize);
     pop.setTag(tag as isize);
-    unsafe {
-        pop.setTarget(Some(delegate));
-        pop.setAction(Some(action));
-    }
+    wire_action(&pop, delegate, action);
     pane.addSubview(&pop);
     pop
 }
