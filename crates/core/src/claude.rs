@@ -1,9 +1,10 @@
-//! Claude Code 与 CodeBuddy 共用同一实现。
+//! Claude Code 的会话状态监控实现。
 //!
-//! 两者都是"会话状态文件 + (可选)hook"模式,且文件格式同构:
-//!   ~/.claude/sessions/<pid>.json    status: "busy" | "idle" | "shell"
-//!   ~/.codebuddy/sessions/<pid>.json (CodeBuddy 是 Claude Code hook 的兼容 clone)
-//! 区别仅在根目录与进程名 —— 所以一个 ClaudeLikeSource 参数化复用。
+//! 文件结构:`~/.claude/sessions/<pid>.json`,status: "busy" | "idle" | "shell" | "waiting",
+//! 配合 transcript(`~/.claude/projects/*/<sessionId>.jsonl`)尾部信号判 NeedsDeci。
+//!
+//! CodeBuddy 曾与本实现共用(ClaudeLikeSource 参数化 root),现已暂不支持;
+//! `codebuddy()` 构造已移除,参数化结构(root 字段)保留供未来恢复。
 //!
 //! **按 cwd 聚合**:同目录下的多个 session(用户手开的 interactive + claude
 //! `--fork-session` 派发的后台子 claude `kind:"bg"`)合并为**一个**会话 —— interactive
@@ -36,7 +37,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// ~/.claude|~/.codebuddy/sessions/<pid>.json 的结构(实测,版本 2.1.x;字段 camelCase)。
+/// ~/.claude/sessions/<pid>.json 的结构(实测,版本 2.1.x;字段 camelCase)。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionFile {
@@ -48,7 +49,7 @@ struct SessionFile {
     /// `"interactive"`(用户手动 REPL)/ `"bg"`(claude `--fork-session` 派发的后台子 claude)。
     /// bg 不单独显示,但其 busy 活跃度合并进**同 cwd 的 interactive 主会话** —— 否则 fork
     /// 任务到后台跑时主进程 idle 成 shell,Asig 会误判不在运行。纯 bg 无 interactive 的目录
-    /// 整组跳过(避免与 OpenClaw source 重叠)。CodeBuddy 等无此字段则为 None(当 interactive)。
+    /// 整组跳过(避免与 OpenClaw source 重叠)。无此字段则为 None(普通 interactive 会话)。
     #[serde(default)]
     kind: Option<String>,
     #[serde(default)]
@@ -67,14 +68,6 @@ impl ClaudeLikeSource {
         Some(Self {
             kind: AgentKind::Claude,
             root: dirs::home_dir()?.join(".claude"),
-            seen: Mutex::new(HashMap::new()),
-        })
-    }
-
-    pub fn codebuddy() -> Option<Self> {
-        Some(Self {
-            kind: AgentKind::CodeBuddy,
-            root: dirs::home_dir()?.join(".codebuddy"),
             seen: Mutex::new(HashMap::new()),
         })
     }

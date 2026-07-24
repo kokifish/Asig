@@ -15,8 +15,8 @@ use std::cell::RefCell;
 use std::ptr::NonNull;
 
 use agent_light_core::{
-    Color, DOT_SIZE_MAX_PX, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN,
-    LightAnim, LightPosition, Theme,
+    Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN, LightAnim,
+    LightPosition, Theme,
 };
 use block2::RcBlock;
 use objc2::rc::{Allocated, Retained, autoreleasepool};
@@ -29,9 +29,10 @@ use objc2_app_kit::{
     NSView, NSWindingRule, NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_core_foundation::CGFloat;
-use objc2_foundation::{NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue};
+use objc2_foundation::{NSArray, NSNumber, NSPoint, NSRect, NSSize, NSString, NSValue};
 use objc2_quartz_core::{
-    CABasicAnimation, CALayer, CAMediaTiming, CATransform3D, NSValueCATransform3DAdditions,
+    CABasicAnimation, CAKeyframeAnimation, CALayer, CAMediaTiming, CATransform3D,
+    NSValueCATransform3DAdditions,
 };
 
 /// 固定窗口尺寸(透明,容得下最大圆点 + 波纹扩散)。
@@ -197,14 +198,6 @@ pub fn screen_id_at(pt: NSPoint) -> u32 {
     0
 }
 
-/// 按 display id 找屏;id=0 或屏已断开返回 None。
-fn screen_with_id(id: u32) -> Option<Retained<NSScreen>> {
-    if id == 0 {
-        return None;
-    }
-    screens().into_iter().find(|s| screen_device_id(s) == id)
-}
-
 /// 主屏(screens[0])左上角的默认 origin:borderless 浮窗贴可见区(visibleFrame,
 /// 已排除菜单栏 / Dock)左上,留小边距,大致落在窗口红黄绿按钮那一行。
 fn default_origin(win: CGFloat) -> NSPoint {
@@ -224,7 +217,13 @@ fn resolve_origin(saved: Option<LightPosition>, win: CGFloat) -> NSPoint {
     let Some(p) = saved else {
         return default_origin(win);
     };
-    let Some(s) = screen_with_id(p.screen_id) else {
+    // 按坐标点找它实际所在的屏来 clamp,而非存的 screen_id:persist_light_pos 按窗口「中心」判屏却
+    // 存「原点」(x,y),浮窗跨屏边界时(原点在 A 屏、中心越过接缝到 B 屏)会存成 (origin=A 屏坐标,
+    // screen_id=B 屏)——若按 screen_id clamp,原点被推到 B 屏边缘的接缝里,浮窗落到两屏之间不可见。
+    // 直接按坐标定位:落在哪屏就 clamp 到哪屏;screens()[0] 是主屏(Apple 保证),接缝上的点归主屏,
+    // 避免落到副屏边缘。点不在任何屏(屏断开 / 坐标过期)→ 默认主屏左上角。
+    let pt = NSPoint::new(p.x, p.y);
+    let Some(s) = screens().into_iter().find(|s| point_in_rect(s.frame(), pt)) else {
         return default_origin(win);
     };
     let vf = s.visibleFrame();
@@ -391,6 +390,7 @@ impl FlippedView {
 pub fn build(
     dot_size: u32,
     saved: Option<LightPosition>,
+    hide_in_fullscreen: bool,
 ) -> (Retained<NSWindow>, Retained<PillView>) {
     let origin = resolve_origin(saved, WIN);
     let frame = NSRect::new(origin, NSSize::new(WIN, WIN));
@@ -413,12 +413,9 @@ pub fn build(
     window.setIgnoresMouseEvents(true); // 默认点击穿透
     window.setMovableByWindowBackground(true); // 关穿透时可拖
     window.setLevel(objc2_app_kit::NSFloatingWindowLevel); // 浮窗置顶
-    // CanJoinAllSpaces 让浮窗进全屏 app 的 space;再加 fullScreenAuxiliary 标为「全屏辅助窗口」,
-    // 否则 macOS 会把它当成全屏 space 里的非辅助窗口,打断全屏 app 的菜单栏/Dock 自动隐藏。
-    window.setCollectionBehavior(
-        NSWindowCollectionBehavior::CanJoinAllSpaces
-            .union(NSWindowCollectionBehavior::FullScreenAuxiliary),
-    );
+    // hide_in_fullscreen=true → Managed(不进全屏 app 的 Space:全屏自动消失 + 不打断菜单栏 / Dock
+    // 自动隐藏);false → CanJoinAllSpaces(浮窗跨所有 Space 显示,含全屏)。toggleHideInFullscreen 切换。
+    set_hide_in_fullscreen(&window, hide_in_fullscreen);
     unsafe {
         // ARC 下手动 retain,需 unsafe。
         window.setReleasedWhenClosed(false);
@@ -442,15 +439,21 @@ pub fn set_click_through(window: &NSWindow, on: bool) {
     window.setIgnoresMouseEvents(on);
 }
 
+/// 切换全屏自动隐藏:on=true → Managed(不进全屏 app 的 Space,全屏自动消失 + 不打断菜单栏 / Dock
+/// 自动隐藏);on=false → CanJoinAllSpaces(跨所有 Space 显示,含全屏)。build 与 toggle 共用此单一入口。
+pub fn set_hide_in_fullscreen(window: &NSWindow, on: bool) {
+    let b = if on {
+        NSWindowCollectionBehavior::Managed
+    } else {
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+    };
+    window.setCollectionBehavior(b);
+}
+
 /// 改圆点大小:更新 dot、拆掉按旧尺寸建的波纹环(下次 set_light 重建)、重绘。
 pub fn set_size(view: &PillView, dot_size: u32) {
-    {
-        let mut st = view.ivars().borrow_mut();
-        st.dot = dot_size as CGFloat;
-        for ring in st.rings.drain(..) {
-            ring.removeFromSuperview();
-        }
-    }
+    view.ivars().borrow_mut().dot = dot_size as CGFloat;
+    drain_rings(view);
     view.setNeedsDisplay(true);
 }
 
@@ -471,12 +474,7 @@ pub fn set_light(view: &PillView, anim: LightAnim, layers: u8) {
     // 先清掉旧的:opacity 动画 + 波纹环子视图。
     layer.removeAnimationForKey(&NSString::from_str("pulse"));
     layer.setOpacity(1.0);
-    {
-        let mut st = view.ivars().borrow_mut();
-        for ring in st.rings.drain(..) {
-            ring.removeFromSuperview();
-        }
-    }
+    drain_rings(view);
 
     match anim {
         LightAnim::Pulse { period_ms, .. } => add_pulse(&layer, period_ms),
@@ -504,6 +502,13 @@ impl PillView {
     }
 }
 
+/// 拆掉所有波纹环子视图(set_size 改尺寸 / set_light 换灯效时清旧环),两处共用。
+fn drain_rings(view: &PillView) {
+    for ring in view.ivars().borrow_mut().rings.drain(..) {
+        ring.removeFromSuperview();
+    }
+}
+
 /// 呼吸:opacity 在 [0.2, 1.0] 间往复。周期越短视觉上越「闪」(快闪/慢闪/呼吸)。
 fn add_pulse(layer: &CALayer, period_ms: u32) {
     const FLOOR: f64 = 0.2;
@@ -526,21 +531,18 @@ fn add_pulse(layer: &CALayer, period_ms: u32) {
 /// 波纹环数量。两环错相半个周期 → 视觉上连续扩散。
 const RIPPLE_RINGS: usize = 2;
 
-/// 波纹:N 个自绘环子视图错相扩散。每个环缩放从 1.0 扩到 MAX_SCALE、opacity 从 0.85 淡到 0,
-/// 单向循环(末尾近乎透明,故回弹不可见,视觉上即连续扩散)。多环用 timeOffset 错开相位,
-/// 环以更密节奏接连出现。
+/// 波纹:N 个自绘环子视图错相扩散;transform 从 1.0 扩到 l(终态直径 = dot),opacity keyframe
+/// 中段完全不透明(硬边)、末 15% 短淡出(掩盖 scale 单程回弹跳变)。
 ///
-/// 居中关键:layer-backed NSView 的 anchorPoint/position 由 AppKit 托管、运行时改会被
-/// 重置(故早先「改 anchorPoint 到中心」无效,环仍从左下角缩放、圆心偏离圆点)。这里
-/// 不动锚点,改用一个「绕环自身圆心缩放」的 CATransform3D 作动画
-/// (translate(+c)·scale·translate(-c)),无论 anchorPoint 在哪,环都在缩放时圆心始终
-/// 对齐圆点圆心,对称向外扩散。
+/// 居中:layer-backed NSView 的 anchorPoint/position 由 AppKit 托管(改了会被重置),故不动锚点,
+/// 改用「绕环圆心缩放」的 CATransform3D(translate·scale·translate),圆心始终对齐圆点。
 fn add_ripple(view: &PillView, color: Color, period_ms: u32, layers: u8) {
     let dot = view.ivars().borrow().dot;
     // 波纹从「最内层」(同心圆中心实心圆)外缘起扩散,而非整个圆点中心 —— 这样 layers>0
     // 时环从中心实心圆边缘出现、向外穿过半透明外层,视觉读作「从最内层扩散出去」
     // (最内层与环同色、重叠处本就不可辨,故起点贴其外缘)。layers=0 → L=1 → 最内层即整个
-    // 圆点,等价历史行为。scale 终值随 L 放大,保证不同层数都扩散到同一圈(直径 DOT_SIZE_MAX_PX)。
+    // 圆点(起点=终点、scale=1,退化为静态环淡入淡出;默认 layers=1 正常扩散)。
+    // 扩散终值:波纹环扩到灯边缘(终态直径 = dot),随当前 dot 大小成正比、永不超过窗口。
     let l = layers as CGFloat + 1.0;
     let inner_d = dot / l; // 最内层直径
     let o = dot_origin(dot) + (dot - inner_d) / 2.0; // 最内层在圆点内居中
@@ -550,9 +552,8 @@ fn add_ripple(view: &PillView, color: Color, period_ms: u32, layers: u8) {
     // 环视图自身坐标圆心 = (inner_d/2, inner_d/2)(环描边内切于 inner_d×inner_d bounds)。
     let c = inner_d / 2.0;
     let from_t = scale_about(c, c, 1.0);
-    // 扩散终值:波纹环扩到「信号灯最大半径」(DOT_SIZE_MAX_PX/2)处——即终态直径 = DOT_SIZE_MAX_PX,
-    // 与当前 dot 大小无关(固定最大半径)。scale = 终态直径 / inner_d = DOT_SIZE_MAX_PX/(dot/l)。
-    let to_t = scale_about(c, c, DOT_SIZE_MAX_PX as CGFloat * l / dot);
+    // 扩散终值:波纹环扩到灯边缘(终态直径 = dot)。scale = 终态直径 / inner_d = dot/(dot/l) = l。
+    let to_t = scale_about(c, c, l);
 
     let mut rings = Vec::with_capacity(RIPPLE_RINGS);
     for i in 0..RIPPLE_RINGS {
@@ -577,7 +578,7 @@ fn ripple_anims(
     phase: f64,
 ) {
     let scale = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str("transform")));
-    let opacity = CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str("opacity")));
+    let opacity = CAKeyframeAnimation::animationWithKeyPath(Some(&NSString::from_str("opacity")));
     // valueWithCATransform3D 仍 unsafe(Additions trait 的 unsafe 约定)。
     let from_v = unsafe { NSValue::valueWithCATransform3D(from_t) };
     let to_v = unsafe { NSValue::valueWithCATransform3D(to_t) };
@@ -591,11 +592,25 @@ fn ripple_anims(
     scale.setRepeatCount(f32::INFINITY);
     layer.addAnimation_forKey(&scale, Some(&NSString::from_str("rippleScale")));
 
-    let from2 = NSNumber::numberWithDouble(0.85);
-    let to2 = NSNumber::numberWithDouble(0.0);
+    // opacity keyframe:前 12% 淡入 → 中段保持完全不透明(硬边)→ 末 15% 短淡出。
+    // 全程不透明主体让环边缘锐利;末尾淡到 0 掩盖 scale 单程回弹的瞬间跳变(无可见重置)。
+    let vals = NSArray::from_slice(&[
+        &*NSNumber::numberWithFloat(0.0),
+        &*NSNumber::numberWithFloat(1.0),
+        &*NSNumber::numberWithFloat(1.0),
+        &*NSNumber::numberWithFloat(0.0),
+    ]);
+    let times = NSArray::from_slice(&[
+        &*NSNumber::numberWithFloat(0.0),
+        &*NSNumber::numberWithFloat(0.12),
+        &*NSNumber::numberWithFloat(0.85),
+        &*NSNumber::numberWithFloat(1.0),
+    ]);
     unsafe {
-        opacity.setFromValue(Some(&from2));
-        opacity.setToValue(Some(&to2));
+        // setValues 接 NSArray<NSObject>;此处是 NSArray<NSNumber>,经 msg_send! 绕过编译期泛型
+        // (运行时 NSNumber 即 NSObject 子类,正确);setKeyTimes 类型匹配直接调。
+        let _: () = msg_send![&opacity, setValues: &*vals];
+        opacity.setKeyTimes(Some(&times));
     }
     opacity.setDuration(duration);
     opacity.setTimeOffset(phase);

@@ -9,15 +9,27 @@ use std::path::PathBuf;
 #[serde(rename_all = "snake_case")]
 pub enum AgentKind {
     Claude,
-    CodeBuddy,
+    CodeBuddy, // 暂不支持(实现保留,见 claude.rs);保留 variant 保 serde 向后兼容。
     OpenClaw,
+    Hermes,
     Trae, // 暂未实现;Accessibility 路线见 README 长期目标。
 }
 
 impl AgentKind {
-    /// 全部已实现的 agent(chip 顺序 = 默认启用顺序)。Trae 暂未实现,不含。
+    /// 全部已支持的 agent(chip 顺序 = 默认启用顺序)。CodeBuddy 暂不支持、Trae 暂未实现,均不含。
     /// `config::default_enabled_agents` / `Monitor::default` / 设置 chip 共用此单一事实源。
-    pub const IMPLEMENTED: [Self; 3] = [Self::Claude, Self::CodeBuddy, Self::OpenClaw];
+    pub const IMPLEMENTED: [Self; 3] = [Self::Claude, Self::OpenClaw, Self::Hermes];
+
+    /// 用户可见的全称(下拉会话列表等展示用)。变体名是简写,展示用全称(Claude → Claude Code)。
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::CodeBuddy => "CodeBuddy",
+            Self::OpenClaw => "OpenClaw",
+            Self::Hermes => "Hermes",
+            Self::Trae => "Trae",
+        }
+    }
 }
 
 /// 一个被发现的 agent 会话(状态已由 source 内部解析归一)。
@@ -36,7 +48,7 @@ pub struct AgentSession {
 /// 每个工具实现一个。
 ///
 /// - **poll 路径**:`discover()` 立即扫描并返回(当前实现)。
-/// - **push 路径**(hook / 文件监听,Phase 2/3):降低延迟、拿到精准的
+/// - **push 路径**(hook / 文件监听,未来路线):降低延迟、拿到精准的
 ///   needs-decision / error。届时扩展本 trait(见 README),核心循环不变。
 pub trait AgentSource: Send + Sync {
     fn kind(&self) -> AgentKind;

@@ -40,10 +40,10 @@ impl AgentStatus {
                 color: Color::Yellow,
                 period_ms: 1800,
             }, // 呼吸-慢速
-            Self::NeedsDeci => LightAnim::Pulse {
+            Self::NeedsDeci => LightAnim::Ripple {
                 color: Color::Amber,
-                period_ms: 1000,
-            }, // 慢闪(中速呼吸)
+                period_ms: 2500, // ≈0.4Hz,比 Done(3333)稍快
+            }, // 波纹(比 Done 稍快)
             Self::Error => LightAnim::Pulse {
                 color: Color::Red,
                 period_ms: 350,
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn light_mapping_matches_dev_doc() {
-        // Done=波纹绿 / Working=慢呼吸黄 / NeedsDeci=慢闪琥珀 / Error=快闪红 / Offline=常亮紫
+        // Done=波纹绿 / Working=慢呼吸黄 / NeedsDeci=波纹琥珀(比 Done 稍快)/ Error=快闪红 / Offline=常亮紫
         // 快闪·慢闪·呼吸 都是 Pulse(周期不同),无独立 Blink 动效。
         assert!(matches!(
             AgentStatus::Done.light(),
@@ -148,7 +148,7 @@ mod tests {
         ));
         assert!(matches!(
             AgentStatus::NeedsDeci.light(),
-            LightAnim::Pulse {
+            LightAnim::Ripple {
                 color: Color::Amber,
                 ..
             }
@@ -167,13 +167,17 @@ mod tests {
                 ..
             }
         ));
-        // 快闪(Error)周期 < 慢闪(NeedsDeci)周期 < 呼吸(Working)
-        let err = matches!(AgentStatus::Error.light(), LightAnim::Pulse { period_ms, .. } if period_ms < 600);
-        let nd = matches!(AgentStatus::NeedsDeci.light(), LightAnim::Pulse { period_ms: p, .. } if (600..1500).contains(&p));
-        assert!(err && nd);
+        // 快闪(Error)Pulse 周期最短;呼吸(Working)Pulse 周期 ≥1500。
+        assert!(
+            matches!(AgentStatus::Error.light(), LightAnim::Pulse { period_ms, .. } if period_ms < 600)
+        );
         assert!(
             matches!(AgentStatus::Working.light(), LightAnim::Pulse { period_ms, .. } if period_ms >= 1500)
         );
+        // NeedsDeci 波纹(2500)比 Done 波纹(3333)稍快。
+        let nd = matches!(AgentStatus::NeedsDeci.light(), LightAnim::Ripple { period_ms, .. } if period_ms < 3333);
+        let done = matches!(AgentStatus::Done.light(), LightAnim::Ripple { period_ms, .. } if period_ms == 3333);
+        assert!(nd && done);
     }
 
     #[test]

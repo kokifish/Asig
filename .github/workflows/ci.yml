@@ -51,6 +51,12 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # aarch64 交叉编译需要对应的 C 工具链（rusqlite bundled → libsqlite3-sys 编译 C）。
+      # ubuntu-latest 只自带 x86_64 gcc；aarch64 需额外安装。
+      - name: Install aarch64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: check (core, ${{ matrix.target }})
         run: cargo check -p agent-light-core --target ${{ matrix.target }}
 
