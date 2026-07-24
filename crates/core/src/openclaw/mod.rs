@@ -13,7 +13,7 @@
 //!   - 交互式:尾部 `role∈{user,toolResult}` 或 `stop_reason='toolUse'` → Working;
 //!   - `flow_runs.status='blocked'` 且 `ended_at IS NULL` → NeedsDeci(已结束的 blocked
 //!     投递失败终态不计);
-//!   - 近期(`ERROR_RECENT_MS` 内)failed/lost/subagent-error → Error;否则 Done。
+//!   - 近期(`ERROR_RECENT_MS` 内)failed/lost/subagent-error、或交互式尾部近期 `stopReason='error'` → Error;否则 Done。
 //!
 //! 每 agent 取一个观测态(Error > NeedsDeci > Working > Done);Error 过窗后报 Done,
 //! 由 `lib.rs` 的 sticky `transition()` 自动解锁。

@@ -366,7 +366,7 @@ fn build_group2(
     );
     row += 1;
 
-    // Agent to monitor(标签 + 多选 chip:Claude Code / CodeBuddy / OpenClaw;选中=监控,放不下换行)
+    // Agent to monitor(标签 + 多选 chip:Claude Code / OpenClaw / Hermes;选中=监控,放不下换行)
     add_text(
         pane,
         NSRect::new(

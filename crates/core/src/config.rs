@@ -29,7 +29,7 @@ pub enum Anim {
 /// 渲染层 draw_rect 据此画等距同心环;仅作用于浮窗圆点本体,菜单栏图标不分级。
 pub const GRADIENT_LAYERS_MIN: u8 = 0;
 pub const GRADIENT_LAYERS_MAX: u8 = 4;
-pub const GRADIENT_LAYERS_DEFAULT: u8 = 1;
+pub const GRADIENT_LAYERS_DEFAULT: u8 = 2;
 
 /// 单个状态的可配置样式:颜色 + 动画 + 周期 + 渐变层数。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -39,7 +39,7 @@ pub struct StateStyle {
     /// 动画周期(ms)。Steady 时无意义,置 0。
     pub period_ms: u32,
     /// 渐变层数(slider 值 0..=4,见 `status::GRADIENT_LAYERS_*`)。浮窗圆点据此画 layers+1 同心环;
-    /// 旧配置缺此字段 → 默认 1(两层渐变)。
+    /// 旧配置缺此字段 → 默认 2(三层渐变)。
     #[serde(default = "default_gradient_layers")]
     pub gradient_layers: u8,
 }
@@ -510,8 +510,8 @@ mod tests {
                 ..
             }
         ));
-        // 旧 styles 子对象缺 gradient_layers → serde 默认 1(两层渐变)
-        assert_eq!(s.style_for(StyleKey::Done).gradient_layers, 1);
+        // 旧 styles 子对象缺 gradient_layers → serde 默认 2(三层渐变)
+        assert_eq!(s.style_for(StyleKey::Done).gradient_layers, 2);
     }
 
     #[test]
@@ -533,8 +533,8 @@ mod tests {
 
     #[test]
     fn gradient_layers_clamped_and_default() {
-        // 默认 = 1(两层渐变)
-        assert_eq!(Settings::default().style_for(StyleKey::Done).layers(), 1);
+        // 默认 = 2(三层渐变)
+        assert_eq!(Settings::default().style_for(StyleKey::Done).layers(), 2);
         // 越界值(手改配置)经 StateStyle::layers() clamp 回 [0, 4]
         let mut s = Settings::default();
         s.styles.insert(

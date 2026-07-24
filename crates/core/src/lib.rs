@@ -98,17 +98,12 @@ impl Monitor {
         }
     }
 
-    /// 按 agent 列表装配 source。Trae 暂未实现,即便在列表里也不装配;
+    /// 按 agent 列表装配 source。CodeBuddy 暂不支持、Trae 暂未实现,即便在列表里也不装配;
     /// 某工具没装(`new()` 返回 None)→ 自然跳过。
     fn build_sources(kinds: &[AgentKind]) -> Vec<Box<dyn AgentSource>> {
         let mut sources: Vec<Box<dyn AgentSource>> = Vec::new();
         if kinds.contains(&AgentKind::Claude) {
             if let Some(s) = claude::ClaudeLikeSource::claude() {
-                sources.push(Box::new(s));
-            }
-        }
-        if kinds.contains(&AgentKind::CodeBuddy) {
-            if let Some(s) = claude::ClaudeLikeSource::codebuddy() {
                 sources.push(Box::new(s));
             }
         }

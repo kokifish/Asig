@@ -158,8 +158,9 @@ pub(super) fn collect(
 
     // 交互式会话合并 + 收集输出(含 sig,供 probe 诊断)。
     // user/toolResult 需 mtime 近 SESSION_RECENT_MS(防历史会话尾部永远 Working);
-    // stopReason='toolUse' 跳过 mtime 闸门(工具长间隙不算完成)。协调态(leaf+yield):
-    //   子 agent 全 ended(!run_active)或协调态超 SUBAGENT_WAIT_MS → 卡死 → Error。
+    // stopReason='toolUse' 跳过 mtime 闸门(工具长间隙不算完成)。stopReason='error'
+    //   (turn 失败,不进主库)近 SESSION_RECENT_MS → Error(补交互式缺失的 Error 出口)。
+    //   协调态(leaf+yield):子 agent 全 ended(!run_active)或协调态超 SUBAGENT_WAIT_MS → 卡死 → Error。
     let mut out: Vec<(String, AgentAcc, Option<SessionSignal>)> = Vec::with_capacity(agents.len());
     for aid in &agents {
         let sig = session_signals.get(aid).cloned();
@@ -172,6 +173,9 @@ pub(super) fn collect(
                 a.running = true;
             } else if s.ends_with_leaf && s.coordinating && (!a.run_active || stale) {
                 a.stuck = true; // 协调态卡死(B 子 agent 全 ended / A 超 30min)→ Error
+            } else if stop == Some("error") && fresh {
+                // 交互式 turn 失败(openclaw `stopReason="error"`,不进主库)→ Error;fresh 闸门防历史失败永红。
+                a.recent_err = true;
             }
         }
         out.push((aid.clone(), a, sig));

@@ -296,6 +296,34 @@ fn session_leaf_without_yield_is_done() {
 }
 
 #[test]
+fn session_error_stop_is_error() {
+    // 尾部 assistant + stopReason='error'(openclaw turn 失败,不进主库)→ Error。
+    let conn = db(|c| {
+        agent(c, "kotomi", NOW as i64);
+    });
+    let s = discover_from(
+        &conn,
+        NOW,
+        &HashMap::from([sig("assistant", Some("error"), 5_000)]),
+    );
+    assert_eq!(s[0].status, AgentStatus::Error);
+}
+
+#[test]
+fn session_error_stop_stale_is_done() {
+    // error 但过 SESSION_RECENT_MS(无新活动)→ 不再报 Error → Done(sticky 自动解锁)。
+    let conn = db(|c| {
+        agent(c, "kotomi", NOW as i64);
+    });
+    let s = discover_from(
+        &conn,
+        NOW,
+        &HashMap::from([sig("assistant", Some("error"), 6 * 60 * 1000)]),
+    );
+    assert_eq!(s[0].status, AgentStatus::Done);
+}
+
+#[test]
 fn running_task_is_working() {
     let conn = db(|c| {
         agent(c, "main", NOW as i64);
