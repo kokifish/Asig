@@ -8,13 +8,15 @@ use agent_light_core::{
 };
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
-use objc2::{ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+use objc2::{
+    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
+};
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSApplicationDelegate, NSEventType, NSScrollView, NSStatusItem, NSView,
-    NSWindow, NSWindowDelegate,
+    NSAlert, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSEventType,
+    NSScrollView, NSStatusItem, NSView, NSWindow, NSWindowDelegate,
 };
 use objc2_core_foundation::CGFloat;
-use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSSize, NSString, NSTimer};
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString, NSTimer};
 use std::collections::HashMap;
 
 use crate::overlay::PillView;
@@ -151,6 +153,16 @@ define_class!(
                 let w = crate::settings::build(self);
                 *self.ivars().settings_window.borrow_mut() = Some(w);
             }
+            // 打开设置窗期间切 regular:Asig 本是 accessory 菜单栏 app(LSUIElement,不占 Dock /
+            // 不在 Cmd+Tab 切换器);切 regular 后出现在 Dock + Cmd+Tab + 主菜单栏,可正常窗口切换。
+            // 关闭时由 windowWillClose: 切回 accessory。
+            let mtm = MainThreadMarker::new().expect("openSettings 须主线程");
+            let app = NSApplication::sharedApplication(mtm);
+            let _: Bool = unsafe {
+                msg_send![&app, setActivationPolicy: NSApplicationActivationPolicy::Regular]
+            };
+            // 首次建最小主菜单(App 菜单系统补 Quit ⌘Q + File 菜单 Close ⌘W)。
+            crate::menu::ensure_main_menu(self.ivars().settings.borrow().lang);
             if let Some(w) = self.ivars().settings_window.borrow().as_ref() {
                 crate::settings::show(w);
             }
@@ -171,6 +183,19 @@ define_class!(
             let on = state == 1;
             *self.ivars().click_through.borrow_mut() = on;
             self.apply_click_through();
+        }
+
+        /// General「全屏自动隐藏」开关 action。改完存盘 + 即时切换浮窗 collectionBehavior:
+        /// on → Managed(不进全屏 Space,全屏自动隐藏 + 不打断菜单栏);off → CanJoinAllSpaces(跨 Space)。
+        #[unsafe(method(toggleHideInFullscreen:))]
+        fn toggle_hide_in_fullscreen(&self, sender: *mut NSObject) {
+            let state: i64 = unsafe { msg_send![sender, state] };
+            let on = state == 1;
+            self.ivars().settings.borrow_mut().hide_in_fullscreen = on;
+            self.ivars().settings.borrow().save();
+            if let Some(w) = self.ivars().overlay_window.borrow().as_ref() {
+                crate::overlay::set_hide_in_fullscreen(w, on);
+            }
         }
 
         /// 设置面板「浮窗灯大小」滑块 action;同步刷新右侧 `xx px` 标签。
@@ -367,6 +392,36 @@ define_class!(
             self.rebuild_settings();
         }
 
+        /// General 标题「重置」action:把本页 General 字段(灯大小/轮询/主题/agent/通知/点击穿透)
+        /// 恢复默认,不动语言与各状态样式(无确认,参照 state pane 的 reset)。
+        #[unsafe(method(resetGeneral:))]
+        fn reset_general(&self, _sender: *mut NSObject) {
+            {
+                let mut s = self.ivars().settings.borrow_mut();
+                let d = Settings::default();
+                s.dot_size = d.dot_size;
+                s.poll_interval_ms = d.poll_interval_ms;
+                s.theme = d.theme;
+                s.enabled_agents = d.enabled_agents;
+                s.notify_on = d.notify_on;
+                s.hide_in_fullscreen = d.hide_in_fullscreen;
+            }
+            *self.ivars().click_through.borrow_mut() = true; // 默认点击穿透
+            self.ivars().settings.borrow().save();
+            // 重应用:灯大小 + 点击穿透 + 主题 + tick 重排
+            let dot = self.ivars().settings.borrow().dot_size;
+            if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
+                crate::overlay::set_size(view, dot);
+            }
+            self.apply_click_through();
+            crate::overlay::apply_theme(self.ivars().settings.borrow().theme);
+            let ms = self.ivars().settings.borrow().poll_interval_ms;
+            crate::tray::reschedule(self, ms as f64 / 1000.0);
+            self.rebuild_settings();
+            let snap = self.snap();
+            self.render(&snap);
+        }
+
         /// 侧栏 tab / 关于图标点击:切换右侧 pane。tag = pane id(0=常规 … 7=关于)。
         #[unsafe(method(switchSettingsTab:))]
         fn switch_settings_tab(&self, sender: *mut NSObject) {
@@ -386,8 +441,9 @@ define_class!(
             }
             *self.ivars().settings_selected.borrow_mut() = new;
             crate::settings::update_selection(self, new);
-            // documentView 高度 = 新 pane 的 content_h(动态,每页独立滚动语义),并滚到顶
-            // (避免残留上一 pane 的滚动位置)。flipped doc 下 bounds origin y=0 即顶。
+            // documentView 高度 = max(clip 可视高, 新 pane content_h),并滚到顶(避免残留上一
+            // pane 的滚动位置)。取 max 而非纯 content_h:doc 矮于 clip 时 NSClipView 对翻转短文档
+            // 的顶部锚定随 doc 高漂移,致各 pane 内容顶部不对齐(见 settings::set_doc_height)。
             let new_h = self
                 .ivars()
                 .settings_pane_heights
@@ -396,14 +452,19 @@ define_class!(
                 .copied()
                 .unwrap_or(crate::settings::H);
             if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
-                if let Some(doc) = scroll.documentView() {
-                    let df: NSRect = unsafe { msg_send![&doc, frame] };
-                    let _: () =
-                        unsafe { msg_send![&doc, setFrameSize: NSSize::new(df.size.width, new_h)] };
-                }
-                let cv = scroll.contentView();
-                let _: () = unsafe { msg_send![&cv, setBoundsOrigin: NSPoint::new(0.0, 0.0)] };
+                crate::settings::set_doc_height(scroll, new_h);
             }
+            // 滚顶推到下一 runloop:doc.setFrameSize 触发 NSScrollView 的 layout pass
+            // (reflectScrolledClippedView)会覆盖同步 setBoundsOrigin,performSelector afterDelay:0
+            // 在 layout commit 后执行(见 scrollSettingsToTop:),根治切 tab 时 content 顶部漂移。
+            let _: () = unsafe {
+                msg_send![
+                    self,
+                    performSelector: sel!(scrollSettingsToTop:),
+                    withObject: std::ptr::null_mut::<NSObject>(),
+                    afterDelay: 0.0
+                ]
+            };
         }
 
         /// 常规页「轮询间隔」下拉 action。改完即时重排 tick 定时器。
@@ -492,6 +553,19 @@ define_class!(
         #[unsafe(method(noop:))]
         fn noop(&self, _sender: *mut NSObject) {}
 
+        /// 把设置窗右区内容滚到顶(clipView setBoundsOrigin=(0,0);flipped doc 下即顶部)。
+        /// 单独成方法是为了让调用方用 performSelector:withObject:afterDelay:0 异步触发——
+        /// 同步 setBoundsOrigin 会被 doc.setFrameSize 触发的 NSScrollView layout pass
+        /// (reflectScrolledClippedView)覆盖,导致切 tab / 初始时 content 顶部漂移。afterDelay:0
+        /// 推到下一轮 runloop,此时 layout 已 commit,setBoundsOrigin 稳得住,各 pane 顶部对齐。
+        #[unsafe(method(scrollSettingsToTop:))]
+        fn scroll_settings_to_top(&self, _sender: *mut NSObject) {
+            if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
+                let cv = scroll.contentView();
+                let _: () = unsafe { msg_send![&cv, setBoundsOrigin: NSPoint::new(0.0, 0.0)] };
+            }
+        }
+
         /// Settings 窗口尺寸变化:按右区 documentView 新宽度重排所有 state pane 的色块
         /// (固定间距 flow——宽度变时自动换行 / 很宽时合并为 1 行,色块间距恒定;
         /// card 高度也随之按行数重算)。其余 pane 靠 autoresizing 自适应宽度。
@@ -514,6 +588,30 @@ define_class!(
             for c in controls.values() {
                 crate::settings::layout_state_pane(c, pane_w);
             }
+            // 窗口变高 → clip 可视高变大:重定 doc 高 = max(新 clip 高, 当前 pane content_h),
+            // 否则原本填满 clip 的 doc 可能又矮于新 clip,重新触发短文档锚定漂移(见 set_doc_height)。
+            let sel = *self.ivars().settings_selected.borrow();
+            let ch = self
+                .ivars()
+                .settings_pane_heights
+                .borrow()
+                .get(&sel)
+                .copied()
+                .unwrap_or(crate::settings::H);
+            if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
+                crate::settings::set_doc_height(scroll, ch);
+            }
+        }
+
+        /// 设置窗即将关闭:切回 accessory(LSUIElement 默认),退回纯菜单栏(不占 Dock / 不在 Cmd+Tab)。
+        /// AppDelegate 仅被设为设置窗的 window delegate,故本回调只由设置窗触发,无需判断 object。
+        #[unsafe(method(windowWillClose:))]
+        fn window_will_close(&self, _notif: *mut NSObject) {
+            let mtm = MainThreadMarker::new().expect("windowWillClose 须主线程");
+            let app = NSApplication::sharedApplication(mtm);
+            let _: Bool = unsafe {
+                msg_send![&app, setActivationPolicy: NSApplicationActivationPolicy::Accessory]
+            };
         }
     }
 

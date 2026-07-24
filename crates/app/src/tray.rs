@@ -36,13 +36,7 @@ pub fn set_light(item: &NSStatusItem, anim: &LightAnim, mtm: MainThreadMarker) {
     button.setImage(Some(&img));
 }
 
-/// 启动 tick 定时器:间隔取自设置(默认 3s)。timer 存 ivars,以便运行时按新间隔重排。
-pub fn schedule_tick(delegate: &Retained<AppDelegate>) {
-    let interval = delegate.ivars().settings.borrow().poll_interval_ms as f64 / 1000.0;
-    reschedule(delegate, interval);
-}
-
-/// 重排 tick 定时器:作废旧 timer、按新间隔建新的(轮询间隔改动后调用)。
+/// 重排 tick 定时器:作废旧 timer、按新间隔建新的。启动(取设置的默认间隔)与轮询间隔改动共用。
 pub fn reschedule(delegate: &AppDelegate, interval: f64) {
     if let Some(old) = delegate.ivars().tick_timer.borrow_mut().take() {
         old.invalidate();

@@ -1,50 +1,22 @@
-//! State pane 控件集合类型 + 按窗宽重排 + 按样式/Agent 状态刷新。
+//! State pane 按窗宽重排(色块 flow)+ 按样式刷新控件。`StateControls` 类型定义在 `pane_state`。
 
-use objc2::msg_send;
-use objc2::rc::Retained;
-use objc2_app_kit::{NSBox, NSButton, NSSlider, NSTextField};
+use objc2_app_kit::{NSControlStateValueOff, NSControlStateValueOn, NSSlider, NSTextField};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
-use agent_light_core::{Anim, StateStyle, StyleKey};
+use agent_light_core::{Anim, StateStyle};
 
 use crate::overlay::swatch_image;
 
-use super::tags::{
+use super::consts::{
     ANIM_ORDER, CARD_BOT_PAD, CARD_TOP_PAD, COLOR_GAP, COLOR_ORDER, CONTENT_PAD_X, HEADER_GAP,
-    ROW_H, SPEED_MAX, SPEED_MIN, SWATCH_D, TOP_INSET, hz_of,
+    ROW_H, SPEED_MAX, SPEED_MIN, SWATCH_D, TOP_INSET,
 };
-
-/// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
-pub struct StateControls {
-    pub key: StyleKey,
-    /// label 列宽(build 时按 state 5 个 label 自适应测一次;layout 读它,避免每次重测)。
-    pub lw: CGFloat,
-    /// pane 实际内容高(build 时按初始宽度算定;pane 高不随窗变 autoresizing=2)。
-    /// windowDidResize 重排时据它定 header/card 的 y(而非读 pane frame —— 后者虽等价,但
-    /// 缓存避免每次 msg_send)。宽度变 card 行数变 → card_h 变,若 card 超出 pane 高则出滚动条。
-    pub pane_h: CGFloat,
-    pub card: Retained<NSBox>,
-    pub color: Vec<Retained<NSButton>>,
-    pub color_lbl: Retained<NSTextField>,
-    pub anim: Vec<Retained<NSButton>>,
-    pub anim_lbl: Retained<NSTextField>,
-    pub speed: Retained<NSSlider>,
-    pub speed_lbl: Retained<NSTextField>,
-    pub speed_label: Retained<NSTextField>,
-    /// 渐变层数(整数拉杆 0..=4)+ 标签 + 右侧实时值。仅作用于浮窗圆点本体。
-    pub gradient: Retained<NSSlider>,
-    pub gradient_lbl: Retained<NSTextField>,
-    pub gradient_label: Retained<NSTextField>,
-    /// DoneNotif 专属:持续时间(秒)拉杆 + 标签 + 右侧 `xx s` 实时值。其余状态为 None。
-    pub duration: Option<Retained<NSSlider>>,
-    pub duration_lbl: Option<Retained<NSTextField>>,
-    pub duration_label: Option<Retained<NSTextField>>,
-}
+use super::pane_state::StateControls;
+use super::tags::hz_of;
 
 /// 按 pane 宽度重排 state pane:card + 色块(固定间距 flow,行数随宽度)+ Anim/Speed/label。
 /// build 与 windowDidResize 都调 —— 宽度变时色块自动换行 / 合并到 1 行,间距始终固定。
-/// pane 高取 `c.pane_h`(build 时按初始宽度算定,pane 高不随窗变 autoresizing=2)。
 pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
     let col_w = pane_w - CONTENT_PAD_X * 2.0;
     let x0 = CONTENT_PAD_X;
@@ -57,7 +29,7 @@ pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
     let per_row = (((cw + COLOR_GAP) / step).floor() as usize).max(1);
     let color_rows = COLOR_ORDER.len().div_ceil(per_row);
     let color_h = color_rows as CGFloat * step;
-    let extra = if c.key == StyleKey::DoneNotif {
+    let extra = if c.key == agent_light_core::StyleKey::DoneNotif {
         ROW_H
     } else {
         0.0
@@ -137,10 +109,11 @@ pub fn refresh_state_controls(c: &StateControls, style: StateStyle) {
     }
     for (i, btn) in c.anim.iter().enumerate() {
         let on = style.anim == ANIM_ORDER[i];
-        // setState 取 NSControlStateValue enum;用裸值 1/0 表 on/off,保留 msg_send!。
-        unsafe {
-            let _: () = msg_send![btn, setState: if on { 1i64 } else { 0 }];
-        }
+        btn.setState(if on {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        });
     }
     let hz = if steady {
         1.0
