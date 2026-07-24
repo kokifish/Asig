@@ -11,7 +11,7 @@ jobs:
   core-fast:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust (stable) + rustfmt + clippy
         uses: dtolnay/rust-toolchain@stable
@@ -41,7 +41,7 @@ jobs:
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust (stable) + cross target
         uses: dtolnay/rust-toolchain@stable
@@ -64,7 +64,7 @@ jobs:
     # app 壳依赖 objc2/AppKit,只能在 macOS 上编译/测试。
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust (stable) + rustfmt + clippy
         uses: dtolnay/rust-toolchain@stable
@@ -102,7 +102,7 @@ jobs:
   deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   # 依赖卫生:cargo-machete 查未用依赖(fail)、cargo-outdated 查过时依赖(advisory,不 fail)。
@@ -110,7 +110,7 @@ jobs:
   deps-hygiene:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
