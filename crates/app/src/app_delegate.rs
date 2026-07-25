@@ -9,7 +9,7 @@ use agent_light_core::{
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
 use objc2::{
-    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel,
+    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send, sel,
 };
 use objc2_app_kit::{
     NSAlert, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSEventType,
@@ -21,6 +21,14 @@ use std::collections::HashMap;
 
 use crate::overlay::PillView;
 use crate::panel::Popover;
+
+/// 打开 GitHub 仓库 URL(底部「访问官网」图标)。NSWorkspace.shared.openURL。
+fn open_website() {
+    let workspace: *mut NSObject = unsafe { msg_send![class!(NSWorkspace), sharedWorkspace] };
+    let s = NSString::from_str(crate::settings::GITHUB_URL);
+    let url: *mut NSObject = unsafe { msg_send![class!(NSURL), URLWithString: &*s] };
+    let _: () = unsafe { msg_send![workspace, openURL: url] };
+}
 
 /// AppDelegate 的实例变量(方法只能拿 &self,故用 RefCell)。
 pub struct AppIvars {
@@ -441,6 +449,11 @@ define_class!(
         #[unsafe(method(switchSettingsTab:))]
         fn switch_settings_tab(&self, sender: *mut NSObject) {
             let new: i64 = unsafe { msg_send![sender, tag] };
+            if new == 8 {
+                // 底部「访问官网」图标(tag 8)→ 打开 GitHub 仓库(非切 pane)。
+                open_website();
+                return;
+            }
             let old = *self.ivars().settings_selected.borrow();
             if old == new || !(0..8).contains(&new) {
                 return;

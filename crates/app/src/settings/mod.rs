@@ -50,11 +50,11 @@ mod strings;
 mod tags;
 
 // ---- 外部(crate::settings::)所需的 pub use 重导出(收敛到 app 层实际引用)----
-pub(crate) use consts::H;
 pub use consts::{
     AGENT_KIND_ORDER, AGENT_OFF, ANIM_OFF, ANIM_ORDER, COLOR_OFF, COLOR_ORDER, CONTENT_W,
     LANG_EN_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, POLL_PRESETS_MS, SIZE_LABEL_TAG, THEME_OFF,
 };
+pub(crate) use consts::{GITHUB_URL, H};
 pub use glass::update_selection;
 pub use layout::{layout_state_pane, refresh_duration, refresh_state_controls};
 pub use pane_state::StateControls;
@@ -284,7 +284,7 @@ fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &String
     // 底部单色 SF Symbol 图标行(L→R:关于 functional / 其余占位禁用)
     let icons: [(&str, i64, bool); 5] = [
         ("info.circle", TAB_ABOUT, true),
-        ("globe", 8, false),
+        ("globe", 8, true),
         ("ant", 9, false),
         ("heart", 10, false),
         ("power", 11, false),

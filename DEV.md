@@ -219,7 +219,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - 结构：状态 tab = 当前色圆点 + 名称；General tab = 齿轮（template SF Symbol）+ 名称。
   - Color: 除状态色圆点外，其余（齿轮、文字）均黑白风 / macOS 默认暗色，不用彩色。
   - 选中态：选中 tab = 实心强调色圆角块（`controlAccentColor`，cornerRadius 8，连续圆角 squircle），选中文字（及 General 齿轮）转白；状态色圆点保持彩色。**不用文字前缀（无 ▸ 三角形）**，与 stats.app 一致（玻璃/vibrancy 材质的选中态在玻璃侧栏上不可辨，故用实心强调色）。
-- Left Side Buttons: 关于(About)、访问官网、调试、捐赠、退出Asig（左→右）。除「关于」外均为占位禁用按钮(留待实现)。
+- Left Side Buttons: 关于(About)、访问官网、调试、捐赠、退出Asig（左→右）。「关于」「访问官网」可用;调试/捐赠/退出 为占位禁用按钮(留待实现)。
   - Color: 均黑白风 / macOS 默认暗色（单色 SF Symbol 图标），不用彩色。
 
 #### General Settings Pane
