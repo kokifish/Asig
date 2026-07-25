@@ -235,7 +235,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - Language/语言: 单行单选列表: English, 中文。默认中文
   - Reset All/重置所有: 按钮，点击后会弹出确认对话框。重制为默认值，包括语言和状态显示的配置，全部自定义内容都恢复为默认值。在该group下居中
 - Group-2:
-  - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围20-80px，默认25px
+  - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围20-80px，默认50px
   - Click-through/点击穿透(取消可拖动): 开关。默认开。运行时态,不持久化(每次启动回 true)
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
   - Agent to monitor/监控的 Agent: 多选块(Claude Code / OpenClaw / Hermes 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`

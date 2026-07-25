@@ -192,7 +192,7 @@ pub const DONE_NOTIF_DURATION_DEFAULT_S: u32 = 30;
 /// clamp 到此范围,默认值兜底 —— slider 与 clamp 共用同一组常量,避免边界两处分写而漂移。
 pub const DOT_SIZE_MIN_PX: u32 = 20;
 pub const DOT_SIZE_MAX_PX: u32 = 80;
-pub const DOT_SIZE_DEFAULT_PX: u32 = 25;
+pub const DOT_SIZE_DEFAULT_PX: u32 = 50;
 
 /// 全部设置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -530,7 +530,7 @@ mod tests {
         let s = Settings::default();
         let text = serde_json::to_string(&s).unwrap();
         let back: Settings = serde_json::from_str(&text).unwrap();
-        assert_eq!(back.dot_size, 25);
+        assert_eq!(back.dot_size, DOT_SIZE_DEFAULT_PX);
         assert_eq!(back.poll_interval_ms, 3000);
         assert!(back.hide_in_fullscreen); // 默认全屏自动隐藏浮窗
         assert_eq!(back.theme, Theme::FollowSystem); // 默认主题序列化往返
