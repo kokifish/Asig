@@ -16,3 +16,6 @@ uv.lock
 
 # 打包产物
 /build
+
+# 内部文档(不入库)
+/docs/PROMOTION.md
