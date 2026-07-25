@@ -287,7 +287,7 @@ fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &String
         ("globe", 8, true),
         ("ant", 9, false),
         ("heart", 10, false),
-        ("power", 11, false),
+        ("power", 11, true),
     ];
     let icon_w = (consts::SIDEBAR_PANE_W - 16.0) / icons.len() as CGFloat;
     for (i, (sym, tag, enabled)) in icons.iter().enumerate() {

@@ -30,6 +30,12 @@ fn open_website() {
     let _: () = unsafe { msg_send![workspace, openURL: url] };
 }
 
+/// 完全退出 Asig(NSApp.terminate)。quit: action 与底部「退出」图标共用。
+fn quit_app() {
+    let mtm = MainThreadMarker::new().expect("quit 须主线程");
+    NSApplication::sharedApplication(mtm).terminate(None);
+}
+
 /// AppDelegate 的实例变量(方法只能拿 &self,故用 RefCell)。
 pub struct AppIvars {
     pub monitor: RefCell<Monitor>,
@@ -179,9 +185,7 @@ define_class!(
         /// "退出"按钮 / 菜单 action。
         #[unsafe(method(quit:))]
         fn quit(&self, _sender: *mut NSObject) {
-            let mtm = MainThreadMarker::new().expect("quit 须在主线程");
-            let app = NSApplication::sharedApplication(mtm);
-            app.terminate(None);
+            quit_app();
         }
 
         /// 设置面板「浮窗点击穿透」复选框 action。sender=复选框,读其 state。
@@ -452,6 +456,11 @@ define_class!(
             if new == 8 {
                 // 底部「访问官网」图标(tag 8)→ 打开 GitHub 仓库(非切 pane)。
                 open_website();
+                return;
+            }
+            if new == 11 {
+                // 底部「退出」图标(tag 11)→ 完全退出 Asig(与 quit: 同走 NSApp.terminate)。
+                quit_app();
                 return;
             }
             let old = *self.ivars().settings_selected.borrow();
