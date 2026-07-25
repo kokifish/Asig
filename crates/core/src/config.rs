@@ -32,7 +32,7 @@ pub const GRADIENT_LAYERS_MAX: u8 = 4;
 pub const GRADIENT_LAYERS_DEFAULT: u8 = 2;
 
 /// 单个状态的可配置样式:颜色 + 动画 + 周期 + 渐变层数。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateStyle {
     pub color: Color,
     pub anim: Anim,
@@ -43,6 +43,10 @@ pub struct StateStyle {
     #[serde(default = "default_gradient_layers")]
     pub gradient_layers: u8,
 }
+
+/// 用户从常亮(Steady)切到动态动画时,若周期为 0 补的默认周期(ms)。仅 `StateStyle::set_anim` 用;
+/// 渲染层 `to_light` 另有下限保护(Pulse≥200 / Ripple≥400),故此值安全。
+pub const DEFAULT_PERIOD_MS: u32 = 1000;
 
 impl StateStyle {
     /// 反向:从内核硬编码的 `LightAnim` 构造(用于派生 5 个真实状态的默认样式)。
@@ -81,6 +85,14 @@ impl StateStyle {
     pub fn layers(self) -> u8 {
         self.gradient_layers
             .clamp(GRADIENT_LAYERS_MIN, GRADIENT_LAYERS_MAX)
+    }
+
+    /// 设动画;离开常亮(Steady)且当前无周期时,补默认周期(用户从常亮切到动态有个合理起点)。
+    pub fn set_anim(&mut self, anim: Anim) {
+        self.anim = anim;
+        if anim != Anim::Steady && self.period_ms == 0 {
+            self.period_ms = DEFAULT_PERIOD_MS;
+        }
     }
 }
 
@@ -286,6 +298,33 @@ impl Settings {
     /// [DONE_NOTIF_DURATION_MIN_S, DONE_NOTIF_DURATION_MAX_S]。关联函数(无 self)。
     pub fn done_notif_clamp(v: u32) -> u32 {
         v.clamp(DONE_NOTIF_DURATION_MIN_S, DONE_NOTIF_DURATION_MAX_S)
+    }
+
+    /// Hz → 动画周期(ms):Speed slider 用(2Hz→500ms / 0.5Hz→2000ms)。关联函数(无 self);
+    /// 下限 1ms 防除零/极值。渲染层 `to_light` 另有下限保护。
+    pub fn hz_to_period_ms(hz: f64) -> u32 {
+        (1000.0 / hz).round().max(1.0) as u32
+    }
+
+    /// 重置某状态样式为内置默认(覆盖式,非填补)。DoneNotif 一并回默认持续时间 ——
+    /// 它虽是独立字段,但归 DoneNotif 状态页,reset 该页应连带。
+    pub fn reset_style(&mut self, key: StyleKey) {
+        self.styles.insert(key, key.default_style());
+        if key == StyleKey::DoneNotif {
+            self.done_notif_duration_s = DONE_NOTIF_DURATION_DEFAULT_S;
+        }
+    }
+
+    /// 重置 General 页字段(灯大小/轮询/主题/agent/通知/全屏隐藏)为默认。**不动**语言、各状态
+    /// 样式、DoneNotif 时长、浮窗位置、开机自启(归各自页面 / 持久态)。默认值取与 `Default`
+    /// 同源的常量/函数,保持单一事实源(不重新构造整个 Settings,免无谓 HashMap 分配)。
+    pub fn reset_general_fields(&mut self) {
+        self.dot_size = DOT_SIZE_DEFAULT_PX;
+        self.poll_interval_ms = default_poll_interval_ms();
+        self.theme = Theme::default();
+        self.enabled_agents = default_enabled_agents();
+        self.notify_on = default_notify_on();
+        self.hide_in_fullscreen = default_hide_in_fullscreen();
     }
 
     /// 某个键对应的样式。配置缺失时回退到内置默认。
@@ -670,5 +709,69 @@ mod tests {
             Err(LoadError::Parse(_))
         ));
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn hz_to_period_ms_rounds_and_clamps() {
+        assert_eq!(Settings::hz_to_period_ms(2.0), 500);
+        assert_eq!(Settings::hz_to_period_ms(0.5), 2000);
+        assert!(Settings::hz_to_period_ms(1e9) >= 1); // 极高频不归零
+    }
+
+    #[test]
+    fn set_anim_keeps_period_or_fills_default() {
+        let mut st = StyleKey::Done.default_style();
+        let p = st.period_ms;
+        st.set_anim(Anim::Pulse); // 已有周期 → 不覆盖
+        assert_eq!(st.period_ms, p);
+        st.period_ms = 0;
+        st.set_anim(Anim::Ripple); // 0 周期切动态 → 补默认
+        assert_eq!(st.period_ms, DEFAULT_PERIOD_MS);
+        st.period_ms = 0;
+        st.set_anim(Anim::Steady); // 切常亮 → 不补
+        assert_eq!(st.period_ms, 0);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn reset_style_restores_default_and_done_notif_duration() {
+        let mut s = Settings::default();
+        s.styles.insert(
+            StyleKey::Done,
+            StateStyle {
+                color: Color::Red,
+                anim: Anim::Steady,
+                period_ms: 0,
+                gradient_layers: GRADIENT_LAYERS_DEFAULT,
+            },
+        );
+        s.reset_style(StyleKey::Done);
+        assert_eq!(s.style_for(StyleKey::Done), StyleKey::Done.default_style());
+        s.done_notif_duration_s = 12;
+        s.reset_style(StyleKey::DoneNotif); // 连带持续时间
+        assert_eq!(s.done_notif_duration_s, DONE_NOTIF_DURATION_DEFAULT_S);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn reset_general_fields_is_partial() {
+        let mut s = Settings::default();
+        s.dot_size = 60;
+        s.poll_interval_ms = 5000;
+        s.theme = Theme::Dark;
+        s.enabled_agents = vec![];
+        s.notify_on = vec![];
+        s.hide_in_fullscreen = false;
+        s.lang = Lang::En; // 非本页字段,应保持
+        s.done_notif_duration_s = 10;
+        s.reset_general_fields();
+        assert_eq!(s.dot_size, DOT_SIZE_DEFAULT_PX);
+        assert_eq!(s.poll_interval_ms, default_poll_interval_ms());
+        assert_eq!(s.theme, Theme::FollowSystem);
+        assert_eq!(s.enabled_agents, AgentKind::IMPLEMENTED.to_vec());
+        assert_eq!(s.notify_on, default_notify_on());
+        assert!(s.hide_in_fullscreen);
+        assert_eq!(s.lang, Lang::En); // 未动
+        assert_eq!(s.done_notif_duration_s, 10); // 未动
     }
 }

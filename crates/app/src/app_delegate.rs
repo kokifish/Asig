@@ -3,8 +3,8 @@
 use std::cell::RefCell;
 
 use agent_light_core::{
-    AgentStatus, Anim, Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN,
-    Lang, LightAnim, LightPosition, Monitor, Settings, Snapshot, StateStyle, StyleKey, Theme,
+    AgentStatus, Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN, Lang,
+    LightAnim, LightPosition, Monitor, Settings, Snapshot, StateStyle, StyleKey, Theme,
 };
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
@@ -291,12 +291,7 @@ define_class!(
                 return;
             }
             let anim = crate::settings::ANIM_ORDER[i];
-            self.edit_style(key, |st| {
-                st.anim = anim;
-                if st.anim != Anim::Steady && st.period_ms == 0 {
-                    st.period_ms = 1000; // 离开常亮时给个默认周期
-                }
-            });
+            self.edit_style(key, |st| st.set_anim(anim));
             self.refresh_state(key);
             self.settings_changed();
         }
@@ -309,7 +304,7 @@ define_class!(
                 return;
             };
             let hz: f64 = unsafe { msg_send![sender, doubleValue] };
-            let period_ms = (1000.0 / hz).round().max(1.0) as u32;
+            let period_ms = Settings::hz_to_period_ms(hz);
             self.edit_style(key, |st| st.period_ms = period_ms);
             if let Some(c) = self.ivars().state_controls.borrow().get(&key) {
                 unsafe {
@@ -371,14 +366,7 @@ define_class!(
             let Some((key, _)) = crate::settings::parse_control_tag(tag) else {
                 return;
             };
-            {
-                let mut s = self.ivars().settings.borrow_mut();
-                s.styles.insert(key, key.default_style());
-                // DoneNotif 的「持续时间」也是该状态配置,reset 一并回默认。
-                if key == StyleKey::DoneNotif {
-                    s.done_notif_duration_s = agent_light_core::DONE_NOTIF_DURATION_DEFAULT_S;
-                }
-            }
+            self.ivars().settings.borrow_mut().reset_style(key);
             self.refresh_state(key);
             self.settings_changed();
         }
@@ -433,16 +421,7 @@ define_class!(
         /// 恢复默认,不动语言与各状态样式(无确认,参照 state pane 的 reset)。
         #[unsafe(method(resetGeneral:))]
         fn reset_general(&self, _sender: *mut NSObject) {
-            {
-                let mut s = self.ivars().settings.borrow_mut();
-                let d = Settings::default();
-                s.dot_size = d.dot_size;
-                s.poll_interval_ms = d.poll_interval_ms;
-                s.theme = d.theme;
-                s.enabled_agents = d.enabled_agents;
-                s.notify_on = d.notify_on;
-                s.hide_in_fullscreen = d.hide_in_fullscreen;
-            }
+            self.ivars().settings.borrow_mut().reset_general_fields();
             *self.ivars().click_through.borrow_mut() = true; // 默认点击穿透
             self.ivars().settings.borrow().save();
             // 重应用:灯大小 + 点击穿透 + 主题 + tick 重排
