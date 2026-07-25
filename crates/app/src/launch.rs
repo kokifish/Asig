@@ -1,13 +1,10 @@
-//! 开机自启动(LaunchAgent plist —— 零成本:不依赖 SMAppService、不需签名)。
+//! 开机自启动(LaunchAgent plist —— 零成本,不依赖 SMAppService、不需签名)。
 //!
-//! 为何不用 SMAppService:它要求 proper code signing(Developer ID,$99);未签名 / ad-hoc
-//! 签名的 app 调 `SMAppService.mainApp` 会抛 ObjC exception,foreign exception 跨 objc2
-//! msg_send 的 FFI 边界(“cannot unwind”)→ abort。LaunchAgent 走 launchd,不需签名,是
-//! 零成本 login item 的标准方案(Tauri autostart / Electron auto-launch 同款)。
-//!
-//! toggle on → 写 `~/Library/LaunchAgents/com.kokifish.asig.plist`(RunAtLoad=true),
-//! 下次登录 launchd 自动 `open` 启动 app bundle;toggle off → 删 plist。
-//! 注意:当次会话不立即启动,需重新登录/重启才生效(launchd 在登录时读 plist)。
+//! SMAppService 要 Developer ID($99);未签名 app 调它抛 ObjC exception,foreign exception
+//! 跨 objc2 msg_send FFI 边界("cannot unwind")→ abort。LaunchAgent 走 launchd,零成本可靠
+//! (Tauri autostart / Electron auto-launch 同款)。toggle on → 写
+//! ~/Library/LaunchAgents/com.kokifish.asig.plist(RunAtLoad=true),下次登录 launchd `open`
+//! 启动 app;toggle off → 删 plist(当次会话不立即启,需重新登录才生效)。
 
 use std::fs;
 use std::path::PathBuf;
@@ -27,25 +24,15 @@ fn plist_path() -> Option<PathBuf> {
     )
 }
 
-/// 当前 app bundle 路径(`NSBundle.mainBundle.bundlePath`)。决定 LaunchAgent 启动哪个 app。
+/// 当前 app bundle 路径(NSBundle.mainBundle.bundlePath)。
 fn app_bundle_path() -> Option<String> {
+    // mainBundle / bundlePath 返回 nil 时 objc 向 nil 发消息仍返回 nil,故只查 path。
     let bundle: *mut NSObject = unsafe { msg_send![class!(NSBundle), mainBundle] };
-    if bundle.is_null() {
-        return None;
-    }
     let path: *mut NSString = unsafe { msg_send![bundle, bundlePath] };
-    if path.is_null() {
-        return None;
-    }
-    Some(unsafe { (*path).to_string() })
+    (!path.is_null()).then(|| unsafe { (*path).to_string() })
 }
 
-/// LaunchAgent 总可用(不需签名、不依赖系统版本,只要 home 目录可写)。
-pub fn available() -> bool {
-    plist_path().is_some()
-}
-
-/// 注册开机自启:写 LaunchAgent plist。返回是否写入成功。
+/// 注册开机自启:写 LaunchAgent plist。
 pub fn register() -> bool {
     let (Some(plist), Some(app)) = (plist_path(), app_bundle_path()) else {
         return false;
@@ -72,11 +59,9 @@ pub fn register() -> bool {
 
 /// 注销开机自启:删 LaunchAgent plist。
 pub fn unregister() -> bool {
-    match plist_path() {
-        Some(p) => {
-            let _ = fs::remove_file(&p);
-            !p.exists()
-        }
-        None => false,
-    }
+    let Some(p) = plist_path() else {
+        return false;
+    };
+    let _ = fs::remove_file(&p);
+    !p.exists()
 }
