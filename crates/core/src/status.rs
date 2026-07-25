@@ -16,8 +16,10 @@ pub enum AgentStatus {
 }
 
 impl AgentStatus {
-    /// 聚合优先级(高者覆盖低者)。多会话压成一颗全局灯时用。
-    pub fn priority(self) -> u8 {
+    /// 全局聚合优先级(高者覆盖低者)。多会话压成一颗全局灯时用。
+    /// 注意:与 `claude::most_active::liveness_rank` 语义不同 —— 此处 Offline 优先级最高
+    /// (全局该报异常),后者按同 cwd 内活跃度排序(Offline 最不活跃)。
+    pub fn global_priority(self) -> u8 {
         match self {
             Self::Error => 5,
             Self::NeedsDeci => 4,
@@ -143,10 +145,10 @@ mod tests {
 
     #[test]
     fn priority_ordering() {
-        assert!(AgentStatus::Error.priority() > AgentStatus::NeedsDeci.priority());
-        assert!(AgentStatus::NeedsDeci.priority() > AgentStatus::Offline.priority());
-        assert!(AgentStatus::Offline.priority() > AgentStatus::Working.priority());
-        assert!(AgentStatus::Working.priority() > AgentStatus::Done.priority());
+        assert!(AgentStatus::Error.global_priority() > AgentStatus::NeedsDeci.global_priority());
+        assert!(AgentStatus::NeedsDeci.global_priority() > AgentStatus::Offline.global_priority());
+        assert!(AgentStatus::Offline.global_priority() > AgentStatus::Working.global_priority());
+        assert!(AgentStatus::Working.global_priority() > AgentStatus::Done.global_priority());
     }
 
     #[test]

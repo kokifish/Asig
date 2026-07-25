@@ -8,6 +8,6 @@ pub fn global_status(sessions: &[AgentSession]) -> AgentStatus {
     sessions
         .iter()
         .map(|s| s.status)
-        .max_by_key(|s| s.priority())
+        .max_by_key(|s| s.global_priority())
         .unwrap_or(AgentStatus::Offline)
 }

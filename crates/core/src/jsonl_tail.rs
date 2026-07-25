@@ -32,23 +32,22 @@ pub(crate) fn read_tail_lines(path: &Path, tail_bytes: u64) -> Option<Vec<serde_
     )
 }
 
+/// 测试 helper:在 temp 目录写一个 jsonl 文件,返回路径。jsonl_tail / claude 测试共用。
+#[cfg(test)]
+pub(crate) fn write_tmp(name: &str, lines: &[&str]) -> std::path::PathBuf {
+    use std::io::Write;
+    let p = std::env::temp_dir().join(format!("asig_test_{name}_{}.jsonl", std::process::id()));
+    let mut f = std::fs::File::create(&p).unwrap();
+    for l in lines {
+        writeln!(f, "{l}").unwrap();
+    }
+    drop(f);
+    p
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn write_tmp(name: &str, lines: &[&str]) -> std::path::PathBuf {
-        use std::io::Write;
-        let p = std::env::temp_dir().join(format!(
-            "asig_jsonl_tail_{name}_{}.jsonl",
-            std::process::id()
-        ));
-        let mut f = std::fs::File::create(&p).unwrap();
-        for l in lines {
-            writeln!(f, "{l}").unwrap();
-        }
-        drop(f);
-        p
-    }
 
     #[test]
     fn parses_events_in_order() {

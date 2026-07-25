@@ -194,9 +194,11 @@ fn group_status(
     best
 }
 
-/// 活跃度排序:NeedsDeci > Working > Done > Offline;返回更活跃者。
+/// 同 cwd 内活跃度排序:NeedsDeci/Error > Working > Done > Offline;返回更活跃者。
+/// 与 `AgentStatus::global_priority` 故意不同 —— 此处 Offline 视为最不活跃(崩溃的 bg 子进程
+/// 不该把整个 agent 拉成 Offline),后者 Offline 优先级最高(全局该报异常)。
 fn most_active(a: Option<AgentStatus>, b: AgentStatus) -> AgentStatus {
-    fn rank(st: AgentStatus) -> u8 {
+    fn liveness_rank(st: AgentStatus) -> u8 {
         match st {
             AgentStatus::NeedsDeci => 4,
             AgentStatus::Error => 4, // 出错也需关注;Claude source 不产生(OpenClaw 才有)
@@ -206,7 +208,7 @@ fn most_active(a: Option<AgentStatus>, b: AgentStatus) -> AgentStatus {
         }
     }
     match a {
-        Some(prev) if rank(prev) >= rank(b) => prev,
+        Some(prev) if liveness_rank(prev) >= liveness_rank(b) => prev,
         _ => b,
     }
 }
@@ -290,6 +292,7 @@ fn read_tail_signal(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jsonl_tail::write_tmp;
 
     fn pf(pid: u32, status: Option<&str>) -> SessionFile {
         pf_cwd(pid, status, None)
@@ -394,22 +397,10 @@ mod tests {
 
     // ---- read_tail_signal:transcript 尾部信号 ----
 
-    fn write_jsonl(name: &str, lines: &[&str]) -> std::path::PathBuf {
-        use std::io::Write;
-        let p =
-            std::env::temp_dir().join(format!("asig_claude_{name}_{}.jsonl", std::process::id()));
-        let mut f = std::fs::File::create(&p).unwrap();
-        for l in lines {
-            writeln!(f, "{l}").unwrap();
-        }
-        drop(f);
-        p
-    }
-
     #[test]
     fn read_tail_signal_user_after_end_turn_is_user() {
         // end_turn 后有 user(用户回了)→ "user"(Claude 处理中 → Working),不误判残留 end_turn
-        let p = write_jsonl(
+        let p = write_tmp(
             "user_after_end",
             &[
                 r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#,
@@ -423,7 +414,7 @@ mod tests {
     #[test]
     fn read_tail_signal_end_turn_when_last_is_end_turn() {
         // 最后是 assistant end_turn(等用户)→ "end_turn" → NeedsDeci
-        let p = write_jsonl(
+        let p = write_tmp(
             "end_last",
             &[
                 r#"{"type":"user","message":{"role":"user"}}"#,
@@ -436,7 +427,7 @@ mod tests {
 
     #[test]
     fn read_tail_signal_tool_use_is_tool_use() {
-        let p = write_jsonl(
+        let p = write_tmp(
             "tool",
             &[r#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#],
         );
