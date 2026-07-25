@@ -24,8 +24,8 @@ pub(crate) const SIDEBAR_INSET: CGFloat = 10.0;
 pub(crate) const SIDEBAR_PANE_W: CGFloat = SIDEBAR_W - 2.0 * SIDEBAR_INSET;
 pub(crate) const SIDEBAR_PANE_H: CGFloat = H - TOP_INSET - SIDEBAR_INSET;
 
-/// 关于页显示的仓库链接(占位,改成真实仓库)。
-pub(crate) const GITHUB_URL: &str = "https://github.com/koki/Asig";
+/// 关于页显示的仓库链接。
+pub(crate) const GITHUB_URL: &str = "https://github.com/kokifish/Asig";
 
 // ===== 业务顺序数组 =====
 pub const ANIM_ORDER: [Anim; 3] = [Anim::Steady, Anim::Pulse, Anim::Ripple];

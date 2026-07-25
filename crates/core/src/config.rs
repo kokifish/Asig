@@ -151,7 +151,11 @@ impl StyleKey {
                 period_ms: 450,
                 gradient_layers: GRADIENT_LAYERS_DEFAULT,
             },
-            other => StateStyle::from_light(other.status().unwrap().light()),
+            Self::Done => StateStyle::from_light(AgentStatus::Done.light()),
+            Self::Working => StateStyle::from_light(AgentStatus::Working.light()),
+            Self::NeedsDeci => StateStyle::from_light(AgentStatus::NeedsDeci.light()),
+            Self::Error => StateStyle::from_light(AgentStatus::Error.light()),
+            Self::Offline => StateStyle::from_light(AgentStatus::Offline.light()),
         }
     }
 }
@@ -224,6 +228,10 @@ pub struct Settings {
     /// 全屏(原生 + 非原生视频)时自动隐藏浮窗窗口。默认 true。serde 持久化。
     #[serde(default = "default_hide_in_fullscreen")]
     pub hide_in_fullscreen: bool,
+    /// 开机自启动(SMAppService,macOS 13+;旧系统运行时禁用开关)。默认 false。
+    /// 注册持久:用户开开关 → register(系统记住,重启自动登录);关 → unregister。
+    #[serde(default)]
+    pub launch_at_login: bool,
 }
 
 fn default_poll_interval_ms() -> u32 {
@@ -267,6 +275,7 @@ impl Default for Settings {
             enabled_agents: default_enabled_agents(),
             notify_on: default_notify_on(),
             hide_in_fullscreen: default_hide_in_fullscreen(),
+            launch_at_login: false,
         }
     }
 }
