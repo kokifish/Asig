@@ -58,12 +58,7 @@ impl HermesSource {
 
     /// 只读打开 state.db(WAL,不抢 gateway 写锁);失败 → None。
     fn connect(&self) -> Option<Connection> {
-        use rusqlite::OpenFlags;
-        Connection::open_with_flags(
-            self.db_path(),
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .ok()
+        crate::sys::open_readonly(&self.db_path())
     }
 }
 
@@ -83,7 +78,7 @@ impl AgentSource for HermesSource {
             log::warn!("hermes state.db 打不开: {}", self.db_path().display());
             return Vec::new();
         };
-        discover_from(&conn, now_ms(), active_agents)
+        discover_from(&conn, crate::sys::now_ms(), active_agents)
     }
 }
 
@@ -111,7 +106,6 @@ fn discover_from(conn: &Connection, now: u64, active_agents: u32) -> Vec<AgentSe
                 id: format!("Hermes:{}", r.session_id),
                 native_id: r.session_id.clone(),
                 cwd: r.cwd.clone().map(PathBuf::from),
-                project: None,
                 status,
                 label: Some(label_of(&r)),
             }
@@ -167,12 +161,4 @@ fn label_of(r: &db::SessionRow) -> String {
         }
     }
     r.session_id.chars().take(8).collect()
-}
-
-fn now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }

@@ -7,10 +7,9 @@ use objc2::rc::Retained;
 use objc2::runtime::Sel;
 use objc2::{MainThreadMarker, Message, msg_send, sel};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSBezelStyle, NSBox, NSBoxType, NSButton, NSButtonType,
-    NSCellImagePosition, NSColor, NSControlStateValueOff, NSControlStateValueOn, NSFont, NSImage,
-    NSImageScaling, NSImageView, NSPopUpButton, NSSlider, NSSwitch, NSTextAlignment, NSTextField,
-    NSView,
+    NSBezelStyle, NSBox, NSBoxType, NSButton, NSButtonType, NSCellImagePosition, NSColor,
+    NSControlStateValueOff, NSControlStateValueOn, NSFont, NSImage, NSImageScaling, NSImageView,
+    NSPopUpButton, NSSlider, NSSwitch, NSTextAlignment, NSTextField, NSView,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -20,7 +19,7 @@ use agent_light_core::Color;
 use crate::app_delegate::AppDelegate;
 use crate::overlay::swatch_image;
 
-use super::consts::SWATCH_D;
+use super::consts::{RESIZE_W, SWATCH_D};
 use super::tags::sf_symbol;
 
 /// 给控件配 target(=delegate)+ action。收口各 add_* 里重复的 setTarget/setAction
@@ -57,7 +56,7 @@ pub(crate) fn add_card(pane: &Retained<NSView>, frame: NSRect) -> Retained<NSBox
     let mtm = MainThreadMarker::new().expect("add_card 须主线程");
     let b = make_rounded_box(mtm, 10.0, &NSColor::quaternaryLabelColor());
     b.setFrame(frame);
-    b.setAutoresizingMask(NSAutoresizingMaskOptions(2)); // 宽度随 pane(state 卡片高度由 layout 重排覆盖)
+    b.setAutoresizingMask(RESIZE_W); // 宽度随 pane(state 卡片高度由 layout 重排覆盖)
     pane.addSubview(&b);
     b
 }

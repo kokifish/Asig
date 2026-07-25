@@ -55,12 +55,7 @@ impl OpenClawSource {
 
     /// 只读打开主库(WAL,不抢 openclaw 写锁)。失败 → None(discover/probe 据此回退)。
     fn connect(&self) -> Option<Connection> {
-        use rusqlite::OpenFlags;
-        Connection::open_with_flags(
-            self.db_path(),
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .ok()
+        crate::sys::open_readonly(&self.db_path())
     }
 }
 
@@ -76,7 +71,7 @@ impl AgentSource for OpenClawSource {
             return Vec::new();
         };
         let signals = latest_session_signals(&self.root);
-        discover_from(&conn, now_ms(), &signals)
+        discover_from(&conn, crate::sys::now_ms(), &signals)
     }
 }
 
@@ -93,7 +88,6 @@ fn discover_from(
             id: format!("OpenClaw:{aid}"),
             native_id: aid.clone(),
             cwd: None,
-            project: None,
             status: classify_agent(acc),
             label: Some(aid),
         })
@@ -112,14 +106,6 @@ fn classify_agent(a: AgentAcc) -> AgentStatus {
     } else {
         AgentStatus::Done
     }
-}
-
-fn now_ms() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

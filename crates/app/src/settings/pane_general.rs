@@ -5,9 +5,7 @@ use objc2::DefinedClass;
 use objc2::rc::Retained;
 use objc2::runtime::Sel;
 use objc2::sel;
-use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSControlStateValueOff, NSControlStateValueOn, NSView,
-};
+use objc2_app_kit::{NSControlStateValueOff, NSControlStateValueOn, NSView};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
@@ -17,8 +15,8 @@ use crate::app_delegate::AppDelegate;
 
 use super::consts::{
     AGENT_KIND_ORDER, AGENT_OFF, CARD_GAP, COL_W, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, H,
-    HEADER_GAP, LANG_EN_TAG, LANG_ZH_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, SIZE_LABEL_TAG,
-    THEME_OFF, TOP_INSET,
+    HEADER_GAP, LANG_EN_TAG, LANG_ZH_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, PIN_RIGHT, RESIZE_W,
+    SIZE_LABEL_TAG, THEME_OFF, TOP_INSET,
 };
 use super::controls::{
     add_card, add_header_icon, add_plain_button, add_popup, add_radio_button, add_slider,
@@ -95,6 +93,47 @@ fn flow_chips<T: PartialEq>(
         x += bw + chip_gap;
     }
     row_count
+}
+
+/// Group-2 行的 label add_text 样板:frame 固定为 `(lx, row_center_y-10, lw, 20)`、
+/// 非居中非粗体。8 段 label 共用此几何,抽出来消除逐段重复的 NSRect/NSPoint/NSSize 构造。
+fn label_at(pane: &Retained<NSView>, g: &Geom, y: CGFloat, row: usize, text: &str) {
+    add_text(
+        pane,
+        NSRect::new(
+            NSPoint::new(g.lx, row_center_y(y, row) - 10.0),
+            NSSize::new(g.lw, 20.0),
+        ),
+        text,
+        false,
+        false,
+    );
+}
+
+/// label + NSSwitch 一行(hide_in_fullscreen / launch_at_login 两段共用)。label 走 label_at,
+/// switch frame 固定为 `(cx-SWITCH_INSET, row_center_y-11, 40, 22)`。
+#[allow(clippy::too_many_arguments)]
+fn switch_row(
+    pane: &Retained<NSView>,
+    g: &Geom,
+    y: CGFloat,
+    row: usize,
+    text: &str,
+    on: bool,
+    delegate: &AppDelegate,
+    action: Sel,
+) {
+    label_at(pane, g, y, row, text);
+    add_switch(
+        pane,
+        NSRect::new(
+            NSPoint::new(g.cx - SWITCH_INSET, row_center_y(y, row) - 11.0),
+            NSSize::new(40.0, 22.0),
+        ),
+        on,
+        action,
+        delegate,
+    );
 }
 
 pub(crate) fn build_general_pane(
@@ -194,7 +233,7 @@ fn build_header(
         sel!(resetGeneral:),
         delegate,
     );
-    reset.setAutoresizingMask(NSAutoresizingMaskOptions(1)); // 贴右(MinXMargin)
+    reset.setAutoresizingMask(PIN_RIGHT); // 贴右(MinXMargin)
 }
 
 /// Group-1:语言单选(English / 中文)+ 「重置所有」按钮(弹确认 → 重置全部自定义)。
@@ -278,16 +317,7 @@ fn build_group2(
     let mut row: usize = 0;
 
     // Light size(标签 + 滑块 + 右侧 `xx px` 实时标签)
-    add_text(
-        pane,
-        NSRect::new(
-            NSPoint::new(g.lx, row_center_y(y, row) - 10.0),
-            NSSize::new(g.lw, 20.0),
-        ),
-        st.light_size,
-        false,
-        false,
-    );
+    label_at(pane, g, y, row, st.light_size);
     let dot = delegate.ivars().settings.borrow().dot_size;
     let size_slider = add_slider(
         pane,
@@ -313,44 +343,25 @@ fn build_group2(
     );
     size_label.setTag(SIZE_LABEL_TAG as isize);
     // 滑块宽随 pane 拉伸,右侧 `xx px` 标签贴右(MinXMargin);两者间距恒定。
-    size_slider.setAutoresizingMask(NSAutoresizingMaskOptions(2));
-    size_label.setAutoresizingMask(NSAutoresizingMaskOptions(1));
+    size_slider.setAutoresizingMask(RESIZE_W);
+    size_label.setAutoresizingMask(PIN_RIGHT);
     row += 1;
 
     // Click-through(开关;与 Drop-down「锁定」同步同一开关)
-    add_text(
+    switch_row(
         pane,
-        NSRect::new(
-            NSPoint::new(g.lx, row_center_y(y, row) - 10.0),
-            NSSize::new(g.lw, 20.0),
-        ),
+        g,
+        y,
+        row,
         st.click_through,
-        false,
-        false,
-    );
-    add_switch(
-        pane,
-        NSRect::new(
-            NSPoint::new(g.cx - SWITCH_INSET, row_center_y(y, row) - 11.0),
-            NSSize::new(40.0, 22.0),
-        ),
         *delegate.ivars().click_through.borrow(),
-        sel!(toggleClickThrough:),
         delegate,
+        sel!(toggleClickThrough:),
     );
     row += 1;
 
     // Agent poll interval(标签 + 下拉;1/2/3/5/10/15 秒)
-    add_text(
-        pane,
-        NSRect::new(
-            NSPoint::new(g.lx, row_center_y(y, row) - 10.0),
-            NSSize::new(g.lw, 20.0),
-        ),
-        st.poll_interval,
-        false,
-        false,
-    );
+    label_at(pane, g, y, row, st.poll_interval);
     let poll_ms = delegate.ivars().settings.borrow().poll_interval_ms;
     add_popup(
         pane,
@@ -367,16 +378,7 @@ fn build_group2(
     row += 1;
 
     // Agent to monitor(标签 + 多选 chip:Claude Code / OpenClaw / Hermes;选中=监控,放不下换行)
-    add_text(
-        pane,
-        NSRect::new(
-            NSPoint::new(g.lx, row_center_y(y, row) - 10.0),
-            NSSize::new(g.lw, 20.0),
-        ),
-        st.agent_monitor,
-        false,
-        false,
-    );
+    label_at(pane, g, y, row, st.agent_monitor);
     let enabled = delegate.ivars().settings.borrow().enabled_agents.clone();
     let agent_extra = flow_chips(
         pane,
@@ -395,16 +397,7 @@ fn build_group2(
     row += 1 + agent_extra;
 
     // Status notifications(标签 + 5 个 AgentStatus chip;选中=转入该状态时弹系统通知,默认 [NeedsDeci, Error])
-    add_text(
-        pane,
-        NSRect::new(
-            NSPoint::new(g.lx, row_center_y(y, row) - 10.0),
-            NSSize::new(g.lw, 20.0),
-        ),
-        st.notify,
-        false,
-        false,
-    );
+    label_at(pane, g, y, row, st.notify);
     let notify_on = delegate.ivars().settings.borrow().notify_on.clone();
     let notify_extra = flow_chips(
         pane,
@@ -423,40 +416,21 @@ fn build_group2(
     row += 1 + notify_extra;
 
     // Launch at login(标签 + 开关;LaunchAgent 写 ~/Library/LaunchAgents plist)
-    add_text(
+    switch_row(
         pane,
-        NSRect::new(
-            NSPoint::new(g.lx, row_center_y(y, row) - 10.0),
-            NSSize::new(g.lw, 20.0),
-        ),
+        g,
+        y,
+        row,
         st.launch_login,
-        false,
-        false,
-    );
-    add_switch(
-        pane,
-        NSRect::new(
-            NSPoint::new(g.cx - SWITCH_INSET, row_center_y(y, row) - 11.0),
-            NSSize::new(40.0, 22.0),
-        ),
         delegate.ivars().settings.borrow().launch_at_login,
-        sel!(toggleLaunchAtLogin:),
         delegate,
+        sel!(toggleLaunchAtLogin:),
     );
     row += 1;
 
     // Theme(标签 + 横向 radio:跟随系统 / 深色 / 浅色)。固定 gap 紧凑成组(不填满 cw):
     // W 加大后 cw 变宽,按 (cw-total_w)/2 自适应会把三个 radio 均匀撑满控件区、间距过宽读作离散。
-    add_text(
-        pane,
-        NSRect::new(
-            NSPoint::new(g.lx, row_center_y(y, row) - 10.0),
-            NSSize::new(g.lw, 20.0),
-        ),
-        st.theme,
-        false,
-        false,
-    );
+    label_at(pane, g, y, row, st.theme);
     let theme_idx = theme_index(delegate.ivars().settings.borrow().theme);
     let theme_row_y = row_center_y(y, row) - 11.0;
     let mut rx = g.cx;
@@ -484,25 +458,15 @@ fn build_group2(
     row += 1;
 
     // Hide in fullscreen(开关;默认开)。与「点击穿透」同属浮窗行为开关。
-    add_text(
+    switch_row(
         pane,
-        NSRect::new(
-            NSPoint::new(g.lx, row_center_y(y, row) - 10.0),
-            NSSize::new(g.lw, 20.0),
-        ),
+        g,
+        y,
+        row,
         st.hide_in_fullscreen,
-        false,
-        false,
-    );
-    add_switch(
-        pane,
-        NSRect::new(
-            NSPoint::new(g.cx - SWITCH_INSET, row_center_y(y, row) - 11.0),
-            NSSize::new(40.0, 22.0),
-        ),
         delegate.ivars().settings.borrow().hide_in_fullscreen,
-        sel!(toggleHideInFullscreen:),
         delegate,
+        sel!(toggleHideInFullscreen:),
     );
     row += 1;
 

@@ -71,13 +71,6 @@ impl ClaudeLikeSource {
             seen: Mutex::new(HashMap::new()),
         })
     }
-
-    /// kill(pid, 0) == 0 表示进程存活;ESRCH(不在)返回非 0。
-    fn pid_alive(pid: u32) -> bool {
-        // SAFETY: signal 0 不发信号,只探测进程存在性;pid 来自本地 session 文件,非敌对输入。
-        let pid = i32::try_from(pid).unwrap_or(-1);
-        pid >= 0 && unsafe { libc::kill(pid, 0) == 0 }
-    }
 }
 
 impl AgentSource for ClaudeLikeSource {
@@ -105,7 +98,7 @@ impl AgentSource for ClaudeLikeSource {
         discover_from(
             &files,
             &mut seen,
-            Self::pid_alive,
+            crate::sys::pid_alive,
             |sid| last_signal(root, sid),
             self.kind,
         )
@@ -161,7 +154,6 @@ fn discover_from(
             id: format!("{:?}:{}", kind, primary.pid),
             native_id: primary.pid.to_string(),
             cwd: primary.cwd.clone().map(PathBuf::from),
-            project: None,
             status: st,
             label: primary.session_id.clone(),
         });

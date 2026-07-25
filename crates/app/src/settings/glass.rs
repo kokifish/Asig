@@ -5,15 +5,15 @@ use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, NSObject};
 use objc2::{MainThreadMarker, class, msg_send};
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSColor, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-    NSVisualEffectState, NSVisualEffectView,
+    NSColor, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+    NSVisualEffectView,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSString};
 
 use crate::app_delegate::AppDelegate;
 
-use super::consts::{STATE_KEYS, TAB_GENERAL};
+use super::consts::{RESIZE_WH, STATE_KEYS, TAB_GENERAL};
 use super::controls::new_view;
 use super::strings::strings_for;
 
@@ -49,7 +49,7 @@ pub(crate) fn glass_pane(
             let _: () = msg_send![&g, setContentView: Some(&*content)];
         }
         // contentView 宽+高 随玻璃视图缩放(承载的右区 content_area 据此自适应窗宽)。
-        content.setAutoresizingMask(NSAutoresizingMaskOptions(18));
+        content.setAutoresizingMask(RESIZE_WH);
         GlassPane { view: g, content }
     } else {
         let v = NSVisualEffectView::new(mtm);

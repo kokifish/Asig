@@ -129,18 +129,6 @@ impl StyleKey {
         Self::DoneNotif,
     ];
 
-    /// 对应的真实状态;Done-Notification 返回 None。
-    pub fn status(self) -> Option<AgentStatus> {
-        match self {
-            Self::Done => Some(AgentStatus::Done),
-            Self::Working => Some(AgentStatus::Working),
-            Self::NeedsDeci => Some(AgentStatus::NeedsDeci),
-            Self::Error => Some(AgentStatus::Error),
-            Self::Offline => Some(AgentStatus::Offline),
-            Self::DoneNotif => None,
-        }
-    }
-
     /// 内置默认样式。5 个真实状态派生自 `AgentStatus::light()`(单一事实源);
     /// Done-Notification 默认 = 浅蓝快速呼吸(内置于 `StyleKey::default_style`)。
     pub fn default_style(self) -> StateStyle {
@@ -228,8 +216,9 @@ pub struct Settings {
     /// 全屏(原生 + 非原生视频)时自动隐藏浮窗窗口。默认 true。serde 持久化。
     #[serde(default = "default_hide_in_fullscreen")]
     pub hide_in_fullscreen: bool,
-    /// 开机自启动(SMAppService,macOS 13+;旧系统运行时禁用开关)。默认 false。
-    /// 注册持久:用户开开关 → register(系统记住,重启自动登录);关 → unregister。
+    /// 开机自启动(LaunchAgent plist)。默认 false。on → app 写
+    /// ~/Library/LaunchAgents/com.kokifish.asig.plist,下次登录 launchd `open` 启动;
+    /// off → 删 plist(实现见 app/launch.rs,零成本、不依赖 SMAppService)。
     #[serde(default)]
     pub launch_at_login: bool,
 }
@@ -287,6 +276,18 @@ enum LoadError {
 }
 
 impl Settings {
+    /// 把浮窗圆点直径(px)clamp 到合法范围 [DOT_SIZE_MIN_PX, DOT_SIZE_MAX_PX]。
+    /// 关联函数(无 self):MIN/MAX 是常量,app 层 slider 边界仍直接用常量。
+    pub fn dot_size_clamp(v: u32) -> u32 {
+        v.clamp(DOT_SIZE_MIN_PX, DOT_SIZE_MAX_PX)
+    }
+
+    /// 把 Done-Notification 持续时间(秒)clamp 到合法范围
+    /// [DONE_NOTIF_DURATION_MIN_S, DONE_NOTIF_DURATION_MAX_S]。关联函数(无 self)。
+    pub fn done_notif_clamp(v: u32) -> u32 {
+        v.clamp(DONE_NOTIF_DURATION_MIN_S, DONE_NOTIF_DURATION_MAX_S)
+    }
+
     /// 某个键对应的样式。配置缺失时回退到内置默认。
     pub fn style_for(&self, key: StyleKey) -> StateStyle {
         self.styles
@@ -296,11 +297,13 @@ impl Settings {
     }
 
     /// 某个真实状态对应的灯效。
+    #[cfg(test)]
     pub fn light_for(&self, s: AgentStatus) -> LightAnim {
         self.style_for(StyleKey::from(s)).to_light()
     }
 
     /// 某个真实状态对应的渐变层数。
+    #[cfg(test)]
     pub fn layers_for(&self, s: AgentStatus) -> u8 {
         self.style_for(StyleKey::from(s)).layers()
     }

@@ -4,7 +4,7 @@ use objc2::DefinedClass;
 use objc2::rc::Retained;
 use objc2::runtime::Sel;
 use objc2::sel;
-use objc2_app_kit::{NSAutoresizingMaskOptions, NSBox, NSButton, NSSlider, NSTextField, NSView};
+use objc2_app_kit::{NSBox, NSButton, NSSlider, NSTextField, NSView};
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize};
 
@@ -18,7 +18,8 @@ use crate::app_delegate::AppDelegate;
 use super::consts::{
     ANIM_OFF, CARD_BOT_PAD, CARD_TOP_PAD, COL_W, COLOR_GAP, COLOR_OFF, COLOR_ORDER,
     CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, GRADIENT_LABEL_OFF, GRADIENT_OFF, H, HEADER_GAP,
-    RESET_OFF, ROW_H, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN, SPEED_OFF, SWATCH_D, TOP_INSET,
+    PIN_RIGHT, RESET_OFF, RESIZE_W, ROW_H, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN, SPEED_OFF,
+    SWATCH_D, TOP_INSET,
 };
 use super::controls::{
     add_card, add_plain_button, add_radio_button, add_slider, add_swatch_button, add_text, new_view,
@@ -135,8 +136,8 @@ pub(crate) fn build_state_pane(
         sel!(resetStateStyle:),
         delegate,
     );
-    title.setAutoresizingMask(NSAutoresizingMaskOptions(2)); // width 随 pane
-    reset.setAutoresizingMask(NSAutoresizingMaskOptions(1)); // 贴右(MinXMargin)
+    title.setAutoresizingMask(RESIZE_W); // width 随 pane
+    reset.setAutoresizingMask(PIN_RIGHT); // 贴右(MinXMargin)
 
     // card + 控件:先占位创建(frame 由 layout_state_pane 按 pane 宽设)。
     let card = add_card(

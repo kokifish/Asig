@@ -14,6 +14,9 @@ pub mod status;
 /// jsonl 尾部读取共用工具(claude/openclaw 复用,内部)。
 pub(crate) mod jsonl_tail;
 
+/// 跨 source 共享系统工具(pid 探测 / 当前时间 / 只读 sqlite)。
+pub(crate) mod sys;
+
 pub use config::{
     Anim, DONE_NOTIF_DURATION_DEFAULT_S, DONE_NOTIF_DURATION_MAX_S, DONE_NOTIF_DURATION_MIN_S,
     DOT_SIZE_DEFAULT_PX, DOT_SIZE_MAX_PX, DOT_SIZE_MIN_PX, GRADIENT_LAYERS_DEFAULT,
@@ -195,11 +198,6 @@ impl Monitor {
         *self.prev_global.borrow_mut() = global;
         in_window
     }
-
-    /// 推荐轮询间隔。DEV.md Design:默认 3s。
-    pub fn poll_interval() -> Duration {
-        Duration::from_millis(3000)
-    }
 }
 
 #[cfg(test)]
@@ -230,7 +228,6 @@ mod tests {
                     id: format!("{:?}:0", self.kind),
                     native_id: "0".into(),
                     cwd: None,
-                    project: None,
                     status: *st,
                     label: None,
                 })

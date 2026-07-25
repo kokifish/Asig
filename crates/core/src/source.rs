@@ -40,7 +40,6 @@ pub struct AgentSession {
     pub id: String,
     pub native_id: String,
     pub cwd: Option<PathBuf>,
-    pub project: Option<String>,
     pub status: AgentStatus,
     pub label: Option<String>,
 }

@@ -20,8 +20,8 @@ use objc2::DefinedClass;
 use objc2::rc::{Allocated, Retained};
 use objc2::{MainThreadMarker, class, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSAutoresizingMaskOptions, NSBackingStoreType, NSColor, NSScrollView,
-    NSTitlebarSeparatorStyle, NSView, NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSApplication, NSBackingStoreType, NSColor, NSScrollView, NSTitlebarSeparatorStyle, NSView,
+    NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
@@ -29,7 +29,7 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use crate::app_delegate::AppDelegate;
 use crate::overlay::{FlippedView, swatch_image};
 
-use consts::{STATE_KEYS, TAB_ABOUT, TAB_GENERAL};
+use consts::{RESIZE_H, RESIZE_W, RESIZE_WH, STATE_KEYS, TAB_ABOUT, TAB_GENERAL};
 use controls::{add_icon_button, add_tab_button, new_view};
 use glass::{glass_pane, make_selection_pill};
 use pane_about::build_about_pane;
@@ -46,7 +46,7 @@ mod layout;
 mod pane_about;
 mod pane_general;
 mod pane_state;
-mod strings;
+pub(crate) mod strings;
 mod tags;
 
 // ---- 外部(crate::settings::)所需的 pub use 重导出(收敛到 app 层实际引用)----
@@ -109,7 +109,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     let scroll_alloc: Allocated<NSScrollView> = unsafe { msg_send![class!(NSScrollView), alloc] };
     let content_area = NSScrollView::initWithFrame(scroll_alloc, scroll_frame);
     // 宽+高 随窗口缩放(左侧栏固定宽,故右区宽度 = 窗宽 − SIDEBAR_W)。
-    content_area.setAutoresizingMask(NSAutoresizingMaskOptions(18));
+    content_area.setAutoresizingMask(RESIZE_WH);
     content_area.setHasVerticalScroller(true);
     content_area.setAutohidesScrollers(true);
     // scrollView 自身透明(承玻璃);**同时** ClipView 也要透明,否则画白底盖住玻璃。
@@ -122,7 +122,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         NSSize::new(CONTENT_W, consts::H),
     ));
     // 只宽随 scrollView(2 = widthSizable),高固定 —— 切 pane 时由 switchSettingsTab 设高。
-    doc.setAutoresizingMask(NSAutoresizingMaskOptions(2));
+    doc.setAutoresizingMask(RESIZE_W);
     content_area.setDocumentView(Some(&doc));
 
     // 8 pane:General + 6 状态(各带 StateControls)+ About。按 pane id(=索引)排。
@@ -146,21 +146,13 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
         pane.setHidden(i != 0);
         // 每个 pane **只宽**随 doc 缩放(2 = widthSizable);高固定 —— pane 高 = 内容高,
         // 不随窗拉伸(否则窗口拉高时内容相对顶部漂移)。pane 内卡片/滑块各自按 autoresizing 适配。
-        pane.setAutoresizingMask(NSAutoresizingMaskOptions(2));
+        pane.setAutoresizingMask(RESIZE_W);
         doc.addSubview(pane);
     }
     // 初始 documentView 高 = max(clip 可视高, General content_h)。取 max 而非纯 content_h:
     // doc 矮于 clip 时 NSClipView 对翻转短文档的顶部锚定会随 doc 高漂移,致各 pane 内容顶部不对齐
     // (见 set_doc_height)。滚到顶推到下一 runloop(见 AppDelegate::scrollSettingsToTop:)。
-    set_doc_height(&content_area, g_h);
-    let _: () = unsafe {
-        msg_send![
-            delegate,
-            performSelector: sel!(scrollSettingsToTop:),
-            withObject: std::ptr::null_mut::<objc2::runtime::NSObject>(),
-            afterDelay: 0.0
-        ]
-    };
+    scroll_pane_to_top(delegate, TAB_GENERAL);
 
     // 真·液态玻璃承载视图 root(普通 NSView;刻意不用 NSGlassEffectContainerView —— 它会把
     // 重叠/相邻的玻璃合并成一次模糊,令浮动侧栏失去层次)。root 内:主玻璃(满窗,承载右区内容)
@@ -180,12 +172,10 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     // 侧栏 UI 建到浮动玻璃的 contentView 上。
     build_sidebar(&sidebar.content, delegate, &st);
 
-    main.view.setAutoresizingMask(NSAutoresizingMaskOptions(18)); // 主玻璃随窗口缩放
+    main.view.setAutoresizingMask(RESIZE_WH); // 主玻璃随窗口缩放
     root.addSubview(&main.view); // 主玻璃在底
     main.content.addSubview(&content_area); // 右区(scroll)在主玻璃上
-    sidebar
-        .view
-        .setAutoresizingMask(NSAutoresizingMaskOptions(16)); // 侧栏固定宽,随高伸缩
+    sidebar.view.setAutoresizingMask(RESIZE_H); // 侧栏固定宽,随高伸缩
     root.addSubview(&sidebar.view); // 浮动侧栏在上
     window.setContentView(Some(&root));
 
@@ -221,25 +211,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
             *delegate.ivars().settings_selected.borrow_mut() = n;
             update_selection(delegate, n);
             // 同步 documentView 高度 = max(clip 可视高, 该 pane content_h),并滚到顶。
-            let h = delegate
-                .ivars()
-                .settings_pane_heights
-                .borrow()
-                .get(&n)
-                .copied()
-                .unwrap_or(consts::H);
-            if let Some(scroll) = delegate.ivars().settings_scroll.borrow().as_ref() {
-                set_doc_height(scroll, h);
-            }
-            // 滚顶推到下一 runloop(同初始 General,见 AppDelegate::scrollSettingsToTop:)。
-            let _: () = unsafe {
-                msg_send![
-                    delegate,
-                    performSelector: sel!(scrollSettingsToTop:),
-                    withObject: std::ptr::null_mut::<objc2::runtime::NSObject>(),
-                    afterDelay: 0.0
-                ]
-            };
+            scroll_pane_to_top(delegate, n);
         }
     }
 
@@ -326,6 +298,33 @@ pub fn set_doc_height(scroll: &NSScrollView, content_h: CGFloat) {
     let floor = if clip_h > 0.0 { clip_h } else { consts::H };
     let df = doc.frame();
     doc.setFrameSize(NSSize::new(df.size.width, floor.max(content_h)));
+}
+
+/// 切 tab / 初始 / ASIG_TAB dev hook 三处共用的「设 documentView 高 + 滚到顶」收尾。
+///
+/// 读 `pane_heights[sel]`(缺失回退 H)→ 设 doc 高 = max(clip 可视高, 该 pane content_h)
+/// → 异步滚顶(performSelector scrollSettingsToTop: afterDelay:0,推到下一 runloop 才稳得住,
+/// 见 AppDelegate::scrollSettingsToTop: 的 layout pass 说明)。doc 高取 max 而非纯 content_h:
+/// doc 矮于 clip 时 NSClipView 对翻转短文档的顶部锚定随 doc 高漂移,致各 pane 内容顶部不对齐。
+pub(crate) fn scroll_pane_to_top(delegate: &AppDelegate, sel: i64) {
+    let h = delegate
+        .ivars()
+        .settings_pane_heights
+        .borrow()
+        .get(&sel)
+        .copied()
+        .unwrap_or(consts::H);
+    if let Some(scroll) = delegate.ivars().settings_scroll.borrow().as_ref() {
+        set_doc_height(scroll, h);
+    }
+    let _: () = unsafe {
+        msg_send![
+            delegate,
+            performSelector: sel!(scrollSettingsToTop:),
+            withObject: std::ptr::null_mut::<objc2::runtime::NSObject>(),
+            afterDelay: 0.0
+        ]
+    };
 }
 
 pub fn show(window: &NSWindow) {

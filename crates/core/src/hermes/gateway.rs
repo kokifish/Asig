@@ -14,7 +14,7 @@ struct GatewayState {
 
 /// 读 json + 探 pid 存活。返回 `(alive, active_agents)`。
 ///
-/// pid 探测为主(同 `claude.rs::pid_alive`):gateway 崩溃时 json 不会自动改,残留的
+/// pid 探测为主(同 `sys::pid_alive`):gateway 崩溃时 json 不会自动改,残留的
 /// `gateway_state: "running"` 不可信;`kill(pid, 0)` 是 OS 真相。
 pub(crate) fn snapshot(path: &Path) -> (bool, u32) {
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -23,14 +23,8 @@ pub(crate) fn snapshot(path: &Path) -> (bool, u32) {
     let Ok(g): Result<GatewayState, _> = serde_json::from_str(&text) else {
         return (false, 0); // 损坏 = 当没活
     };
-    if !pid_alive(g.pid) {
+    if !crate::sys::pid_alive(g.pid) {
         return (false, 0);
     }
     (true, g.active_agents)
-}
-
-/// `kill(pid, 0) == 0` 表示进程存活(同 `claude.rs::ClaudeLikeSource::pid_alive`)。
-fn pid_alive(pid: u32) -> bool {
-    let pid = i32::try_from(pid).unwrap_or(-1);
-    pid >= 0 && unsafe { libc::kill(pid, 0) == 0 }
 }

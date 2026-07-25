@@ -1,6 +1,6 @@
 //! 设置窗口界面文案(按 `Settings.lang` 本地化,默认中文,可切全英文)。
 
-use agent_light_core::Lang;
+use agent_light_core::{AgentStatus, Lang};
 
 /// 当前语言的全部界面文案。
 pub(crate) struct Strings {
@@ -111,4 +111,18 @@ pub(crate) fn strings_for(l: Lang) -> Strings {
             reset_no: "Cancel",
         },
     }
+}
+
+/// 真实状态(AgentStatus)的本地化名。从 state 数组派生(state 按 STATE_KEYS 序:
+/// DoneNotif/Done/Working/NeedsDeci/Error/Offline = idx 0-5)。
+pub(crate) fn status_name(st: AgentStatus, lang: Lang) -> &'static str {
+    let s = strings_for(lang);
+    let idx = match st {
+        AgentStatus::Done => 1,
+        AgentStatus::Working => 2,
+        AgentStatus::NeedsDeci => 3,
+        AgentStatus::Error => 4,
+        AgentStatus::Offline => 5,
+    };
+    s.state[idx]
 }

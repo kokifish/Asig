@@ -9,7 +9,7 @@ use agent_light_core::{
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
 use objc2::{
-    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send, sel,
+    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send,
 };
 use objc2_app_kit::{
     NSAlert, NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSEventType,
@@ -34,6 +34,25 @@ fn open_website() {
 fn quit_app() {
     let mtm = MainThreadMarker::new().expect("quit 须主线程");
     NSApplication::sharedApplication(mtm).terminate(None);
+}
+
+/// 读 NSSwitch / NSButton 的 state(NSOnState=1 / NSOffState=0)。三个 toggle action
+/// (toggleClickThrough / toggleHideInFullscreen / toggleLaunchAtLogin)共用此样板。
+fn ns_switch_on(sender: *mut NSObject) -> bool {
+    let s: i64 = unsafe { msg_send![sender, state] };
+    s == 1
+}
+
+/// 多选 chip toggle 共用的 Vec 修改:on 且未含 → push;!on → retain 移除。
+/// changeEnabledAgents / changeNotifyOn 共用此逻辑(各自的外层 effects 不同,故只抽这一段)。
+fn toggle_in_vec<T: PartialEq>(vec: &mut Vec<T>, item: T, on: bool) {
+    if on {
+        if !vec.contains(&item) {
+            vec.push(item);
+        }
+    } else {
+        vec.retain(|k| *k != item);
+    }
 }
 
 /// AppDelegate 的实例变量(方法只能拿 &self,故用 RefCell)。
@@ -191,8 +210,7 @@ define_class!(
         /// 设置面板「浮窗点击穿透」复选框 action。sender=复选框,读其 state。
         #[unsafe(method(toggleClickThrough:))]
         fn toggle_click_through(&self, sender: *mut NSObject) {
-            let state: i64 = unsafe { msg_send![sender, state] }; // NSOnState=1 / NSOffState=0
-            let on = state == 1;
+            let on = ns_switch_on(sender); // NSOnState=1 / NSOffState=0
             *self.ivars().click_through.borrow_mut() = on;
             self.apply_click_through();
         }
@@ -201,8 +219,7 @@ define_class!(
         /// on → Managed(不进全屏 Space,全屏自动隐藏 + 不打断菜单栏);off → CanJoinAllSpaces(跨 Space)。
         #[unsafe(method(toggleHideInFullscreen:))]
         fn toggle_hide_in_fullscreen(&self, sender: *mut NSObject) {
-            let state: i64 = unsafe { msg_send![sender, state] };
-            let on = state == 1;
+            let on = ns_switch_on(sender);
             self.ivars().settings.borrow_mut().hide_in_fullscreen = on;
             self.ivars().settings.borrow().save();
             if let Some(w) = self.ivars().overlay_window.borrow().as_ref() {
@@ -214,8 +231,7 @@ define_class!(
         /// off → unregister。macOS<13 时开关禁用,不会触发。存盘记录用户意愿(UI 状态)。
         #[unsafe(method(toggleLaunchAtLogin:))]
         fn toggle_launch_at_login(&self, sender: *mut NSObject) {
-            let state: i64 = unsafe { msg_send![sender, state] };
-            let on = state == 1;
+            let on = ns_switch_on(sender);
             if on {
                 crate::launch::register();
             } else {
@@ -229,10 +245,7 @@ define_class!(
         #[unsafe(method(changeSize:))]
         fn change_size(&self, sender: *mut NSObject) {
             let v: f64 = unsafe { msg_send![sender, doubleValue] };
-            let dot = v.round().clamp(
-                agent_light_core::DOT_SIZE_MIN_PX as f64,
-                agent_light_core::DOT_SIZE_MAX_PX as f64,
-            ) as u32;
+            let dot = Settings::dot_size_clamp(v.round() as u32);
             self.ivars().settings.borrow_mut().dot_size = dot;
             if let Some(content) = self.ivars().settings_content.borrow().as_ref() {
                 if let Some(label) =
@@ -338,10 +351,7 @@ define_class!(
         #[unsafe(method(changeDuration:))]
         fn change_duration(&self, sender: *mut NSObject) {
             let v: f64 = unsafe { msg_send![sender, doubleValue] };
-            let secs = v.round().clamp(
-                agent_light_core::DONE_NOTIF_DURATION_MIN_S as f64,
-                agent_light_core::DONE_NOTIF_DURATION_MAX_S as f64,
-            ) as u32;
+            let secs = Settings::done_notif_clamp(v.round() as u32);
             self.ivars().settings.borrow_mut().done_notif_duration_s = secs;
             if let Some(c) = self
                 .ivars()
@@ -479,29 +489,8 @@ define_class!(
             *self.ivars().settings_selected.borrow_mut() = new;
             crate::settings::update_selection(self, new);
             // documentView 高度 = max(clip 可视高, 新 pane content_h),并滚到顶(避免残留上一
-            // pane 的滚动位置)。取 max 而非纯 content_h:doc 矮于 clip 时 NSClipView 对翻转短文档
-            // 的顶部锚定随 doc 高漂移,致各 pane 内容顶部不对齐(见 settings::set_doc_height)。
-            let new_h = self
-                .ivars()
-                .settings_pane_heights
-                .borrow()
-                .get(&new)
-                .copied()
-                .unwrap_or(crate::settings::H);
-            if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
-                crate::settings::set_doc_height(scroll, new_h);
-            }
-            // 滚顶推到下一 runloop:doc.setFrameSize 触发 NSScrollView 的 layout pass
-            // (reflectScrolledClippedView)会覆盖同步 setBoundsOrigin,performSelector afterDelay:0
-            // 在 layout commit 后执行(见 scrollSettingsToTop:),根治切 tab 时 content 顶部漂移。
-            let _: () = unsafe {
-                msg_send![
-                    self,
-                    performSelector: sel!(scrollSettingsToTop:),
-                    withObject: std::ptr::null_mut::<NSObject>(),
-                    afterDelay: 0.0
-                ]
-            };
+            // pane 的滚动位置)。详见 settings::scroll_pane_to_top。
+            crate::settings::scroll_pane_to_top(self, new);
         }
 
         /// 常规页「轮询间隔」下拉 action。改完即时重排 tick 定时器。
@@ -527,15 +516,9 @@ define_class!(
                 return;
             };
             // recessed toggle button:点击后系统已切 state(on=1 监控 / off=0 不监控),据此改 Vec。
-            let state: i64 = unsafe { msg_send![sender, state] };
+            let on = ns_switch_on(sender);
             let mut kinds = self.ivars().settings.borrow().enabled_agents.clone();
-            if state == 1 {
-                if !kinds.contains(&kind) {
-                    kinds.push(kind);
-                }
-            } else {
-                kinds.retain(|k| *k != kind);
-            }
+            toggle_in_vec(&mut kinds, kind, on);
             self.ivars().settings.borrow_mut().enabled_agents = kinds.clone();
             // 先重建 Monitor(切走的 agent 的 latched 锁定态不应残留),再 settings_changed():
             // 后者 snap()+render() 才基于新 Monitor 画出切换后的真实状态;若反过来,首帧会
@@ -555,15 +538,9 @@ define_class!(
                 return;
             };
             // recessed toggle button:点击后系统已切 state(on=1 通知 / off=0 不通知),据此改 Vec。
-            let state: i64 = unsafe { msg_send![sender, state] };
+            let on = ns_switch_on(sender);
             let mut kinds = self.ivars().settings.borrow().notify_on.clone();
-            if state == 1 {
-                if !kinds.contains(&kind) {
-                    kinds.push(kind);
-                }
-            } else {
-                kinds.retain(|k| *k != kind);
-            }
+            toggle_in_vec(&mut kinds, kind, on);
             self.ivars().settings.borrow_mut().notify_on = kinds;
             self.ivars().settings.borrow().save();
         }
@@ -709,23 +686,6 @@ impl AppDelegate {
     }
 }
 
-/// AgentStatus 的本地化名称(系统通知 body 用)。与 settings strings 的状态名一致(中/英)。
-fn status_name(st: AgentStatus, lang: Lang) -> &'static str {
-    use AgentStatus::*;
-    match (st, lang) {
-        (Working, Lang::Zh) => "运行中",
-        (Working, Lang::En) => "Working",
-        (NeedsDeci, Lang::Zh) => "待决策",
-        (NeedsDeci, Lang::En) => "Pending",
-        (Done, Lang::Zh) => "已完成",
-        (Done, Lang::En) => "Done",
-        (Error, Lang::Zh) => "错误",
-        (Error, Lang::En) => "Error",
-        (Offline, Lang::Zh) => "异常",
-        (Offline, Lang::En) => "Offline",
-    }
-}
-
 impl AppDelegate {
     /// 状态转入边沿检测:global 与上一轮不同 且 在 `notify_on` 列表 → 发 macOS 系统通知。
     fn maybe_notify(&self, snap: &Snapshot) {
@@ -733,7 +693,7 @@ impl AppDelegate {
         let prev = self.ivars().last_global.replace(Some(st));
         if prev != Some(st) && self.ivars().settings.borrow().notify_on.contains(&st) {
             let lang = self.ivars().settings.borrow().lang;
-            crate::notify::send("Asig", status_name(st, lang));
+            crate::notify::send("Asig", crate::settings::strings::status_name(st, lang));
         }
     }
 
@@ -765,10 +725,7 @@ impl AppDelegate {
     /// 取一次快照:把 settings 里的 DoneNotif 持续时间 clamp 到合法范围后喂给内核 poll。
     /// 内核 poll 不持有用户设置(保持纯净),故时长由 app 层每次喂入。
     fn snap(&self) -> Snapshot {
-        let secs = self.ivars().settings.borrow().done_notif_duration_s.clamp(
-            agent_light_core::DONE_NOTIF_DURATION_MIN_S,
-            agent_light_core::DONE_NOTIF_DURATION_MAX_S,
-        );
+        let secs = Settings::done_notif_clamp(self.ivars().settings.borrow().done_notif_duration_s);
         self.ivars()
             .monitor
             .borrow()

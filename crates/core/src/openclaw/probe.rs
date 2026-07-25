@@ -4,8 +4,9 @@
 
 use super::db::collect;
 use super::sessions::latest_session_signals;
-use super::{OpenClawSource, classify_agent, now_ms};
+use super::{OpenClawSource, classify_agent};
 use crate::status::AgentStatus;
+use crate::sys::now_ms;
 
 /// 单 agent 诊断探针(CLI `probe-openclaw` 输出用;复用 `collect`,不另写判定)。
 pub struct AgentProbe {

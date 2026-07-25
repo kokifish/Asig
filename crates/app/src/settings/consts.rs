@@ -2,6 +2,7 @@
 //! helper 函数(几何计算 / tag 解析 / 测量 / 转换)留在 tags.rs。
 
 use agent_light_core::{AgentKind, AgentStatus, Anim, Color, StyleKey};
+use objc2_app_kit::NSAutoresizingMaskOptions;
 use objc2_core_foundation::CGFloat;
 
 // ===== 窗口 / 内容区几何 =====
@@ -26,6 +27,15 @@ pub(crate) const SIDEBAR_PANE_H: CGFloat = H - TOP_INSET - SIDEBAR_INSET;
 
 /// 关于页显示的仓库链接。
 pub(crate) const GITHUB_URL: &str = "https://github.com/kokifish/Asig";
+
+// ===== NSAutoresizingMaskOptions 命名常量(替代裸魔数)=====
+// NSAutoresizingMaskOptions 是位掩码:bit0=MinXMargin(贴右)、bit1=WidthSizable(宽随父)、
+// bit4=HeightSizable(高随父)。组合值:18 = WidthSizable|HeightSizable(宽+高随父)、
+// 2=WidthSizable(仅宽)、16=HeightSizable(仅高)、1=MinXMargin(贴右)。
+pub(crate) const RESIZE_WH: NSAutoresizingMaskOptions = NSAutoresizingMaskOptions(18); // 宽+高随父
+pub(crate) const RESIZE_W: NSAutoresizingMaskOptions = NSAutoresizingMaskOptions(2); // 仅宽
+pub(crate) const PIN_RIGHT: NSAutoresizingMaskOptions = NSAutoresizingMaskOptions(1); // 贴右(MinXMargin)
+pub(crate) const RESIZE_H: NSAutoresizingMaskOptions = NSAutoresizingMaskOptions(16); // 仅高
 
 // ===== 业务顺序数组 =====
 pub const ANIM_ORDER: [Anim; 3] = [Anim::Steady, Anim::Pulse, Anim::Ripple];

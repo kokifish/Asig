@@ -66,6 +66,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
   - `pane_general` / `pane_state` / `pane_about` — 各 pane builder
 - `palette.rs` — 下拉面板会话列表用的状态 emoji(`status_emoji`)
 - `notify.rs` — macOS 系统通知（UserNotifications framework：授权 + 发送）
+- `launch.rs` — 开机自启动（LaunchAgent plist：toggle on 写 `~/Library/LaunchAgents/com.kokifish.asig.plist`,下次登录 launchd `open` 启动;零成本,不依赖 SMAppService、不需签名）
 - `logger.rs` — 极简 log 实现（`SimpleLogger`,core 的 `log::warn!` 经此输出 warn 到 stderr）
 
 ## Build and Run
@@ -240,7 +241,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - Agent to monitor/监控的 Agent: 多选块(Claude Code / OpenClaw / Hermes 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
   - Status notifications/状态通知: 多选块(已完成/运行中/待决策/错误/异常 横排圆角块,选中=转入该状态时弹 macOS 系统通知,点击 toggle)。默认 待决策+错误;数据结构 `notify_on: Vec<AgentStatus>`
   - Hide in fullscreen/全屏自动隐藏: 开关。默认开。开启时浮窗 collectionBehavior=Managed(不进全屏 Space:全屏自动消失 + 不打断菜单栏);关闭时=CanJoinAllSpaces(跨 Space 显示,含全屏);数据结构 `hide_in_fullscreen: bool`
-  - Launch at login/开机自启动(待实现): 开关。默认关
+  - Launch at login/开机自启动: 开关。默认关。on → 写 `~/Library/LaunchAgents/com.kokifish.asig.plist`(launchd 登录时 `open` app;零成本,不需签名);off → 删 plist
   - Theme/主题: 横向单选按钮组 "跟随系统", "深色", "浅色"。默认"跟随系统"
 
 #### State Pane

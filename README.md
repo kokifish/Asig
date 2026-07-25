@@ -62,6 +62,12 @@ open build/Asig.app                 # 运行测试
 cp -R build/Asig.app /Applications/ # 安装
 ```
 
+一键安装(零成本,免手动编译/打包;无 Release 时自动从源码构建):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kokifish/Asig/main/scripts/install.sh | bash
+```
+
 > 国内网络拉依赖慢,可配 rsproxy 镜像(见 DEV.md「依赖镜像」)。
 
 启动后:右上角菜单栏出现灯;屏幕上方出现一个药丸浮窗。**零配置**,自动发现已安装的 agent 会话。
@@ -89,6 +95,6 @@ cp -R build/Asig.app /Applications/ # 安装
 - 药丸浮窗默认点击穿透;想用鼠标拖动浮窗,可在 **Drop-down 的「锁定」** 或 **设置 → 浮窗点击穿透** 任一处取消勾选(两处同步同一开关)。
 - 🟣(异常 / 不可观测):所有会话都消失时自然出现;另外 **Asig 见过的 Claude 进程若崩溃/被杀**(残留 session 文件)也会标 🟣。🟠(需决策)Claude Code 已支持:`status=waiting` 或 `busy`+transcript 尾部 `end_turn`→🟠(`tool_use`/`user`→🟡),无需 hook;🔴(报错)Claude Code 状态文件不提供,仍需 hook 精准触发(详见 DEV.md)。
 - OpenClaw:`flow_runs.status='blocked'` → 🟠 待决策(可能含投递卡住等非「等用户输入」情形,准度待 trajectory 解析补强)。
-- 设置面板(菜单栏灯 → 设置…):浮窗外观(大小/颜色/动画/速度)、轮询间隔、主题、完成通知等均可配;界面随系统无障碍开关自适应。改动即时生效并持久化到 `~/Library/Application Support/Asig/settings.json`。开机自启动等待补。
+- 设置面板(菜单栏灯 → 设置…):浮窗外观(大小/颜色/动画/速度)、轮询间隔、主题、完成通知、开机自启动等均可配;界面随系统无障碍开关自适应。改动即时生效并持久化到 `~/Library/Application Support/Asig/settings.json`。
 
 更多信息见 [DEV.md](./DEV.md)。
