@@ -198,6 +198,21 @@ define_class!(
             }
         }
 
+        /// General「开机自启动」开关 action。on → SMAppService.register(持久,重启自动登录);
+        /// off → unregister。macOS<13 时开关禁用,不会触发。存盘记录用户意愿(UI 状态)。
+        #[unsafe(method(toggleLaunchAtLogin:))]
+        fn toggle_launch_at_login(&self, sender: *mut NSObject) {
+            let state: i64 = unsafe { msg_send![sender, state] };
+            let on = state == 1;
+            if on {
+                crate::launch::register();
+            } else {
+                crate::launch::unregister();
+            }
+            self.ivars().settings.borrow_mut().launch_at_login = on;
+            self.ivars().settings.borrow().save();
+        }
+
         /// 设置面板「浮窗灯大小」滑块 action;同步刷新右侧 `xx px` 标签。
         #[unsafe(method(changeSize:))]
         fn change_size(&self, sender: *mut NSObject) {

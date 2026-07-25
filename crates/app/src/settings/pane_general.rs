@@ -422,7 +422,7 @@ fn build_group2(
     );
     row += 1 + notify_extra;
 
-    // Launch at login(标签 + 开关,占位禁用)
+    // Launch at login(标签 + 开关;SMAppService macOS13+,旧系统禁用)
     add_text(
         pane,
         NSRect::new(
@@ -433,17 +433,19 @@ fn build_group2(
         false,
         false,
     );
+    let launch_on = delegate.ivars().settings.borrow().launch_at_login;
     let launch = add_switch(
         pane,
         NSRect::new(
             NSPoint::new(g.cx - SWITCH_INSET, row_center_y(y, row) - 11.0),
             NSSize::new(40.0, 22.0),
         ),
-        false,
-        sel!(noop:),
+        launch_on,
+        sel!(toggleLaunchAtLogin:),
         delegate,
     );
-    launch.setEnabled(false);
+    // macOS<13 无 SMAppService → 开关禁用(运行时类存在性检查,与 glass.rs 同模式)。
+    launch.setEnabled(crate::launch::available());
     row += 1;
 
     // Theme(标签 + 横向 radio:跟随系统 / 深色 / 浅色)。固定 gap 紧凑成组(不填满 cw):

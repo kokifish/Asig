@@ -2,6 +2,7 @@
 
 mod app_delegate;
 mod cli;
+mod launch;
 mod logger;
 mod menu;
 mod notify;
