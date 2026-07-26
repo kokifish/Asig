@@ -24,11 +24,22 @@ use objc2_foundation::NSTimer;
 
 fn main() {
     logger::init(); // 装载极简 logger(core 的 log::warn! 经此输出到 stderr)
-    // CLI 子命令 probe-openclaw:打印各 agent 诊断 + status(单一判定源 core::openclaw::probe,
-    // 替代 scripts/probe-openclaw.sh 的 bash 重新实现)。不开 GUI,打完即退。
-    if std::env::args().nth(1).as_deref() == Some("probe-openclaw") {
-        cli::probe_openclaw();
-        return;
+    // CLI 子命令:打印各 agent 诊断 + status(单一判定源 core::<source>::probe,替代
+    // scripts/probe-openclaw.sh 的 bash 重新实现)。不开 GUI,打完即退。
+    match std::env::args().nth(1).as_deref() {
+        Some("probe-openclaw") => {
+            cli::probe_openclaw();
+            return;
+        }
+        Some("probe-claude") => {
+            cli::probe_claude();
+            return;
+        }
+        Some("probe-hermes") => {
+            cli::probe_hermes();
+            return;
+        }
+        _ => {}
     }
     let mtm = MainThreadMarker::new().expect("main 须在主线程");
     let app = NSApplication::sharedApplication(mtm);

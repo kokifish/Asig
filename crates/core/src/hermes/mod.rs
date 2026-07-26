@@ -162,3 +162,65 @@ fn label_of(r: &db::SessionRow) -> String {
     }
     r.session_id.chars().take(8).collect()
 }
+
+// ---- CLI 探针(`probe-hermes`):复用 discover_from 的查询 + classify_session ----
+
+/// 单会话诊断视图(probe 用)。
+pub struct HermesProbe {
+    pub session_id: String,
+    pub label: String,
+    pub status: AgentStatus,
+    pub last_role: String,
+    pub last_finish: Option<String>,
+    /// 最后一条消息距 now 的秒数。
+    pub last_msg_age_s: i64,
+    pub active_agents: u32,
+    pub error_flag: bool,
+    pub cwd: Option<String>,
+}
+
+/// 探针:读真实 ~/.hermes,每会话输出诊断 + 最终 status(供 CLI `probe-hermes`)。
+/// 复用 `discover_from` 的查询 + `classify_session`(单一判定源)。gateway 不活 → 空。
+pub fn probe() -> Vec<HermesProbe> {
+    let Some(src) = HermesSource::new() else {
+        return Vec::new();
+    };
+    let (alive, active_agents) = gateway::snapshot(&src.gateway_state_path());
+    if !alive {
+        return Vec::new();
+    }
+    let Some(conn) = src.connect() else {
+        return Vec::new();
+    };
+    let now = crate::sys::now_ms();
+    if now == 0 {
+        return Vec::new();
+    }
+    let cutoff = now.saturating_sub(ACTIVE_WINDOW_MS);
+    let rows = match db::active_sessions(&conn) {
+        Ok(r) => r,
+        Err(e) => {
+            log::warn!("hermes probe 查询失败: {e}");
+            return Vec::new();
+        }
+    };
+    let failed = db::failed_delegation_sessions(&conn, now).unwrap_or_default();
+    rows.into_iter()
+        .filter(|r| r.last_msg_at >= cutoff)
+        .map(|r| {
+            let error_flag = r.has_error() || failed.contains(&r.session_id);
+            let status = classify_session(&r, now, active_agents, error_flag);
+            HermesProbe {
+                last_msg_age_s: (now.saturating_sub(r.last_msg_at) / 1000) as i64,
+                session_id: r.session_id.clone(),
+                label: label_of(&r),
+                status,
+                last_role: r.last_role.clone(),
+                last_finish: r.last_finish_reason.clone(),
+                active_agents,
+                error_flag,
+                cwd: r.cwd.clone(),
+            }
+        })
+        .collect()
+}
