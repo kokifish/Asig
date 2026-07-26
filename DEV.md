@@ -30,7 +30,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
 - `jsonl_tail.rs` — 只读 jsonl 尾部的取数工具（claude/openclaw 共用）
 - `claude.rs` — `ClaudeLikeSource`：Claude 的会话状态 source（参数化 root 保留,CodeBuddy 暂不支持）。读 session 文件（camelCase 字段：`sessionId`/`kind`/`status`…，`rename_all`）+ pid 存活：
-  - **按 cwd 聚合** —— 同目录的多个 session（用户手开 interactive + claude `--fork-session` 派发的后台子 claude `kind:"bg"`）合并为**一个**会话：interactive 作主，bg 不单独显示但 busy 活跃度合并进主会话状态（否则 fork 任务到后台跑时主进程 idle 成 shell 会被误判不在运行），纯 bg 无 interactive 的目录整组跳过（避免与 OpenClaw source 重叠）
+  - **按 cwd 聚合** —— 同目录的多个 session（用户手开 interactive + claude `--fork-session` 派发的后台子 claude `kind:"bg"`）合并为**一个**会话：**最新活动的 interactive**（`statusUpdatedAt` 最大 = 用户当前在用的）作主，bg 不单独显示但 busy 活跃度合并进主会话状态（否则 fork 任务到后台跑时主进程 idle 成 shell 会被误判不在运行）；**其他 interactive（用户另开的遗留 REPL）不参与合并**，避免一个遗留 `busy+end_turn` 会话把整组拉成 NeedsDeci。纯 bg 无 interactive 的目录整组跳过（避免与 OpenClaw source 重叠）
   - **状态判定**（status 层，优先于 transcript）：`waiting`（Claude 等用户输入/授权，如工具 permission）→NeedsDeci；busy+transcript 尾部信号（`end_turn`→NeedsDeci；`user`（用户刚输入、Claude 处理中）/`tool_use`→Working；`end_turn` 后若已有 `user` 判 Working，不被残留 `end_turn` 误判）；idle/shell（空闲）→Done；pid 死→Offline
 - `openclaw/` — `OpenClawSource`（子模块：`db` 只读 sqlite 归并 / `sessions` jsonl 尾部信号 / `probe` CLI 诊断 DTO）。两套数据源：
   - ① 只读 `~/.openclaw/state/openclaw.sqlite`（单一事实源、升级迁移目标），按 `agent_databases` 聚合 task/flow/subagent runs（ended_at NULL→Working、blocked 且 ended_at NULL→NeedsDeci、近期 failed→Error）
@@ -99,6 +99,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 
 | 误判现象 | 根因 | 修复 |
 |---|---|---|
+| 同 cwd 多个 interactive、当前会话已结束、Asig 仍显示待决策 | `group_status` 把组内所有成员（含其他 interactive）`most_active` 合并，遗留 `busy+end_turn` REPL 把整组拉成 NeedsDeci | primary 改取 `statusUpdatedAt` 最新 interactive；`group_status` 只合并 primary+bg，跳过其他 interactive |
 | 实际等用户（待决策）、Asig 显示运行中 | session `status=waiting`（Claude 等输入/授权，如工具 permission）`classify` 不识别，落 `_=>Working`；且 bg transcript 尾部是历史 `tool_use`，读 transcript 也给 Working | `classify` 在 status 层加 `waiting=>NeedsDeci`，优先于 transcript（5390228）|
 | 实际在运行、Asig 显示待决策 | `read_tail_stop_reason` 只读尾部最后一条 assistant `stop_reason`，忽略其后的 `user` 消息 → 上一轮 `end_turn` 残留被误读 | 改 `read_tail_signal`：尾部最后一条有意义事件（`type:user`→"user"；`type:assistant`→其 stop_reason）；`busy+user=>Working`（82a7a35）|
 | fork 任务到后台跑、主进程 idle 成 shell、显示不在运行 | 旧实现跳过所有 `kind:"bg"`，丢失 bg 的 busy 活跃度 | 按 cwd 聚合：interactive 作主、bg 活跃度合并（bb28c06）|

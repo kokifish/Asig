@@ -54,6 +54,11 @@ struct SessionFile {
     kind: Option<String>,
     #[serde(default)]
     status: Option<String>, // "busy" | "idle" | "shell" | "waiting"
+    /// status 最后更新时间(epoch ms)。Claude 只在状态转换时写(非心跳),用作同 cwd 多个
+    /// interactive 会话时挑「最新活动」者作主(= 用户当前在用的),避免遗留 busy+end_turn
+    /// REPL 把整个组拉成 NeedsDeci。旧文件缺该字段 → 0。
+    #[serde(default)]
+    status_updated_at: u64,
 }
 
 pub struct ClaudeLikeSource {
@@ -135,10 +140,14 @@ fn discover_from(
     let mut out = Vec::new();
     for cwd in order {
         let group = &groups[&cwd];
-        // 主 = 组内首个 interactive(kind != bg);纯 bg 无主 → 跳过整组(避免与 OpenClaw 重叠)。
+        // 主 = 组内最新活动的 interactive(status_updated_at 最大 = 用户当前在用的)。
+        // 同 cwd 多个 interactive 时取最新,旧的视为遗留 REPL 不作主(否则它会经 group_status
+        // 的活跃度合并把整组拉成 NeedsDeci)。纯 bg 无 interactive 主 → 跳过整组(避免与
+        // OpenClaw source 重叠)。
         let Some(primary) = group
             .iter()
-            .find(|f| f.kind.as_deref() != Some("bg"))
+            .filter(|f| f.kind.as_deref() != Some("bg"))
+            .max_by_key(|f| f.status_updated_at)
             .copied()
         else {
             continue;
@@ -163,8 +172,9 @@ fn discover_from(
     out
 }
 
-/// 组内(同 cwd 的 interactive 主 + bg 子进程)聚合状态:对每个 file 调 `classify`,
-/// 取**最活跃**的(NeedsDeci > Working > Done > Offline)。bg 子进程的 busy 据此贡献给主会话。
+/// 组内聚合状态:对 **primary 与 bg 子进程**调 `classify`,取**最活跃**的(NeedsDeci > Working >
+/// Done > Offline)。bg 子进程的 busy 据此贡献给主会话。其他 interactive(用户另开的独立
+/// REPL)被跳过,不污染主状态 —— 详见函数体内的过滤。
 fn group_status(
     primary: &SessionFile,
     group: &[&SessionFile],
@@ -174,6 +184,13 @@ fn group_status(
 ) -> Option<AgentStatus> {
     let mut best: Option<AgentStatus> = None;
     for &f in group {
+        // 只聚合 primary 与 bg 子进程;**其他 interactive 是用户另开的独立 REPL,跳过**
+        // (否则同 cwd 一个遗留 busy+end_turn 会话会把整组拉成 NeedsDeci)。bg 子进程的
+        // busy 活跃度仍合并进主(fork 任务后台跑时主 idle 成 shell 不被误判不在运行)。
+        let is_bg = f.kind.as_deref() == Some("bg");
+        if f.pid != primary.pid && !is_bg {
+            continue;
+        }
         let prev = if f.pid == primary.pid {
             prev_of_primary
         } else {
@@ -306,6 +323,7 @@ mod tests {
             cwd: cwd.map(str::to_string),
             kind: None,
             status: status.map(str::to_string),
+            status_updated_at: 0,
         }
     }
 
@@ -671,6 +689,68 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0].cwd.as_deref(), Some(Path::new("/a")));
         assert_eq!(out[1].cwd.as_deref(), Some(Path::new("/b")));
+    }
+
+    // ---- 多 interactive 同 cwd:取最新,旧的忽略(方案 A 修复)----
+
+    #[test]
+    fn discover_multiple_interactive_picks_newest_and_ignores_stale() {
+        // 同 cwd 两个 interactive:旧的 busy+end_turn(单独会判 NeedsDeci)、新的 idle(最新)。
+        // 修复前:most_active 合并 → NeedsDeci(旧污染)。
+        // 修复后:primary = 最新 idle → Done;旧的 interactive 不参与合并。
+        let mut old = pf_cwd(72955, Some("busy"), Some("/a"));
+        old.status_updated_at = 1000;
+        old.session_id = Some("old".into());
+        let mut new = pf_cwd(61965, Some("idle"), Some("/a"));
+        new.status_updated_at = 2000;
+        let mut seen = HashMap::new();
+        let out = discover_from(
+            &[old, new],
+            &mut seen,
+            |_| true,
+            |_| Some("end_turn".into()),
+            AgentKind::Claude,
+        );
+        assert_eq!(out.len(), 1, "同 cwd 合并为 1 个");
+        assert_eq!(out[0].native_id, "61965", "primary = 最新 interactive");
+        assert_eq!(
+            out[0].status,
+            AgentStatus::Done,
+            "新会话 idle → Done,不被旧 busy+end_turn 污染"
+        );
+        assert!(seen.contains_key(&61965));
+        assert!(!seen.contains_key(&72955), "旧 interactive 不进 seen");
+    }
+
+    #[test]
+    fn discover_bg_still_merges_into_newest_interactive() {
+        // 回归:bg 子进程的 busy 活跃度仍合并进最新 interactive 主(不破坏 fork 后台任务语义)。
+        // 同 cwd:旧 interactive idle、新 interactive idle(=primary)、bg busy。
+        let mut old = pf_cwd(72955, Some("idle"), Some("/a"));
+        old.status_updated_at = 1000;
+        let mut new = pf_cwd(61965, Some("idle"), Some("/a"));
+        new.status_updated_at = 2000;
+        let mut bg = pf_cwd(100, Some("busy"), Some("/a"));
+        bg.kind = Some("bg".into());
+        bg.status_updated_at = 1500;
+        let mut seen = HashMap::new();
+        let out = discover_from(
+            &[old, new, bg],
+            &mut seen,
+            |_| true,
+            |_| None,
+            AgentKind::Claude,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].native_id, "61965", "primary = 最新 interactive");
+        assert_eq!(
+            out[0].status,
+            AgentStatus::Working,
+            "bg busy 合并进 primary → Working"
+        );
+        assert!(seen.contains_key(&61965));
+        assert!(!seen.contains_key(&72955));
+        assert!(!seen.contains_key(&100), "bg 不进 seen");
     }
 
     #[test]
