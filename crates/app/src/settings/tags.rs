@@ -11,7 +11,8 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use agent_light_core::{StyleKey, Theme};
 
 use super::consts::{
-    CARD_BOT_PAD, CARD_TOP_PAD, COL_W, POLL_PRESETS_MS, ROW_H, STATE_KEYS, TAB_GENERAL,
+    CARD_BOT_PAD, CARD_TOP_PAD, COL_W, COLOR_GAP, COLOR_ORDER, POLL_PRESETS_MS, ROW_H, STATE_KEYS,
+    SWATCH_STEP, TAB_GENERAL,
 };
 
 /// `rows` 行卡片的总高度。
@@ -28,6 +29,15 @@ pub(crate) fn card_frame(x0: CGFloat, top: CGFloat, rows: usize) -> NSRect {
 /// 第 i 行(0=最上)的垂直中心 y。所有 label 与控件都对齐到它(居中制,杜绝错位)。
 pub(crate) fn row_center_y(top: CGFloat, i: usize) -> CGFloat {
     top - CARD_TOP_PAD - (i as CGFloat + 0.5) * ROW_H
+}
+
+/// 色块 flow 在控件区宽 `cw` 下的(每行可容纳数, 总高)。固定间距 step = SWATCH_D + COLOR_GAP、
+/// 左对齐 flow:每行首块 + 后续按 step 量出,放不下换行(每行数量可不同)。layout(实排)与
+/// pane_state(预估 content_h)共用此单一事实源,避免两处分写同一几何而漂移。
+pub(crate) fn color_flow_metrics(cw: CGFloat) -> (usize, CGFloat) {
+    let per_row = (((cw + COLOR_GAP) / SWATCH_STEP).floor() as usize).max(1);
+    let color_rows = COLOR_ORDER.len().div_ceil(per_row);
+    (per_row, color_rows as CGFloat * SWATCH_STEP)
 }
 
 pub fn stylekey_of_tab(tab: i64) -> Option<StyleKey> {

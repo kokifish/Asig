@@ -106,7 +106,14 @@ pub(crate) fn set_tab_title(button: &Retained<NSView>, label: &str, selected: bo
 
 /// 切换选中 tab:把液态玻璃药丸移到选中项并显示,选中文字转白、其余 labelColor。
 pub fn update_selection(delegate: &AppDelegate, selected: i64) {
-    let Some(sidebar) = delegate.ivars().settings_sidebar.borrow().as_ref().cloned() else {
+    let Some(sidebar) = delegate
+        .ivars()
+        .settings_ui
+        .borrow()
+        .sidebar
+        .as_ref()
+        .cloned()
+    else {
         return;
     };
     let st = strings_for(delegate.ivars().settings.borrow().lang);
@@ -119,8 +126,9 @@ pub fn update_selection(delegate: &AppDelegate, selected: i64) {
     );
     let pill = delegate
         .ivars()
-        .settings_selection
+        .settings_ui
         .borrow()
+        .selection
         .as_ref()
         .cloned();
     let is_tab = labels.iter().any(|(t, _)| *t == selected);

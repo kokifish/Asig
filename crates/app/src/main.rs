@@ -15,7 +15,7 @@ mod tray;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use app_delegate::{AppDelegate, AppIvars};
+use app_delegate::{AppDelegate, AppIvars, SettingsUi};
 use objc2::rc::Retained;
 use objc2::runtime::{Bool, NSObject, Sel};
 use objc2::{DefinedClass, MainThreadMarker, class, msg_send, sel};
@@ -52,18 +52,11 @@ fn main() {
         overlay_window: RefCell::new(Some(overlay_window)),
         overlay_view: RefCell::new(Some(overlay_view)),
         popover: RefCell::new(None),
-        settings_window: RefCell::new(None),
         click_through: RefCell::new(true),
         settings: RefCell::new(settings),
         last_sig: RefCell::new(String::new()),
         tick_timer: RefCell::new(None),
-        settings_sidebar: RefCell::new(None),
-        settings_content: RefCell::new(None),
-        settings_scroll: RefCell::new(None),
-        settings_pane_heights: RefCell::new(HashMap::new()),
-        settings_panes: RefCell::new(None),
-        settings_selected: RefCell::new(0),
-        settings_selection: RefCell::new(None),
+        settings_ui: RefCell::new(SettingsUi::default()),
         state_controls: RefCell::new(HashMap::new()),
         last_global: RefCell::new(None),
     });

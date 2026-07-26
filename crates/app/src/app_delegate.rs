@@ -55,6 +55,29 @@ fn toggle_in_vec<T: PartialEq>(vec: &mut Vec<T>, item: T, on: bool) {
     }
 }
 
+/// 设置窗的运行时 UI 状态(窗口/侧栏/滚动区/各 pane/选中态)。首次打开懒创建,语言切换或
+/// Reset 时整体丢弃重建(`rebuild_settings` 一行 `= SettingsUi::default()` 清零)。聚合成一个
+/// 结构既让 `AppIvars` 字段语义清晰,又把 8 个独立 `RefCell` 收敛为一个。
+#[derive(Default)]
+pub struct SettingsUi {
+    /// 设置窗;首次打开懒创建。
+    pub window: Option<Retained<NSWindow>>,
+    /// 设置窗侧栏(切换 tab 时改前缀用)。
+    pub sidebar: Option<Retained<NSView>>,
+    /// 设置窗右侧内容区(viewWithTag 找控件用;存 scrollView 的 NSView 视图)。
+    pub content: Option<Retained<NSView>>,
+    /// 设置窗右区 scrollView(切 pane 时读 documentView 设高 + 滚顶)。
+    pub scroll: Option<Retained<NSScrollView>>,
+    /// 各 pane(按 tab id 0..7)的实际内容高;切 pane 时据此设 documentView 高。
+    pub pane_heights: HashMap<i64, CGFloat>,
+    /// 设置窗 8 个 pane(按 pane id 0..7 排列:常规/DoneNotif/.../Offline/关于)。切 tab 用。
+    pub panes: Option<Vec<Retained<NSView>>>,
+    /// 设置窗当前选中的 tab(pane id)。
+    pub selected: i64,
+    /// 侧栏选中药丸(液态玻璃,共享一个);update_selection 按选中 tab 移位/显隐。
+    pub selection: Option<Retained<NSView>>,
+}
+
 /// AppDelegate 的实例变量(方法只能拿 &self,故用 RefCell)。
 pub struct AppIvars {
     pub monitor: RefCell<Monitor>,
@@ -63,8 +86,6 @@ pub struct AppIvars {
     pub overlay_window: RefCell<Option<Retained<NSWindow>>>,
     pub overlay_view: RefCell<Option<Retained<PillView>>>,
     pub popover: RefCell<Option<Popover>>,
-    /// 设置窗;首次打开时懒创建。
-    pub settings_window: RefCell<Option<Retained<NSWindow>>>,
     /// 浮窗是否点击穿透。true=穿透(默认);false=接收鼠标可拖动。
     pub click_through: RefCell<bool>,
     /// 用户设置(灯大小 + 各状态样式);启动加载,改动即存盘。
@@ -73,20 +94,8 @@ pub struct AppIvars {
     pub last_sig: RefCell<String>,
     /// tick 定时器引用;轮询间隔改动时作废旧 timer 重排。
     pub tick_timer: RefCell<Option<Retained<NSTimer>>>,
-    /// 设置窗侧栏(切换 tab 时改前缀用)。
-    pub settings_sidebar: RefCell<Option<Retained<NSView>>>,
-    /// 设置窗右侧内容区(viewWithTag 找控件用;存 scrollView 的 NSView 视图)。
-    pub settings_content: RefCell<Option<Retained<NSView>>>,
-    /// 设置窗右区 scrollView(切 pane 时读 documentView 设高 + 滚顶)。
-    pub settings_scroll: RefCell<Option<Retained<NSScrollView>>>,
-    /// 各 pane(按 tab id 0..7)的实际内容高;切 pane 时据此设 documentView 高。
-    pub settings_pane_heights: RefCell<HashMap<i64, CGFloat>>,
-    /// 设置窗 8 个 pane(按 pane id 0..7 排列:常规/DoneNotif/.../Offline/关于)。切 tab 用。
-    pub settings_panes: RefCell<Option<Vec<Retained<NSView>>>>,
-    /// 设置窗当前选中的 tab(pane id)。
-    pub settings_selected: RefCell<i64>,
-    /// 侧栏选中药丸(液态玻璃,共享一个);update_selection 按选中 tab 移位/显隐。
-    pub settings_selection: RefCell<Option<Retained<NSView>>>,
+    /// 设置窗 UI 状态(窗口/侧栏/滚动区/pane/选中);整体 Default,重建时一行清零。
+    pub settings_ui: RefCell<SettingsUi>,
     /// 各状态 pane 的控件(色块/radio/速度),按 StyleKey 索引;reset / 选择变更时刷新。
     pub state_controls: RefCell<HashMap<StyleKey, crate::settings::StateControls>>,
     /// 上一轮的全局状态;转入时触发系统通知(边沿检测)。
@@ -182,9 +191,9 @@ define_class!(
         /// popover 里"设置…"按钮:打开设置窗口。首次打开时懒创建。
         #[unsafe(method(openSettings:))]
         fn open_settings(&self, _sender: *mut NSObject) {
-            if self.ivars().settings_window.borrow().is_none() {
+            if self.ivars().settings_ui.borrow().window.is_none() {
                 let w = crate::settings::build(self);
-                *self.ivars().settings_window.borrow_mut() = Some(w);
+                self.ivars().settings_ui.borrow_mut().window = Some(w);
             }
             // 打开设置窗期间切 regular:Asig 本是 accessory 菜单栏 app(LSUIElement,不占 Dock /
             // 不在 Cmd+Tab 切换器);切 regular 后出现在 Dock + Cmd+Tab + 主菜单栏,可正常窗口切换。
@@ -196,7 +205,7 @@ define_class!(
             };
             // 首次建最小主菜单(App 菜单系统补 Quit ⌘Q + File 菜单 Close ⌘W)。
             crate::menu::ensure_main_menu(self.ivars().settings.borrow().lang);
-            if let Some(w) = self.ivars().settings_window.borrow().as_ref() {
+            if let Some(w) = self.ivars().settings_ui.borrow().window.as_ref() {
                 crate::settings::show(w);
             }
         }
@@ -247,7 +256,7 @@ define_class!(
             let v: f64 = unsafe { msg_send![sender, doubleValue] };
             let dot = Settings::dot_size_clamp(v.round() as u32);
             self.ivars().settings.borrow_mut().dot_size = dot;
-            if let Some(content) = self.ivars().settings_content.borrow().as_ref() {
+            if let Some(content) = self.ivars().settings_ui.borrow().content.as_ref() {
                 if let Some(label) =
                     crate::settings::view_with_tag(content, crate::settings::SIZE_LABEL_TAG)
                 {
@@ -452,20 +461,22 @@ define_class!(
                 quit_app();
                 return;
             }
-            let old = *self.ivars().settings_selected.borrow();
+            let old = self.ivars().settings_ui.borrow().selected;
             if old == new || !(0..8).contains(&new) {
                 return;
             }
-            let panes = self.ivars().settings_panes.borrow();
-            if let Some(v) = panes.as_ref() {
-                if let Some(p) = v.get(old as usize) {
-                    let _: () = unsafe { msg_send![p, setHidden: Bool::YES] };
-                }
-                if let Some(p) = v.get(new as usize) {
-                    let _: () = unsafe { msg_send![p, setHidden: Bool::NO] };
+            {
+                let panes = self.ivars().settings_ui.borrow();
+                if let Some(v) = panes.panes.as_ref() {
+                    if let Some(p) = v.get(old as usize) {
+                        let _: () = unsafe { msg_send![p, setHidden: Bool::YES] };
+                    }
+                    if let Some(p) = v.get(new as usize) {
+                        let _: () = unsafe { msg_send![p, setHidden: Bool::NO] };
+                    }
                 }
             }
-            *self.ivars().settings_selected.borrow_mut() = new;
+            self.ivars().settings_ui.borrow_mut().selected = new;
             crate::settings::update_selection(self, new);
             // documentView 高度 = max(clip 可视高, 新 pane content_h),并滚到顶(避免残留上一
             // pane 的滚动位置)。详见 settings::scroll_pane_to_top。
@@ -553,7 +564,7 @@ define_class!(
         /// 推到下一轮 runloop,此时 layout 已 commit,setBoundsOrigin 稳得住,各 pane 顶部对齐。
         #[unsafe(method(scrollSettingsToTop:))]
         fn scroll_settings_to_top(&self, _sender: *mut NSObject) {
-            if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
+            if let Some(scroll) = self.ivars().settings_ui.borrow().scroll.as_ref() {
                 let cv = scroll.contentView();
                 let _: () = unsafe { msg_send![&cv, setBoundsOrigin: NSPoint::new(0.0, 0.0)] };
             }
@@ -567,8 +578,9 @@ define_class!(
         fn window_did_resize(&self, _notif: *mut NSObject) {
             let pane_w = self
                 .ivars()
-                .settings_scroll
+                .settings_ui
                 .borrow()
+                .scroll
                 .as_ref()
                 .and_then(|s| s.documentView())
                 .map(|d| {
@@ -583,15 +595,16 @@ define_class!(
             }
             // 窗口变高 → clip 可视高变大:重定 doc 高 = max(新 clip 高, 当前 pane content_h),
             // 否则原本填满 clip 的 doc 可能又矮于新 clip,重新触发短文档锚定漂移(见 set_doc_height)。
-            let sel = *self.ivars().settings_selected.borrow();
+            let sel = self.ivars().settings_ui.borrow().selected;
             let ch = self
                 .ivars()
-                .settings_pane_heights
+                .settings_ui
                 .borrow()
+                .pane_heights
                 .get(&sel)
                 .copied()
                 .unwrap_or(crate::settings::H);
-            if let Some(scroll) = self.ivars().settings_scroll.borrow().as_ref() {
+            if let Some(scroll) = self.ivars().settings_ui.borrow().scroll.as_ref() {
                 crate::settings::set_doc_height(scroll, ch);
             }
         }
@@ -647,19 +660,15 @@ impl AppDelegate {
 
     /// 关闭旧设置窗、丢弃其 pane/控件引用,按当前(可能已变的语言/设置)重新构建并显示。
     fn rebuild_settings(&self) {
-        if let Some(w) = self.ivars().settings_window.borrow_mut().take() {
+        // 先 close 旧窗(丢弃前显式关),再整体丢弃 UI 态(一行清零,替代旧实现逐字段 None)。
+        if let Some(w) = self.ivars().settings_ui.borrow_mut().window.take() {
             let _: () = unsafe { msg_send![&w, close] };
         }
-        *self.ivars().settings_panes.borrow_mut() = None;
-        *self.ivars().settings_sidebar.borrow_mut() = None;
-        *self.ivars().settings_content.borrow_mut() = None;
-        *self.ivars().settings_scroll.borrow_mut() = None;
-        self.ivars().settings_pane_heights.borrow_mut().clear();
-        *self.ivars().settings_selected.borrow_mut() = 0;
+        *self.ivars().settings_ui.borrow_mut() = SettingsUi::default();
         self.ivars().state_controls.borrow_mut().clear();
         let w = crate::settings::build(self);
-        *self.ivars().settings_window.borrow_mut() = Some(w);
-        if let Some(w) = self.ivars().settings_window.borrow().as_ref() {
+        self.ivars().settings_ui.borrow_mut().window = Some(w);
+        if let Some(w) = self.ivars().settings_ui.borrow().window.as_ref() {
             crate::settings::show(w);
         }
     }

@@ -9,11 +9,11 @@ use agent_light_core::{Anim, StateStyle};
 use crate::overlay::swatch_image;
 
 use super::consts::{
-    ANIM_ORDER, CARD_BOT_PAD, CARD_TOP_PAD, COLOR_GAP, COLOR_ORDER, CONTENT_PAD_X, HEADER_GAP,
-    ROW_H, SPEED_MAX, SPEED_MIN, SWATCH_D, TOP_INSET,
+    ANIM_ORDER, CARD_BOT_PAD, CARD_TOP_PAD, COLOR_ORDER, CONTENT_PAD_X, HEADER_GAP, ROW_H,
+    SPEED_MAX, SPEED_MIN, SWATCH_D, SWATCH_STEP, TOP_INSET,
 };
 use super::pane_state::StateControls;
-use super::tags::hz_of;
+use super::tags::{color_flow_metrics, hz_of};
 
 /// 按 pane 宽度重排 state pane:card + 色块(固定间距 flow,行数随宽度)+ Anim/Speed/label。
 /// build 与 windowDidResize 都调 —— 宽度变时色块自动换行 / 合并到 1 行,间距始终固定。
@@ -24,11 +24,8 @@ pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
     let lx = x0 + 16.0;
     let cx = x0 + 16.0 + lw;
     let cw = col_w - 16.0 - lw - 16.0; // card 左右内边距对称 16
-    let step = SWATCH_D + COLOR_GAP; // 色块固定间距(恒定,不随宽度变)
     // 每行可容纳数:首块 + 后续 (step) 量出;放不下就换行(每行数量可不同)。
-    let per_row = (((cw + COLOR_GAP) / step).floor() as usize).max(1);
-    let color_rows = COLOR_ORDER.len().div_ceil(per_row);
-    let color_h = color_rows as CGFloat * step;
+    let (per_row, color_h) = color_flow_metrics(cw);
     let extra = if c.key == agent_light_core::StyleKey::DoneNotif {
         ROW_H
     } else {
@@ -52,8 +49,8 @@ pub fn layout_state_pane(c: &StateControls, pane_w: CGFloat) {
     for (i, btn) in c.color.iter().enumerate() {
         let r = i / per_row;
         let cc = i % per_row;
-        let sx = cx + cc as CGFloat * step;
-        let row_mid = color_top - (r as CGFloat + 0.5) * step;
+        let sx = cx + cc as CGFloat * SWATCH_STEP;
+        let row_mid = color_top - (r as CGFloat + 0.5) * SWATCH_STEP;
         btn.setFrame(NSRect::new(
             NSPoint::new(sx, row_mid - SWATCH_D / 2.0),
             NSSize::new(SWATCH_D, SWATCH_D),

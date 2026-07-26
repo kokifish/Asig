@@ -16,17 +16,17 @@ use agent_light_core::{
 use crate::app_delegate::AppDelegate;
 
 use super::consts::{
-    ANIM_OFF, CARD_BOT_PAD, CARD_TOP_PAD, COL_W, COLOR_GAP, COLOR_OFF, COLOR_ORDER,
-    CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, GRADIENT_LABEL_OFF, GRADIENT_OFF, H, HEADER_GAP,
-    PIN_RIGHT, RESET_OFF, RESIZE_W, ROW_H, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN, SPEED_OFF,
-    SWATCH_D, TOP_INSET,
+    ANIM_OFF, CARD_BOT_PAD, CARD_TOP_PAD, COL_W, COLOR_OFF, COLOR_ORDER, CONTENT_HEADER_H,
+    CONTENT_PAD_X, CONTENT_W, GRADIENT_LABEL_OFF, GRADIENT_OFF, H, HEADER_GAP, PIN_RIGHT,
+    RESET_OFF, RESIZE_W, ROW_H, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN, SPEED_OFF, SWATCH_D,
+    TOP_INSET,
 };
 use super::controls::{
     add_card, add_plain_button, add_radio_button, add_slider, add_swatch_button, add_text, new_view,
 };
 use super::layout::{layout_state_pane, refresh_duration, refresh_state_controls};
 use super::strings::Strings;
-use super::tags::{label_col_width, tab_of_key};
+use super::tags::{color_flow_metrics, label_col_width, tab_of_key};
 
 /// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
 pub struct StateControls {
@@ -101,10 +101,7 @@ pub(crate) fn build_state_pane(
     // 若 card 超出则出滚动条(符合每页独立滚动语义)。先算 content_h,header 据它定位。
     let col_w0 = CONTENT_W - CONTENT_PAD_X * 2.0;
     let cw0 = col_w0 - 16.0 - lw;
-    let step0 = SWATCH_D + COLOR_GAP;
-    let per_row0 = (((cw0 + COLOR_GAP) / step0).floor() as usize).max(1);
-    let color_rows0 = COLOR_ORDER.len().div_ceil(per_row0);
-    let color_h0 = color_rows0 as CGFloat * step0;
+    let (_, color_h0) = color_flow_metrics(cw0);
     let extra0 = if key == StyleKey::DoneNotif {
         ROW_H
     } else {

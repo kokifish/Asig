@@ -16,9 +16,11 @@
 
 use std::collections::HashMap;
 
-use objc2::DefinedClass;
 use objc2::rc::{Allocated, Retained};
-use objc2::{MainThreadMarker, class, msg_send, sel};
+use objc2::runtime::Bool;
+use objc2::{
+    ClassType, DefinedClass, MainThreadMarker, MainThreadOnly, class, define_class, msg_send, sel,
+};
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSColor, NSScrollView, NSTitlebarSeparatorStyle, NSView,
     NSWindow, NSWindowStyleMask, NSWindowTitleVisibility,
@@ -27,7 +29,7 @@ use objc2_core_foundation::CGFloat;
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use crate::app_delegate::AppDelegate;
-use crate::overlay::{FlippedView, swatch_image};
+use crate::overlay::swatch_image;
 
 use consts::{RESIZE_H, RESIZE_W, RESIZE_WH, STATE_KEYS, TAB_ABOUT, TAB_GENERAL};
 use controls::{add_icon_button, add_tab_button, new_view};
@@ -126,7 +128,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     content_area.setDocumentView(Some(&doc));
 
     // 8 pane:General + 6 状态(各带 StateControls)+ About。按 pane id(=索引)排。
-    // 各 pane build 时算 content_h(动态,非固定 H),登记到 settings_pane_heights 供切 pane 时取。
+    // 各 pane build 时算 content_h(动态,非固定 H),登记到 settings_ui.pane_heights 供切 pane 时取。
     let mut panes: Vec<Retained<NSView>> = Vec::with_capacity(8);
     let mut controls_map: HashMap<agent_light_core::StyleKey, StateControls> = HashMap::new();
     let mut pane_heights: HashMap<i64, CGFloat> = HashMap::new();
@@ -179,15 +181,18 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     root.addSubview(&sidebar.view); // 浮动侧栏在上
     window.setContentView(Some(&root));
 
-    *delegate.ivars().settings_sidebar.borrow_mut() = Some(sidebar.content);
-    // settings_content 存 scrollView(upcast 到 NSView)——changeSize 用 viewWithTag 递归找
-    // SIZE_LABEL_TAG,scrollView 子树仍可命中。settings_scroll 存强类型 scrollView 引用,
-    // switchSettingsTab/windowDidResize 据此访问 documentView。
-    *delegate.ivars().settings_content.borrow_mut() = Some(content_area.clone().into_super());
-    *delegate.ivars().settings_scroll.borrow_mut() = Some(content_area);
-    *delegate.ivars().settings_pane_heights.borrow_mut() = pane_heights;
-    *delegate.ivars().settings_panes.borrow_mut() = Some(panes);
-    *delegate.ivars().settings_selected.borrow_mut() = TAB_GENERAL;
+    // content 存 scrollView(upcast 到 NSView)——changeSize 用 viewWithTag 递归找
+    // SIZE_LABEL_TAG,scrollView 子树仍可命中。scroll 存强类型 scrollView 引用,
+    // switchSettingsTab/windowDidResize 据此访问 documentView。一次 borrow_mut 批量回填。
+    {
+        let mut ui = delegate.ivars().settings_ui.borrow_mut();
+        ui.sidebar = Some(sidebar.content);
+        ui.content = Some(content_area.clone().into_super());
+        ui.scroll = Some(content_area);
+        ui.pane_heights = pane_heights;
+        ui.panes = Some(panes);
+        ui.selected = TAB_GENERAL;
+    }
     *delegate.ivars().state_controls.borrow_mut() = controls_map;
     update_selection(delegate, TAB_GENERAL);
 
@@ -198,8 +203,8 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
     {
         if (1..8).contains(&n) {
             {
-                let panes_ref = delegate.ivars().settings_panes.borrow();
-                if let Some(v) = panes_ref.as_ref() {
+                let panes_ref = delegate.ivars().settings_ui.borrow();
+                if let Some(v) = panes_ref.panes.as_ref() {
                     if let Some(p0) = v.first() {
                         p0.setHidden(true);
                     }
@@ -208,7 +213,7 @@ pub fn build(delegate: &AppDelegate) -> Retained<NSWindow> {
                     }
                 }
             }
-            *delegate.ivars().settings_selected.borrow_mut() = n;
+            delegate.ivars().settings_ui.borrow_mut().selected = n;
             update_selection(delegate, n);
             // 同步 documentView 高度 = max(clip 可视高, 该 pane content_h),并滚到顶。
             scroll_pane_to_top(delegate, n);
@@ -225,7 +230,7 @@ fn build_sidebar(sidebar: &Retained<NSView>, delegate: &AppDelegate, st: &String
     // 时按选中按钮的 frame 移位并显示。状态色圆点保持彩色,仅文字随选中转白。
     let pill = make_selection_pill();
     sidebar.addSubview(&pill);
-    *delegate.ivars().settings_selection.borrow_mut() = Some(pill);
+    delegate.ivars().settings_ui.borrow_mut().selection = Some(pill);
 
     let tab_w = consts::SIDEBAR_PANE_W - 16.0;
     let top = consts::SIDEBAR_PANE_H - 14.0 - 28.0; // 顶部留白 14 + tab 高 28
@@ -309,12 +314,13 @@ pub fn set_doc_height(scroll: &NSScrollView, content_h: CGFloat) {
 pub(crate) fn scroll_pane_to_top(delegate: &AppDelegate, sel: i64) {
     let h = delegate
         .ivars()
-        .settings_pane_heights
+        .settings_ui
         .borrow()
+        .pane_heights
         .get(&sel)
         .copied()
         .unwrap_or(consts::H);
-    if let Some(scroll) = delegate.ivars().settings_scroll.borrow().as_ref() {
+    if let Some(scroll) = delegate.ivars().settings_ui.borrow().scroll.as_ref() {
         set_doc_height(scroll, h);
     }
     let _: () = unsafe {
@@ -335,4 +341,32 @@ pub fn show(window: &NSWindow) {
     app.activateIgnoringOtherApps(true);
     window.center();
     window.makeKeyAndOrderFront(None);
+}
+
+// documentView:isFlipped=>YES 的 NSView,让设置窗右区 NSScrollView 内容从顶部排布(默认底锚
+// 会贴底)。翻转后 y=0 在顶、子视图从顶部向下延展。仅供设置窗滚动区用,故定义在此模块。
+define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FlippedView"]
+    #[ivars = ()]
+    pub struct FlippedView;
+
+    #[allow(non_snake_case)]
+    impl FlippedView {
+        /// 翻转坐标系:y=0 在顶(而非底),子视图从顶部排布。
+        #[unsafe(method(isFlipped))]
+        fn is_flipped(&self) -> Bool {
+            Bool::YES
+        }
+    }
+);
+
+impl FlippedView {
+    /// 按指定 frame 构造(alloc → set_ivars(()) → initWithFrame);ivars 为单元类型。
+    fn new(frame: NSRect) -> Retained<Self> {
+        let allocated: Allocated<Self> = unsafe { msg_send![Self::class(), alloc] };
+        let partial = allocated.set_ivars(());
+        unsafe { msg_send![super(partial), initWithFrame: frame] }
+    }
 }

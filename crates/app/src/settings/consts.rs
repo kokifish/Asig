@@ -113,6 +113,9 @@ pub(crate) const SWATCH_D: CGFloat = 28.0;
 /// 相邻色块之间的固定像素间距(恒定,不随宽度变);色块按此间距左对齐 flow,
 /// 放不下则换行(每行数量可不同),窗口拉到很宽时合并为 1 行。
 pub(crate) const COLOR_GAP: CGFloat = 15.0;
+/// 色块相邻步长 = 直径 + 间距。flow 布局单一事实源:`tags::color_flow_metrics`(行数/总高)
+/// 与 `layout_state_pane`(色块网格定位)共用,不两处分写。
+pub(crate) const SWATCH_STEP: CGFloat = SWATCH_D + COLOR_GAP;
 
 // ===== 卡片布局几何 =====
 // 右区内容布局:标题属于 content panel 的 header;卡片与标题左边缘对齐。
