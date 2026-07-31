@@ -7,12 +7,13 @@
 //! 2. **gateway 存活** — `gateway_state.json` 的 pid 配 `kill(pid,0)`;不活 / json 缺失 →
 //!    整 source 空 `discover`(Asig 该 kind 自然 Offline,与 OpenClaw/Claude 一致)。
 //!
-//! 状态映射:
+//! 状态映射(学 OpenClaw「stop 即完成」,无 10min 窗口):
 //!   - 尾部 `tool_calls` / `user` / `tool` → Working;
-//!   - 尾部 `assistant + stop`(无 tool_calls)+ `active_agents == 0` + 最后消息 >`IDLE_MS`(10min)
-//!     → Done;同条件但 ≤`IDLE_MS` → NeedsDeci(刚问完用户,大概率还没回);
-//!   - `active_agents > 0` 时 stop 不直接 Done,保守算 Working(本会话异步工具 / 别处仍忙);
+//!   - 尾部 `assistant + stop`(无 tool_calls,回复完成交还用户)+ `active_agents == 0`
+//!     → **Done(立即)**;用户继续追问会写新 `user` 消息 → 自动转 Working;
+//!   - `active_agents > 0` 时 stop 保守算 Working(本会话异步工具 / 别处仍忙);
 //!   - `end_reason`/`handoff_error` 含 error,或有 failed `async_delegations` → Error;
+//!   - hermes 是 gateway 架构(agent 自主执行工具,无「等用户授权」中间态)→ 不产 NeedsDeci;
 //!   - 僵尸(最后消息 >`ACTIVE_WINDOW_MS` = 30min)不显示(用户关终端窗口不触发 cli_close,
 //!     会话永远 OPEN,实证有多个 3 天~1 月前的 cli 僵尸)。
 
@@ -29,8 +30,6 @@ use std::path::PathBuf;
 
 /// 会话活跃窗口:最后消息在此内才显示(滤 cli 僵尸会话)。
 const ACTIVE_WINDOW_MS: u64 = 30 * 60 * 1000; // 30 min
-/// Done vs NeedsDeci 分界:assistant + stop 后超此 → Done;否则 NeedsDeci(刚问完)。
-const IDLE_MS: u64 = 10 * 60 * 1000; // 10 min
 
 pub struct HermesSource {
     root: PathBuf,
@@ -100,7 +99,7 @@ fn discover_from(conn: &Connection, now: u64, active_agents: u32) -> Vec<AgentSe
         .filter(|r| r.last_msg_at >= cutoff)
         .map(|r| {
             let error_flag = r.has_error() || failed.contains(&r.session_id);
-            let status = classify_session(&r, now, active_agents, error_flag);
+            let status = classify_session(&r, active_agents, error_flag);
             AgentSession {
                 kind: AgentKind::Hermes,
                 id: format!("Hermes:{}", r.session_id),
@@ -108,43 +107,44 @@ fn discover_from(conn: &Connection, now: u64, active_agents: u32) -> Vec<AgentSe
                 cwd: r.cwd.clone().map(PathBuf::from),
                 status,
                 label: Some(label_of(&r)),
+                last_user_msg: empty_to_none(&r.last_user_content),
+                last_assistant_msg: empty_to_none(&r.last_assistant_content),
             }
         })
         .collect()
 }
 
 /// 单会话状态判定(纯函数,优先级):
-///   Error > Working(尾部 tool_calls/user/tool,或 active_agents>0) > Done(stop+idle>10min)
-///   > NeedsDeci(stop+idle≤10min)
-fn classify_session(
-    r: &db::SessionRow,
-    now: u64,
-    active_agents: u32,
-    error_flag: bool,
-) -> AgentStatus {
+///   Error > Working(尾部 tool_calls/user/tool,或 active_agents>0) > Done(stop + 全局空闲)
+/// hermes 无 NeedsDeci(gateway 架构 agent 自主执行工具,无「等用户决策」中间态)。
+fn classify_session(r: &db::SessionRow, active_agents: u32, error_flag: bool) -> AgentStatus {
     if error_flag {
         return AgentStatus::Error;
     }
     if is_working_tail(&r.last_role, r.last_finish_reason.as_deref()) {
         return AgentStatus::Working;
     }
-    // 尾部 assistant+stop(无 tool_calls):active_agents>0 保守算 Working;否则按空闲时长
-    // 分 Done(等久了) / NeedsDeci(刚问完)。
+    // 尾部 assistant+stop(回复完成)。active_agents>0(别处仍忙)保守算 Working;否则立即
+    // Done——学 OpenClaw「stop 即完成」:用户继续追问写新 user 消息自动转 Working,无需缓冲。
     if active_agents > 0 {
         return AgentStatus::Working;
     }
-    let age = now.saturating_sub(r.last_msg_at);
-    if age > IDLE_MS {
-        AgentStatus::Done
-    } else {
-        AgentStatus::NeedsDeci
-    }
+    AgentStatus::Done
 }
 
 /// 尾部"在跑"信号:`tool_calls`(模型发工具调用)/ `user`(刚输入)/ `tool`(结果待处理)。
 /// 对照 claude.rs read_tail_signal 的语义。
 fn is_working_tail(role: &str, finish: Option<&str>) -> bool {
     role == "user" || role == "tool" || finish == Some("tool_calls")
+}
+
+/// 空串 → None(Panel 事件 content 用;无内容则记事件时该字段为 None)。
+fn empty_to_none(s: &str) -> Option<String> {
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
 }
 
 /// 标签降级链:display_name > title > cwd basename > session_id 前 8 字符。
@@ -209,7 +209,7 @@ pub fn probe() -> Vec<HermesProbe> {
         .filter(|r| r.last_msg_at >= cutoff)
         .map(|r| {
             let error_flag = r.has_error() || failed.contains(&r.session_id);
-            let status = classify_session(&r, now, active_agents, error_flag);
+            let status = classify_session(&r, active_agents, error_flag);
             HermesProbe {
                 last_msg_age_s: (now.saturating_sub(r.last_msg_at) / 1000) as i64,
                 session_id: r.session_id.clone(),

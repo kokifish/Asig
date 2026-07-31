@@ -124,7 +124,7 @@ fn discover_from(
     files: &[SessionFile],
     seen: &mut HashMap<u32, AgentStatus>,
     is_alive: impl Fn(u32) -> bool,
-    signal_of: impl Fn(&str) -> Option<String>,
+    signal_of: impl Fn(&str) -> Option<TailInfo>,
     kind: AgentKind,
 ) -> Vec<AgentSession> {
     // 按目录分组,记下首次出现顺序(稳定输出)。
@@ -155,7 +155,7 @@ fn discover_from(
             continue;
         };
         let prev = seen.get(&primary.pid).copied();
-        let Some(st) = group_status(primary, group, prev, &is_alive, &signal_of) else {
+        let Some((st, tail)) = group_status(primary, group, prev, &is_alive, &signal_of) else {
             continue;
         };
         seen.insert(primary.pid, st);
@@ -167,6 +167,8 @@ fn discover_from(
             cwd: primary.cwd.clone().map(PathBuf::from),
             status: st,
             label: primary.session_id.clone(),
+            last_user_msg: tail.as_ref().and_then(|t| t.last_user_msg.clone()),
+            last_assistant_msg: tail.as_ref().and_then(|t| t.last_assistant_msg.clone()),
         });
     }
     // 本轮没出现的(主)pid → 不再盯。干净退出就这样被自然忘掉。
@@ -182,9 +184,10 @@ fn group_status(
     group: &[&SessionFile],
     prev_of_primary: Option<AgentStatus>,
     is_alive: &impl Fn(u32) -> bool,
-    signal_of: &impl Fn(&str) -> Option<String>,
-) -> Option<AgentStatus> {
+    signal_of: &impl Fn(&str) -> Option<TailInfo>,
+) -> Option<(AgentStatus, Option<TailInfo>)> {
     let mut best: Option<AgentStatus> = None;
+    let mut primary_tail: Option<TailInfo> = None;
     for &f in group {
         // 只聚合 primary 与 bg 子进程;**其他 interactive 是用户另开的独立 REPL,跳过**
         // (否则同 cwd 一个遗留 busy+end_turn 会话会把整组拉成 NeedsDeci)。bg 子进程的
@@ -199,18 +202,23 @@ fn group_status(
             None
         };
         let alive = is_alive(f.pid);
-        // 只对 busy 进程读 transcript(idle/shell→Done 无需、省一次文件读)。
-        let sig = if alive && f.status.as_deref() == Some("busy") {
+        let is_primary = f.pid == primary.pid;
+        // primary 总读 transcript:idle/shell(Done)时也要取 last_assistant_msg 给 Done 事件
+        // (其 signal 在 idle 时被 classify 忽略,不影响 status)。bg 仅 busy 读(只为活跃度)。
+        let tail = if alive && (is_primary || f.status.as_deref() == Some("busy")) {
             f.session_id.as_deref().and_then(signal_of)
         } else {
             None
         };
-        let Some(st) = classify(f, prev, alive, sig.as_deref()) else {
+        if is_primary {
+            primary_tail = tail.clone();
+        }
+        let Some(st) = classify(f, prev, alive, tail.as_ref().map(|t| t.signal.as_str())) else {
             continue;
         };
         best = Some(most_active(best, st));
     }
-    best
+    best.map(|st| (st, primary_tail))
 }
 
 /// 同 cwd 内活跃度排序:NeedsDeci/Error > Working > Done > Offline;返回更活跃者。
@@ -268,7 +276,7 @@ fn classify(
 
 /// 读会话 transcript(`<root>/projects/*/<sessionId>.jsonl`)尾部的"最后信号"。
 /// busy 会话据此区分 NeedsDeci(end_turn)vs Working(其他)。读不到 → None(回退 Working)。
-fn last_signal(root: &Path, session_id: &str) -> Option<String> {
+fn last_signal(root: &Path, session_id: &str) -> Option<TailInfo> {
     let projects = root.join("projects");
     let Ok(entries) = std::fs::read_dir(&projects) else {
         return None;
@@ -276,36 +284,64 @@ fn last_signal(root: &Path, session_id: &str) -> Option<String> {
     for e in entries.flatten() {
         let p = e.path().join(format!("{session_id}.jsonl"));
         if p.is_file() {
-            return read_tail_signal(&p);
+            return read_tail(&p);
         }
     }
     None
 }
 
-/// 只读文件尾部 ~16KB,反序找最后一条**有意义事件**:`type:"user"`(用户刚输入,Claude
-/// 正在处理)→ 返回 `"user"`;`type:"assistant"` → 返回其 `message.stop_reason`
-/// (`end_turn`/`tool_use`/...)。这样 end_turn 之后若已有 user 消息,判 Working 而非
-/// 残留 end_turn 误判 NeedsDeci。尾部 I/O 走共用 `jsonl_tail::read_tail_lines`。
-fn read_tail_signal(path: &Path) -> Option<String> {
+/// transcript 尾部提取结果:`signal`(状态判定)+ 最近 user/assistant 文本(Panel 事件用)。
+/// 一次尾部 I/O 同时算出,避免重复读文件。
+#[derive(Clone)]
+struct TailInfo {
+    signal: String,
+    last_user_msg: Option<String>,
+    last_assistant_msg: Option<String>,
+}
+
+/// 只读文件尾部 ~16KB,反序遍历:`signal` 取最后一条有意义事件(`type:"user"` → `"user"`;
+/// `type:"assistant"` → 其 `message.stop_reason`),并顺带提取最近 user 文本 + 最近有 text
+/// 的 assistant 文本(`message.content`,string 或 `[{type:"text",text:"…"}]` 数组,跳过纯
+/// tool_use)。这样 end_turn 之后若已有 user 消息,判 Working 而非残留 end_turn 误判
+/// NeedsDeci。读不到 / 无有意义事件 → None(上游回退 Working)。
+fn read_tail(path: &Path) -> Option<TailInfo> {
     let events = crate::jsonl_tail::read_tail_lines(path, 16_384)?;
+    let mut signal: Option<String> = None;
+    let mut last_user_msg: Option<String> = None;
+    let mut last_assistant_msg: Option<String> = None;
     for v in events.iter().rev() {
-        let Some(ty) = v.get("type").and_then(|t| t.as_str()) else {
-            continue;
-        };
-        if ty == "user" {
-            return Some("user".to_string());
-        }
-        if ty == "assistant" {
-            if let Some(sr) = v
-                .get("message")
-                .and_then(|m| m.get("stop_reason"))
-                .and_then(|s| s.as_str())
-            {
-                return Some(sr.to_string());
+        let ty = v.get("type").and_then(|t| t.as_str());
+        if signal.is_none() {
+            if ty == Some("user") {
+                signal = Some("user".to_string());
+            } else if ty == Some("assistant") {
+                if let Some(sr) = v
+                    .get("message")
+                    .and_then(|m| m.get("stop_reason"))
+                    .and_then(|s| s.as_str())
+                {
+                    signal = Some(sr.to_string());
+                }
             }
         }
+        let content = v.get("message").and_then(|m| m.get("content"));
+        if last_user_msg.is_none() && ty == Some("user") {
+            last_user_msg = crate::jsonl_tail::extract_text(content);
+        }
+        if last_assistant_msg.is_none() && ty == Some("assistant") {
+            if let Some(t) = crate::jsonl_tail::extract_text(content) {
+                last_assistant_msg = Some(t);
+            }
+        }
+        if signal.is_some() && last_user_msg.is_some() && last_assistant_msg.is_some() {
+            break;
+        }
     }
-    None
+    Some(TailInfo {
+        signal: signal?,
+        last_user_msg,
+        last_assistant_msg,
+    })
 }
 
 // ---- CLI 探针(`probe-claude`):复用 discover 的聚合 + classify,输出诊断视图 ----
@@ -371,6 +407,7 @@ pub fn probe() -> Vec<ClaudeProbe> {
         let status = group_status(primary, group, None, &crate::sys::pid_alive, &|sid| {
             last_signal(&src.root, sid)
         })
+        .map(|(st, _)| st)
         .unwrap_or(AgentStatus::Done);
         let members = group
             .iter()
@@ -378,13 +415,14 @@ pub fn probe() -> Vec<ClaudeProbe> {
                 let alive = crate::sys::pid_alive(f.pid);
                 let is_primary = f.pid == primary.pid;
                 let merged = is_primary || f.kind.as_deref() == Some("bg");
-                let signal = if alive && f.status.as_deref() == Some("busy") {
+                let tail = if alive && f.status.as_deref() == Some("busy") {
                     f.session_id
                         .as_deref()
                         .and_then(|sid| last_signal(&src.root, sid))
                 } else {
                     None
                 };
+                let signal = tail.as_ref().map(|t| t.signal.clone());
                 let age_s = if now_ms >= f.status_updated_at && f.status_updated_at > 0 {
                     ((now_ms - f.status_updated_at) / 1000) as i64
                 } else {
@@ -419,6 +457,15 @@ pub fn probe() -> Vec<ClaudeProbe> {
 mod tests {
     use super::*;
     use crate::jsonl_tail::write_tmp;
+
+    /// signal_of mock:固定 signal、无消息内容(状态判定测试用)。
+    fn tail(signal: &str) -> Option<TailInfo> {
+        Some(TailInfo {
+            signal: signal.into(),
+            last_user_msg: None,
+            last_assistant_msg: None,
+        })
+    }
 
     fn pf(pid: u32, status: Option<&str>) -> SessionFile {
         pf_cwd(pid, status, None)
@@ -534,7 +581,7 @@ mod tests {
                 r#"{"type":"user","message":{"role":"user"}}"#,
             ],
         );
-        assert_eq!(read_tail_signal(&p).as_deref(), Some("user"));
+        assert_eq!(read_tail(&p).unwrap().signal, "user");
         std::fs::remove_file(&p).ok();
     }
 
@@ -548,7 +595,7 @@ mod tests {
                 r#"{"type":"assistant","message":{"stop_reason":"end_turn"}}"#,
             ],
         );
-        assert_eq!(read_tail_signal(&p).as_deref(), Some("end_turn"));
+        assert_eq!(read_tail(&p).unwrap().signal, "end_turn");
         std::fs::remove_file(&p).ok();
     }
 
@@ -558,7 +605,24 @@ mod tests {
             "tool",
             &[r#"{"type":"assistant","message":{"stop_reason":"tool_use"}}"#],
         );
-        assert_eq!(read_tail_signal(&p).as_deref(), Some("tool_use"));
+        assert_eq!(read_tail(&p).unwrap().signal, "tool_use");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn read_tail_extracts_messages() {
+        // user 文本(string content)+ assistant 文本(数组 content blocks)+ signal 一次取出。
+        let p = write_tmp(
+            "msgs",
+            &[
+                r#"{"type":"user","message":{"role":"user","content":"修复 bug"}}"#,
+                r#"{"type":"assistant","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"已修复"}]}}"#,
+            ],
+        );
+        let t = read_tail(&p).expect("应有 tail");
+        assert_eq!(t.signal, "end_turn");
+        assert_eq!(t.last_user_msg.as_deref(), Some("修复 bug"));
+        assert_eq!(t.last_assistant_msg.as_deref(), Some("已修复"));
         std::fs::remove_file(&p).ok();
     }
 
@@ -606,7 +670,7 @@ mod tests {
             &[pf(100, Some("busy"))],
             &mut seen,
             |_| true,
-            |_| Some("end_turn".into()),
+            |_| tail("end_turn"),
             AgentKind::Claude,
         );
         assert_eq!(out[0].status, AgentStatus::NeedsDeci);
@@ -620,24 +684,46 @@ mod tests {
             &[pf(100, Some("busy"))],
             &mut seen,
             |_| true,
-            |_| Some("tool_use".into()),
+            |_| tail("tool_use"),
             AgentKind::Claude,
         );
         assert_eq!(out[0].status, AgentStatus::Working);
     }
 
     #[test]
-    fn discover_idle_never_reads_transcript() {
-        // idle → Done;stop_reason_of 即使会 panic 也不该被调用(传一个必崩闭包验证)
+    fn discover_idle_reads_transcript_but_still_done() {
+        // idle primary 也会读 transcript(取 last_assistant_msg 给 Done 事件),但 status 仍是
+        // Done —— classify 对 idle 不看 signal(直接 Done)。
         let mut seen = HashMap::new();
         let out = discover_from(
             &[pf(100, Some("idle"))],
             &mut seen,
             |_| true,
-            |_| panic!("idle 不该读 transcript"),
+            |_| tail("end_turn"),
             AgentKind::Claude,
         );
         assert_eq!(out[0].status, AgentStatus::Done);
+    }
+
+    #[test]
+    fn discover_idle_primary_carries_assistant_msg() {
+        // idle primary 读 transcript,last_assistant_msg 应能取到(Done 事件 content 来源)。
+        let mut seen = HashMap::new();
+        let out = discover_from(
+            &[pf(100, Some("idle"))],
+            &mut seen,
+            |_| true,
+            |_| {
+                Some(TailInfo {
+                    signal: "end_turn".into(),
+                    last_user_msg: None,
+                    last_assistant_msg: Some("完成了".into()),
+                })
+            },
+            AgentKind::Claude,
+        );
+        assert_eq!(out[0].status, AgentStatus::Done);
+        assert_eq!(out[0].last_assistant_msg.as_deref(), Some("完成了"));
     }
 
     #[test]
@@ -817,7 +903,7 @@ mod tests {
             &[old, new],
             &mut seen,
             |_| true,
-            |_| Some("end_turn".into()),
+            |_| tail("end_turn"),
             AgentKind::Claude,
         );
         assert_eq!(out.len(), 1, "同 cwd 合并为 1 个");

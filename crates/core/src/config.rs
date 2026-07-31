@@ -501,6 +501,7 @@ mod tests {
             sessions: vec![],
             global: AgentStatus::Done,
             done_notif: true,
+            recent_events: vec![],
         };
         assert!(matches!(
             s.light(&snap),

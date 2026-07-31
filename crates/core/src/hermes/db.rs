@@ -21,6 +21,10 @@ pub(crate) struct SessionRow {
     pub(crate) last_finish_reason: Option<String>,
     /// 尾部 message 的 timestamp(**毫秒**,sessions/messages 存秒,×1000)。
     pub(crate) last_msg_at: u64,
+    /// 最近一条 user 消息的 content(纯文本;Panel start 事件用)。无 → 空串。
+    pub(crate) last_user_content: String,
+    /// 最近一条 assistant 消息的 content(纯文本;Panel done 事件用)。无 → 空串。
+    pub(crate) last_assistant_content: String,
 }
 
 impl SessionRow {
@@ -53,7 +57,15 @@ pub(crate) fn active_sessions(conn: &Connection) -> rusqlite::Result<Vec<Session
                 COALESCE((SELECT CAST(m.timestamp * 1000.0 AS INTEGER) FROM messages m
                           WHERE m.session_id = s.id
                           ORDER BY m.timestamp DESC, m.id DESC LIMIT 1),
-                         CAST(s.started_at * 1000.0 AS INTEGER)) AS last_msg_at
+                         CAST(s.started_at * 1000.0 AS INTEGER)) AS last_msg_at,
+                COALESCE((SELECT m.content FROM messages m
+                          WHERE m.session_id = s.id AND m.role = 'user'
+                            AND m.content IS NOT NULL AND m.content != ''
+                          ORDER BY m.timestamp DESC, m.id DESC LIMIT 1), '') AS last_user_content,
+                COALESCE((SELECT m.content FROM messages m
+                          WHERE m.session_id = s.id AND m.role = 'assistant'
+                            AND m.content IS NOT NULL AND m.content != ''
+                          ORDER BY m.timestamp DESC, m.id DESC LIMIT 1), '') AS last_assistant_content
          FROM sessions s
          WHERE s.source IN ('cli', 'tui') AND s.archived = 0 AND s.ended_at IS NULL
          ORDER BY s.started_at DESC",
@@ -73,6 +85,8 @@ fn map_row(r: &Row) -> rusqlite::Result<SessionRow> {
         last_role: r.get::<_, String>(6)?,
         last_finish_reason: r.get::<_, Option<String>>(7)?,
         last_msg_at: r.get::<_, i64>(8)?.max(0) as u64,
+        last_user_content: r.get::<_, String>(9)?,
+        last_assistant_content: r.get::<_, String>(10)?,
     })
 }
 

@@ -32,6 +32,23 @@ pub(crate) fn read_tail_lines(path: &Path, tail_bytes: u64) -> Option<Vec<serde_
     )
 }
 
+/// 从消息的 `content` 字段提取**纯文本**:字符串直返;数组取首个 `type:"text"` block 的
+/// `text`,跳过 toolCall/toolResult 等非文本块。OpenClaw / Claude 的 jsonl `message.content`
+/// 形态两可(纯字符串 或 content blocks 数组),此函数统一兜底。空 / 非文本 → None。
+pub(crate) fn extract_text(content: Option<&serde_json::Value>) -> Option<String> {
+    let c = content?;
+    if let Some(s) = c.as_str() {
+        return Some(s.to_string());
+    }
+    c.as_array().and_then(|arr| {
+        arr.iter().find_map(|b| {
+            (b.get("type").and_then(|t| t.as_str()) == Some("text"))
+                .then(|| b.get("text").and_then(|t| t.as_str()).map(String::from))
+                .flatten()
+        })
+    })
+}
+
 /// 测试 helper:在 temp 目录写一个 jsonl 文件,返回路径。jsonl_tail / claude 测试共用。
 #[cfg(test)]
 pub(crate) fn write_tmp(name: &str, lines: &[&str]) -> std::path::PathBuf {
@@ -48,6 +65,34 @@ pub(crate) fn write_tmp(name: &str, lines: &[&str]) -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extract_text_from_string() {
+        let v = serde_json::json!("hello");
+        assert_eq!(extract_text(Some(&v)).as_deref(), Some("hello"));
+        assert_eq!(extract_text(None).as_deref(), None);
+    }
+
+    #[test]
+    fn extract_text_picks_first_text_block() {
+        // 数组:跳过 toolCall,取首个 text block
+        let v = serde_json::json!([
+            {"type": "toolCall", "name": "bash"},
+            {"type": "text", "text": "real reply"},
+            {"type": "text", "text": "second"}
+        ]);
+        assert_eq!(extract_text(Some(&v)).as_deref(), Some("real reply"));
+    }
+
+    #[test]
+    fn extract_text_no_text_block_is_none() {
+        // 纯 toolCall 数组 → None(不是文本回复)
+        let v = serde_json::json!([{"type": "toolCall", "name": "bash"}]);
+        assert_eq!(extract_text(Some(&v)), None);
+        // 空数组
+        let v = serde_json::json!([]);
+        assert_eq!(extract_text(Some(&v)), None);
+    }
 
     #[test]
     fn parses_events_in_order() {

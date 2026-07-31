@@ -5,8 +5,9 @@ use crate::jsonl_tail;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// 一个 agent 最新交互式会话的尾部信号(mtime + 最后一条 message 的 role + stop_reason
-/// + 文件是否以 `leaf` 结尾 + 尾部是否含 sessions_yield/spawn 协调信号)。
+/// 一个 agent 最新交互式会话的尾部信号:mtime、最后一条 message 的 role 与 stop_reason、
+/// 是否以 `leaf` 结尾、尾部是否含 sessions_yield/spawn 协调信号、最近 user/assistant 文本
+/// (Panel start/done 事件展示用)。
 #[derive(Clone)]
 pub(super) struct SessionSignal {
     pub(super) mtime_ms: u64,
@@ -16,6 +17,10 @@ pub(super) struct SessionSignal {
     pub(super) ends_with_leaf: bool,
     /// 尾部 6 条事件内是否含 `sessions_yield`/`sessions_spawn`(主 agent 在协调后台子 agent)。
     pub(super) coordinating: bool,
+    /// 最近一条 user 消息文本(Panel start 事件)。None = 无 / 取不到。
+    pub(super) last_user_msg: Option<String>,
+    /// 最近一条 assistant 文本回复(Panel done 事件;跳过纯 toolCall)。None = 无 / 取不到。
+    pub(super) last_assistant_msg: Option<String>,
 }
 
 /// 交互式会话尾部判在跑:user(刚发)/ toolResult(工具结果,模型继续)/ stop='toolUse'(模型
@@ -62,27 +67,40 @@ fn read_tail_signals(path: &Path, mtime_ms: u64) -> SessionSignal {
             })
     });
 
-    // 反序找最后一条 type=message → (role, stopReason);无 message 则 role 空。
-    let (role, stop) = events
-        .iter()
-        .rev()
-        .find_map(|v| {
-            (v.get("type").and_then(|t| t.as_str()) == Some("message")).then(|| {
-                let role = v
-                    .get("message")
-                    .and_then(|m| m.get("role"))
-                    .and_then(|r| r.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let stop = v
-                    .get("message")
-                    .and_then(|m| m.get("stopReason"))
+    // 反序遍历:记最后一条 message 的 (role, stopReason)、最新一条 user 文本、最新一条
+    // **有 text** 的 assistant 文本(跳过纯 toolCall)。三者全拿到或遍历完即停。
+    let mut last_msg: Option<(String, Option<String>)> = None;
+    let mut last_user_msg: Option<String> = None;
+    let mut last_assistant_msg: Option<String> = None;
+    for v in events.iter().rev() {
+        if v.get("type").and_then(|t| t.as_str()) != Some("message") {
+            continue;
+        }
+        let Some(msg) = v.get("message") else {
+            continue;
+        };
+        let r = msg.get("role").and_then(|x| x.as_str()).unwrap_or("");
+        if last_msg.is_none() {
+            last_msg = Some((
+                r.to_string(),
+                msg.get("stopReason")
                     .and_then(|s| s.as_str())
-                    .map(String::from);
-                (role, stop)
-            })
-        })
-        .unwrap_or((String::new(), None));
+                    .map(String::from),
+            ));
+        }
+        if last_user_msg.is_none() && r == "user" {
+            last_user_msg = jsonl_tail::extract_text(msg.get("content"));
+        }
+        if last_assistant_msg.is_none() && r == "assistant" {
+            if let Some(t) = jsonl_tail::extract_text(msg.get("content")) {
+                last_assistant_msg = Some(t);
+            }
+        }
+        if last_msg.is_some() && last_user_msg.is_some() && last_assistant_msg.is_some() {
+            break;
+        }
+    }
+    let (role, stop) = last_msg.unwrap_or_default();
 
     SessionSignal {
         mtime_ms,
@@ -90,6 +108,8 @@ fn read_tail_signals(path: &Path, mtime_ms: u64) -> SessionSignal {
         stop,
         ends_with_leaf,
         coordinating,
+        last_user_msg,
+        last_assistant_msg,
     }
 }
 
@@ -167,6 +187,8 @@ mod tests {
         assert_eq!(sig.stop.as_deref(), Some("toolUse"));
         assert!(!sig.ends_with_leaf, "末行是 custom,非 leaf");
         assert!(!sig.coordinating, "无 yield/spawn");
+        assert_eq!(sig.last_user_msg.as_deref(), Some("hi"));
+        assert_eq!(sig.last_assistant_msg, None, "toolUse 无文本回复");
         std::fs::remove_file(&p).ok();
     }
 
@@ -205,6 +227,58 @@ mod tests {
         assert_eq!(sig.stop.as_deref(), Some("stop"));
         assert!(sig.ends_with_leaf, "应以 leaf 结尾");
         assert!(sig.coordinating, "尾部应检出 sessions_yield/spawn");
+        assert_eq!(sig.last_user_msg, None);
+        assert_eq!(sig.last_assistant_msg, None);
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn read_tail_extracts_last_messages() {
+        // user 文本(字符串 content)+ assistant 文本(数组 content blocks)都应取出。
+        use std::io::Write;
+        let p = std::env::temp_dir().join("asig_openclaw_msg_test.jsonl");
+        let mut f = std::fs::File::create(&p).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","message":{{"role":"user","content":"帮我写函数"}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","message":{{"role":"assistant","content":[{{"type":"text","text":"这是回复代码"}}]}}}}"#
+        )
+        .unwrap();
+        drop(f);
+        let sig = read_tail_signals(&p, 0);
+        assert_eq!(sig.last_user_msg.as_deref(), Some("帮我写函数"));
+        assert_eq!(sig.last_assistant_msg.as_deref(), Some("这是回复代码"));
+        assert_eq!(sig.role, "assistant", "最后一条 message = assistant");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn read_tail_skips_toolcall_only_assistant() {
+        // 纯 toolCall assistant(无 text block)→ last_assistant_msg 跳过它往前找有 text 的。
+        use std::io::Write;
+        let p = std::env::temp_dir().join("asig_openclaw_toolcall_test.jsonl");
+        let mut f = std::fs::File::create(&p).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","message":{{"role":"assistant","content":[{{"type":"text","text":"真正的回复"}}]}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","message":{{"role":"assistant","content":[{{"type":"toolCall","name":"bash"}}]}}}}"#
+        )
+        .unwrap();
+        drop(f);
+        let sig = read_tail_signals(&p, 0);
+        assert_eq!(
+            sig.last_assistant_msg.as_deref(),
+            Some("真正的回复"),
+            "跳过纯 toolCall,取最近有 text 的 assistant"
+        );
         std::fs::remove_file(&p).ok();
     }
 }

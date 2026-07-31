@@ -38,7 +38,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
   - **协调后台子 agent**：主 agent `sessions_yield` 让出 + 文件以 `leaf` 结尾 = 协调后台子 agent——子 agent 在跑 → Working，子 agent 全 ended 或协调态超 30min → 卡死 → Error。子 agent 走 sessions 机制（`.trajectory.jsonl`）不进 `subagent_runs` 表，靠 leaf+yield 信号识别（GLM 下 yield 期间尾部 `assistant stop="stop"` 否则误判 Done）—— **不进主库，故单读**
   - 否则 Done
 - `hermes/` — `HermesSource`（子模块：`db` 只读 sqlite 查询 / `gateway` 进程存活探测 / `tests`）。数据源：
-  - ① 只读 `~/.hermes/state.db`（sqlite，WAL，gateway 持续写）：`sessions`（cli/tui，未 archived）+ `messages` 尾部信号（`tool_calls`/`user`/`tool`→Working；`assistant+stop`+`active_agents==0`+最后消息>10min→Done、≤10min→NeedsDeci；`active_agents>0` 时 stop 保守算 Working）+ `async_delegations`（state=failed→Error）
+  - ① 只读 `~/.hermes/state.db`（sqlite，WAL，gateway 持续写）：`sessions`（cli/tui，未 archived）+ `messages` 尾部信号（`tool_calls`/`user`/`tool`→Working；`assistant+stop`+`active_agents==0`→**Done 立即**——学 OpenClaw「stop 即完成」,无 10min 窗口;用户继续追问写新 `user` 消息自动转 Working；`active_agents>0` 时 stop 保守算 Working；hermes gateway 架构 agent 自主执行工具,无「等用户决策」中间态故**不产 NeedsDeci**）+ `async_delegations`（state=failed→Error）
   - ② `~/.hermes/gateway_state.json` 的 pid 配 `kill(pid,0)`：gateway 不活→空 discover（该 kind Offline，与 OpenClaw/Claude 一致）
   - 会话过滤：`ended_at IS NULL`（排除已 cli_close / new_session 等）+ 最后消息 30min 内（滤 cli 僵尸——关终端窗口不触发 cli_close、会话永远 OPEN）+ 只 cli/tui（排除 feishu 等远程平台）；label = display_name ‖ title ‖ cwd basename ‖ id
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
@@ -53,7 +53,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `app_delegate.rs` — `AppDelegate`（`define_class!`）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽（`persist_light_pos` 改字段与落盘拆两个独立 borrow scope，避免 RefCell 重入 panic）
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗（`collectionBehavior` 据设置 `hide_in_fullscreen`:on → `Managed` 不进全屏 app 的 Space → 全屏自动消失 + 不打断菜单栏/Dock 自动隐藏;off → `CanJoinAllSpaces` 跨 Space 显示,含全屏）：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
-- `panel.rs` — Drop-down Panel：圆角卡片 `CardView` + 三按钮（设置/锁定/退出）+ 会话列表；定位在图标左下方
+- `panel.rs` — Drop-down Panel：`NSPopover`（圆角+vibrancy,SDK 26+ 液态玻璃）+ 三按钮（设置/锁定/退出）+ 会话列表（自适应高度）+ 事件列表（可滚动）；定位在图标左下方
 - `menu.rs` — 最小主菜单：仅切 regular（开设置窗）时显示。App 菜单留空（系统补 Quit ⌘Q 等）+ File 菜单 Close ⌘W（`performClose:` 走 responder chain 关设置窗 → 触发 `windowWillClose:` 切回 accessory）
 - `settings/` — Settings Panel（10 子模块）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)。子模块：
   - `mod` — 装配 build/show/view_with_tag + pub use 外部 API
@@ -197,6 +197,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 - Position: 菜单栏单击后在图标右下方弹出菜单栏弹窗，菜单栏弹窗左侧和菜单栏Asig图标左侧对齐，但如果右侧空间不足，则右侧贴屏幕边缘。不可拖动不可自定义大小
 - Upper Button: 从左至右分别为`设置`-用于打开 Settings Panel 的最左侧按钮，`锁定`-用于快速设置是否可以拖动圆角单选按钮（与 Settings Panel「浮窗点击穿透」同步同一开关），`退出`-用于退出Asig的最右侧按钮
 - 材质：`NSPopover`（SDK 26+ 链接即自动获得液态玻璃，无需手动 vibrancy）。
+- 内容布局：会话列表（每行一个会话,**高度随会话数自适应**——行数×行高,每次全显示不裁剪）+ 事件列表（最近 start/done,`NSScrollView`+`NSTextView` 固定高、内容多自动滚动）。Popover 总高随会话行数动态调整。
 
 ### Settings Panel
 

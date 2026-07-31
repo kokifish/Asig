@@ -152,6 +152,8 @@ fn sig_ext(
             stop: stop.map(String::from),
             ends_with_leaf: leaf,
             coordinating: coord,
+            last_user_msg: None,
+            last_assistant_msg: None,
         },
     )
 }

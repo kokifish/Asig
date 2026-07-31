@@ -6,6 +6,7 @@
 pub mod aggregate;
 pub mod claude;
 pub mod config;
+pub mod events;
 pub mod hermes;
 pub mod openclaw;
 pub mod source;
@@ -23,11 +24,13 @@ pub use config::{
     GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN, Lang, LightPosition, Settings, StateStyle, StyleKey,
     Theme,
 };
+pub use events::{AgentEvent, EventKind};
 pub use source::{AgentKind, AgentSession, AgentSource};
 pub use status::{AgentStatus, Color, LightAnim, transition};
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// 一次轮询的快照。灯效由 app 层的 `Settings::light(&snap)` 决定(done_notif 优先),
@@ -39,18 +42,29 @@ pub struct Snapshot {
     /// 刚转入 Done 的 `done_notif_duration` 内为 true —— app 层据此用 Done-Notification
     /// 灯效覆盖 `global` 的默认灯效;过期或离开 Done 后回退 `global`。时长由 `poll()` 入参给。
     pub done_notif: bool,
+    /// 最近 start/done 事件(最新在前),Drop-down Panel 事件列表展示。
+    pub recent_events: Vec<AgentEvent>,
 }
 
 impl Snapshot {
-    /// 压成字符串指纹:任一关键字段(全局态/done_notif/会话 id+status)变 → 指纹变。
-    /// app 层 tick 据此跳过无变化的 render(省 CPU,压到 ~0%)。
+    /// 压成字符串指纹:任一关键字段(全局态/done_notif/会话 id+status/事件列表)变 → 指纹变。
+    /// app 层 tick 据此跳过无变化的 render(省 CPU,压到 ~0%)。事件指纹不含 `at_ms`(否则每轮
+    /// poll 时钟变都触发 render);新事件入列才变。
     pub fn signature(&self) -> String {
         let sessions: String = self
             .sessions
             .iter()
             .map(|s| format!("{}:{:?};", s.id, s.status))
             .collect();
-        format!("{:?}|{}|{}", self.global, self.done_notif, sessions)
+        let events: String = self
+            .recent_events
+            .iter()
+            .map(|e| format!("{:?}|{}|{:?}|{};", e.kind, e.label, e.event_kind, e.content))
+            .collect();
+        format!(
+            "{:?}|{}|{}|ev={}",
+            self.global, self.done_notif, sessions, events
+        )
     }
 }
 
@@ -72,6 +86,12 @@ pub struct Monitor {
     prev_global: RefCell<AgentStatus>,
     /// 最近一次「全局态转入 Done」的时刻。Done Notification 窗口期由 `poll()` 入参决定。
     done_since: RefCell<Option<Instant>>,
+    /// 最近 start/done 事件 buffer(front=最新,容量 `events::MAX_EVENTS`)。跨轮询保留,
+    /// 边沿检测产出。持久化到 `events_path`。
+    recent_events: RefCell<VecDeque<AgentEvent>>,
+    /// 事件持久化路径(None = 默认 `~/Library/Application Support/Asig/recent_events.json`;
+    /// Some = 测试注入,避免污染真实文件)。
+    events_path: Option<PathBuf>,
 }
 
 impl Default for Monitor {
@@ -83,21 +103,28 @@ impl Default for Monitor {
 impl Monitor {
     /// 按启用的 agent 列表构造 —— General「监控的 Agent」切换时重建 Monitor 用。
     pub fn with_enabled(kinds: &[AgentKind]) -> Self {
-        Self::new_with_sources(Self::build_sources(kinds))
+        Self::new_with_sources(Self::build_sources(kinds), None)
     }
 
     /// 用给定 source 构造(测试用;生产走 `Default`)。
     pub fn with_sources(sources: Vec<Box<dyn AgentSource>>) -> Self {
-        Self::new_with_sources(sources)
+        Self::new_with_sources(sources, None)
     }
 
-    /// 字段初始化只此一处(`with_enabled` / `with_sources` 共用)。
-    fn new_with_sources(sources: Vec<Box<dyn AgentSource>>) -> Self {
+    /// 字段初始化只此一处(`with_enabled` / `with_sources` 共用)。`events_path`:None = 默认
+    /// `~/Library/Application Support/Asig/recent_events.json`;Some = 测试注入,避免污染真实文件。
+    fn new_with_sources(sources: Vec<Box<dyn AgentSource>>, events_path: Option<PathBuf>) -> Self {
+        let recent: VecDeque<AgentEvent> = match &events_path {
+            Some(p) => events::load_at(p).into(),
+            None => events::load().into(),
+        };
         Self {
             sources,
             latched: RefCell::new(HashMap::new()),
             prev_global: RefCell::new(AgentStatus::Done),
             done_since: RefCell::new(None),
+            recent_events: RefCell::new(recent),
+            events_path,
         }
     }
 
@@ -131,23 +158,47 @@ impl Monitor {
         for src in &self.sources {
             raw.extend(src.discover());
         }
-        // 2-3) sticky 状态机 + 宽限裁剪
-        let sessions = self.apply_state_machine(raw);
+        // 2-3) sticky 状态机 + 宽限裁剪 + 边沿记事件
+        let mut pushed: Vec<AgentEvent> = Vec::new();
+        let sessions = self.apply_state_machine(raw, &mut pushed);
         // 4) 聚合全局灯态
         let global = aggregate::global_status(&sessions);
         // 5) Done Notification 边沿
         let done_notif = self.detect_done_notif(global, Instant::now(), done_notif_duration);
+        // 6) 边沿事件入 buffer(front=最新)+ 落盘
+        if !pushed.is_empty() {
+            let mut buf = self.recent_events.borrow_mut();
+            for e in pushed {
+                buf.push_front(e);
+                while buf.len() > events::MAX_EVENTS {
+                    buf.pop_back();
+                }
+            }
+            let to_save: Vec<AgentEvent> = buf.iter().cloned().collect();
+            match &self.events_path {
+                Some(p) => events::save_at(p, &to_save),
+                None => events::save(&to_save),
+            }
+        }
+        let recent_events = self.recent_events.borrow().iter().cloned().collect();
         Snapshot {
             sessions,
             global,
             done_notif,
+            recent_events,
         }
     }
 
     /// sticky 状态机:本轮观测叠加到 latched 锁定态;未出现的会话给 `LATCH_GRACE` 轮宽限
-    /// 才裁(防文件原子替换/改名抖动清掉锁定态)。
-    fn apply_state_machine(&self, raw: Vec<AgentSession>) -> Vec<AgentSession> {
+    /// 才裁(防文件原子替换/改名抖动清掉锁定态)。同时做 per-session 边沿检测(进 Working→
+    /// Start 事件取 `last_user_msg`;进 Done→Done 事件取 `last_assistant_msg`),推入 `pushed`。
+    fn apply_state_machine(
+        &self,
+        raw: Vec<AgentSession>,
+        pushed: &mut Vec<AgentEvent>,
+    ) -> Vec<AgentSession> {
         let mut latched = self.latched.borrow_mut();
+        let now_ms = crate::sys::now_ms();
         let mut sessions: Vec<AgentSession> = Vec::with_capacity(raw.len());
         for mut s in raw {
             let prev = latched
@@ -155,6 +206,29 @@ impl Monitor {
                 .map(|l| l.status)
                 .unwrap_or(AgentStatus::Done);
             let new = transition(prev, s.status);
+            // 边沿 → 记 Panel start/done 事件(对应消息内容非空才记)。
+            if prev != AgentStatus::Working && new == AgentStatus::Working {
+                if let Some(c) = s.last_user_msg.as_ref() {
+                    pushed.push(AgentEvent {
+                        kind: s.kind,
+                        label: s.display_label(),
+                        event_kind: EventKind::Start,
+                        content: events::truncate_for_display(c),
+                        at_ms: now_ms,
+                    });
+                }
+            }
+            if prev != AgentStatus::Done && new == AgentStatus::Done {
+                if let Some(c) = s.last_assistant_msg.as_ref() {
+                    pushed.push(AgentEvent {
+                        kind: s.kind,
+                        label: s.display_label(),
+                        event_kind: EventKind::Done,
+                        content: events::truncate_for_display(c),
+                        at_ms: now_ms,
+                    });
+                }
+            }
             latched.insert(
                 s.id.clone(),
                 Latched {
@@ -211,6 +285,9 @@ mod tests {
         kind: AgentKind,
         script: Vec<Vec<AgentStatus>>,
         call: Mutex<usize>,
+        /// 每会话填入的 last_user_msg(测 Start 事件边沿;None = 不记)。
+        user_msg: Option<String>,
+        assistant_msg: Option<String>,
     }
 
     impl AgentSource for ScriptedSource {
@@ -230,6 +307,8 @@ mod tests {
                     cwd: None,
                     status: *st,
                     label: None,
+                    last_user_msg: self.user_msg.clone(),
+                    last_assistant_msg: self.assistant_msg.clone(),
                 })
                 .collect()
         }
@@ -247,6 +326,8 @@ mod tests {
                 vec![AgentStatus::Working], // 离开 Done → notif 灭
                 vec![AgentStatus::Done],    // 再进 Done → notif 再亮
             ],
+            user_msg: None,
+            assistant_msg: None,
         })]);
 
         let s = m.poll(Duration::from_secs(30));
@@ -282,6 +363,8 @@ mod tests {
                 vec![],
                 vec![AgentStatus::NeedsDeci],
             ],
+            user_msg: None,
+            assistant_msg: None,
         })]);
         let _ = m.poll(Duration::from_secs(30));
         let _ = m.poll(Duration::from_secs(30)); // 消失(live 不含)→ misses=1,宽限保留
@@ -302,11 +385,96 @@ mod tests {
                 vec![],
                 vec![AgentStatus::NeedsDeci],
             ],
+            user_msg: None,
+            assistant_msg: None,
         })]);
         for _ in 0..4 {
             let _ = m.poll(Duration::from_secs(30)); // 4 轮:Error + 3 轮空(misses 3>2 删)
         }
         let s = m.poll(Duration::from_secs(30)); // 重现 → prev=Done → NeedsDeci
         assert_eq!(s.global, AgentStatus::NeedsDeci);
+    }
+
+    #[test]
+    fn edge_events_on_working_done_transitions() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "asig_monitor_edge_{}_{}.json",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_file(&path);
+        let m = Monitor::new_with_sources(
+            vec![Box::new(ScriptedSource {
+                kind: AgentKind::Claude,
+                call: Mutex::new(0),
+                script: vec![
+                    vec![AgentStatus::Done],
+                    vec![AgentStatus::Working],
+                    vec![AgentStatus::Done],
+                ],
+                user_msg: Some("umsg".into()),
+                assistant_msg: Some("amsg".into()),
+            })],
+            Some(path.clone()),
+        );
+        let _ = m.poll(Duration::from_secs(30)); // Done 基线,无事件
+        let _ = m.poll(Duration::from_secs(30)); // → Working,push Start
+        let snap = m.poll(Duration::from_secs(30)); // → Done,push Done
+        assert!(snap.recent_events.len() >= 2);
+        assert_eq!(
+            snap.recent_events[0].event_kind,
+            EventKind::Done,
+            "最新在前 = Done"
+        );
+        assert_eq!(snap.recent_events[1].event_kind, EventKind::Start);
+        assert_eq!(snap.recent_events[0].content, "amsg");
+        assert_eq!(snap.recent_events[1].content, "umsg");
+        assert_eq!(snap.recent_events[0].kind, AgentKind::Claude);
+        // 落盘后新 Monitor 实例能加载回来(跨实例保留)
+        let m2 = Monitor::new_with_sources(vec![], Some(path.clone()));
+        let snap2 = m2.poll(Duration::from_secs(30));
+        assert_eq!(snap2.recent_events.len(), 2, "落盘事件应能加载回来");
+        assert_eq!(snap2.recent_events[0].event_kind, EventKind::Done);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn edge_events_capped_at_max() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "asig_monitor_max_{}_{}.json",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_file(&path);
+        // 交替 Working↔Done(21 项),每 poll 一个边沿事件;最终被容量上限裁到 MAX_EVENTS。
+        let script: Vec<Vec<AgentStatus>> = (0..21)
+            .map(|i| {
+                vec![if i % 2 == 0 {
+                    AgentStatus::Working
+                } else {
+                    AgentStatus::Done
+                }]
+            })
+            .collect();
+        let m = Monitor::new_with_sources(
+            vec![Box::new(ScriptedSource {
+                kind: AgentKind::Claude,
+                call: Mutex::new(0),
+                script,
+                user_msg: Some("u".into()),
+                assistant_msg: Some("a".into()),
+            })],
+            Some(path.clone()),
+        );
+        for _ in 0..21 {
+            let _ = m.poll(Duration::from_secs(30));
+        }
+        let snap = m.poll(Duration::from_secs(30));
+        assert_eq!(snap.recent_events.len(), events::MAX_EVENTS);
+        let _ = std::fs::remove_file(&path);
     }
 }

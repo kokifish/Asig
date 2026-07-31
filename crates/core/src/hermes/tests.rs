@@ -74,6 +74,28 @@ fn msg(
     .unwrap();
 }
 
+/// 同 msg() 但带 content(测 last_user/assistant_msg 提取)。
+#[allow(clippy::too_many_arguments)]
+fn msg_with_content(
+    conn: &Connection,
+    id: i64,
+    sid: &str,
+    role: &str,
+    finish: Option<&str>,
+    tool_calls: bool,
+    ts_sec_offset: i64,
+    content: &str,
+) {
+    let ts = (NOW as f64) / 1000.0 + ts_sec_offset as f64;
+    let tc: Option<&str> = if tool_calls { Some("[{}]") } else { None };
+    conn.execute(
+        "INSERT INTO messages(id, session_id, role, finish_reason, tool_calls, content, timestamp, active)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, 1)",
+        params![id, sid, role, finish, tc, content, ts],
+    )
+    .unwrap();
+}
+
 fn status_of(conn: &Connection, active_agents: u32) -> AgentStatus {
     let s = discover_from(conn, NOW, active_agents);
     assert_eq!(s.len(), 1, "单会话测试应有且仅有一个");
@@ -167,18 +189,18 @@ fn working_tool_tail() {
 }
 
 #[test]
-fn needs_deci_recent_stop() {
-    // assistant+stop + active_agents=0 + 最后消息 ≤10min → NeedsDeci
+fn done_recent_stop() {
+    // assistant+stop + active_agents=0 → Done(立即,学 OpenClaw;不再有 10min 窗口)
     let conn = db(|c| {
         session(c, "s1", "cli");
         msg(c, 1, "s1", "assistant", Some("stop"), false, -(5 * 60));
     });
-    assert_eq!(status_of(&conn, 0), AgentStatus::NeedsDeci);
+    assert_eq!(status_of(&conn, 0), AgentStatus::Done);
 }
 
 #[test]
-fn done_stop_beyond_idle() {
-    // assistant+stop + active_agents=0 + 最后消息 >10min(仍 <30min 活跃窗)→ Done
+fn done_stop_old() {
+    // 同上但最后消息较旧(仍 <30min 活跃窗)→ Done(与 age 无关,验证不再有时长分界)
     let conn = db(|c| {
         session(c, "s1", "cli");
         msg(c, 1, "s1", "assistant", Some("stop"), false, -(11 * 60));
@@ -325,51 +347,67 @@ fn classify_session_unit() {
             last_role: role.into(),
             last_finish_reason: finish.map(String::from),
             last_msg_at: NOW - age_ms,
+            last_user_content: String::new(),
+            last_assistant_content: String::new(),
         }
     }
     // Error 优先(即便尾部是 stop)
     assert_eq!(
-        classify_session(&row("assistant", Some("stop"), 1000), NOW, 0, true),
+        classify_session(&row("assistant", Some("stop"), 1000), 0, true),
         AgentStatus::Error
     );
     // Working(尾部信号)
     assert_eq!(
-        classify_session(&row("assistant", Some("tool_calls"), 1000), NOW, 0, false),
+        classify_session(&row("assistant", Some("tool_calls"), 1000), 0, false),
         AgentStatus::Working
     );
     assert_eq!(
-        classify_session(&row("user", None, 1000), NOW, 0, false),
+        classify_session(&row("user", None, 1000), 0, false),
         AgentStatus::Working
     );
     assert_eq!(
-        classify_session(&row("tool", None, 1000), NOW, 0, false),
+        classify_session(&row("tool", None, 1000), 0, false),
         AgentStatus::Working
     );
     // stop + active_agents>0 → Working(保守)
     assert_eq!(
-        classify_session(&row("assistant", Some("stop"), 1000), NOW, 3, false),
+        classify_session(&row("assistant", Some("stop"), 1000), 3, false),
         AgentStatus::Working
     );
-    // stop + idle + 近期 → NeedsDeci
+    // stop + active_agents=0 → Done(无论 age,学 OpenClaw「stop 即完成」)
     assert_eq!(
-        classify_session(
-            &row("assistant", Some("stop"), 5 * 60 * 1000),
-            NOW,
-            0,
-            false
-        ),
-        AgentStatus::NeedsDeci
-    );
-    // stop + idle + 超 10min → Done
-    assert_eq!(
-        classify_session(
-            &row("assistant", Some("stop"), 11 * 60 * 1000),
-            NOW,
-            0,
-            false
-        ),
+        classify_session(&row("assistant", Some("stop"), 5 * 60 * 1000), 0, false),
         AgentStatus::Done
     );
+    assert_eq!(
+        classify_session(&row("assistant", Some("stop"), 11 * 60 * 1000), 0, false),
+        AgentStatus::Done
+    );
+}
+
+#[test]
+fn discover_extracts_last_messages() {
+    // user content + assistant content 都应取出填入 AgentSession。
+    let conn = db(|c| {
+        session(c, "s1", "cli");
+        msg_with_content(c, 1, "s1", "user", None, false, -2, "帮我分析");
+        msg_with_content(c, 2, "s1", "assistant", Some("stop"), false, -1, "分析完成");
+    });
+    let s = &discover_from(&conn, NOW, 0)[0];
+    assert_eq!(s.last_user_msg.as_deref(), Some("帮我分析"));
+    assert_eq!(s.last_assistant_msg.as_deref(), Some("分析完成"));
+}
+
+#[test]
+fn discover_messages_none_when_no_content() {
+    // msg()(content NULL)→ last_user/assistant_msg 均为 None。
+    let conn = db(|c| {
+        session(c, "s1", "cli");
+        msg(c, 1, "s1", "assistant", Some("stop"), false, -1);
+    });
+    let s = &discover_from(&conn, NOW, 0)[0];
+    assert_eq!(s.last_user_msg, None);
+    assert_eq!(s.last_assistant_msg, None);
 }
 
 // ── gateway::snapshot 测试(临时文件,不碰真实 ~/.hermes)──

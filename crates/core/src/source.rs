@@ -42,6 +42,29 @@ pub struct AgentSession {
     pub cwd: Option<PathBuf>,
     pub status: AgentStatus,
     pub label: Option<String>,
+    /// 最近一条 user 文本消息(已规范化),Panel「start 事件」展示用。None = 取不到。
+    pub last_user_msg: Option<String>,
+    /// 最近一条 assistant 文本回复(已规范化),Panel「done 事件」展示用。None = 取不到。
+    pub last_assistant_msg: Option<String>,
+}
+
+impl AgentSession {
+    /// 会话可读标识(Panel 会话列表 + 事件列表的单一事实源):OpenClaw/Hermes 显示
+    /// agent 名(main/kotomi/…);Claude 显示 cwd basename(比 session UUID 易读)。
+    pub fn display_label(&self) -> String {
+        match self.kind {
+            AgentKind::OpenClaw | AgentKind::Hermes => {
+                self.label.clone().unwrap_or_else(|| "-".into())
+            }
+            _ => self
+                .cwd
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("-")
+                .to_string(),
+        }
+    }
 }
 
 /// 每个工具实现一个。

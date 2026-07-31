@@ -83,13 +83,15 @@ fn discover_from(
 ) -> Vec<AgentSession> {
     collect(conn, now, session_signals)
         .into_iter()
-        .map(|(aid, acc, _)| AgentSession {
+        .map(|(aid, acc, sig)| AgentSession {
             kind: AgentKind::OpenClaw,
             id: format!("OpenClaw:{aid}"),
             native_id: aid.clone(),
             cwd: None,
             status: classify_agent(acc),
             label: Some(aid),
+            last_user_msg: sig.as_ref().and_then(|s| s.last_user_msg.clone()),
+            last_assistant_msg: sig.as_ref().and_then(|s| s.last_assistant_msg.clone()),
         })
         .collect()
 }
