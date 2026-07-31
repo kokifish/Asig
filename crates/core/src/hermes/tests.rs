@@ -386,6 +386,34 @@ fn classify_session_unit() {
 }
 
 #[test]
+fn aggregates_same_cwd_sessions() {
+    // 同 cwd 两会话:一个 stop(Done),一个 user(Working)。聚合为 1 行,status = Working
+    // (most_active:Working > Done),代表取 last_msg_at 最新者(new)。
+    let conn = db(|c| {
+        session_full(c, "old", "cli", Some("/work/proj"), None, None, None, None);
+        msg(c, 1, "old", "assistant", Some("stop"), false, -(5 * 60));
+        session_full(c, "new", "cli", Some("/work/proj"), None, None, None, None);
+        msg(c, 2, "new", "user", None, false, -30);
+    });
+    let s = discover_from(&conn, NOW, 0);
+    assert_eq!(s.len(), 1, "同 cwd 应聚合为 1 行");
+    assert_eq!(s[0].status, AgentStatus::Working);
+    assert_eq!(s[0].id, "Hermes:new");
+}
+
+#[test]
+fn different_cwd_not_aggregated() {
+    // 不同 cwd 的两会话不聚合,各 1 行。
+    let conn = db(|c| {
+        session_full(c, "a", "cli", Some("/work/a"), None, None, None, None);
+        msg(c, 1, "a", "assistant", Some("stop"), false, -1);
+        session_full(c, "b", "cli", Some("/work/b"), None, None, None, None);
+        msg(c, 2, "b", "assistant", Some("stop"), false, -1);
+    });
+    assert_eq!(discover_from(&conn, NOW, 0).len(), 2);
+}
+
+#[test]
 fn discover_extracts_last_messages() {
     // user content + assistant content 都应取出填入 AgentSession。
     let conn = db(|c| {

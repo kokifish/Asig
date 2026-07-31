@@ -26,6 +26,7 @@ mod tests;
 use crate::source::{AgentKind, AgentSession, AgentSource};
 use crate::status::AgentStatus;
 use rusqlite::Connection;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// 会话活跃窗口:最后消息在此内才显示(滤 cli 僵尸会话)。
@@ -95,23 +96,66 @@ fn discover_from(conn: &Connection, now: u64, active_agents: u32) -> Vec<AgentSe
         }
     };
     let failed = db::failed_delegation_sessions(conn, now).unwrap_or_default();
-    rows.into_iter()
-        .filter(|r| r.last_msg_at >= cutoff)
-        .map(|r| {
-            let error_flag = r.has_error() || failed.contains(&r.session_id);
-            let status = classify_session(&r, active_agents, error_flag);
-            AgentSession {
-                kind: AgentKind::Hermes,
-                id: format!("Hermes:{}", r.session_id),
-                native_id: r.session_id.clone(),
-                cwd: r.cwd.clone().map(PathBuf::from),
-                status,
-                label: Some(label_of(&r)),
-                last_user_msg: empty_to_none(&r.last_user_content),
-                last_assistant_msg: empty_to_none(&r.last_assistant_content),
-            }
+
+    // 按 cwd 分组(同路径多会话聚合为一行,学 claude cwd group)。cwd 缺失的会话各成一组
+    // (key 用 session_id,不合并)。每组取 last_msg_at 最新者为代表(label/cwd/content 用它),
+    // 状态取组内最活跃(Error/NeedsDeci > Working > Offline > Done)。
+    let mut groups: HashMap<String, Vec<db::SessionRow>> = HashMap::new();
+    for r in rows.into_iter().filter(|r| r.last_msg_at >= cutoff) {
+        let key = r
+            .cwd
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("__no_cwd__:{}", r.session_id));
+        groups.entry(key).or_default().push(r);
+    }
+
+    let mut sessions: Vec<(u64, AgentSession)> = groups
+        .into_values()
+        .map(|mut group| {
+            group.sort_by_key(|r| r.last_msg_at);
+            let primary = group.last().expect("组非空");
+            let status = group
+                .iter()
+                .map(|r| {
+                    let err = r.has_error() || failed.contains(&r.session_id);
+                    classify_session(r, active_agents, err)
+                })
+                .reduce(most_active)
+                .unwrap_or(AgentStatus::Done);
+            let last = primary.last_msg_at;
+            (
+                last,
+                AgentSession {
+                    kind: AgentKind::Hermes,
+                    id: format!("Hermes:{}", primary.session_id),
+                    native_id: primary.session_id.clone(),
+                    cwd: primary.cwd.clone().map(PathBuf::from),
+                    status,
+                    label: Some(label_of(primary)),
+                    last_user_msg: empty_to_none(&primary.last_user_content),
+                    last_assistant_msg: empty_to_none(&primary.last_assistant_content),
+                },
+            )
         })
-        .collect()
+        .collect();
+    // 组按最新活动时间 DESC(最新路径在前)
+    sessions.sort_by_key(|x| std::cmp::Reverse(x.0));
+    sessions.into_iter().map(|(_, s)| s).collect()
+}
+
+/// 组内状态聚合:取更活跃者(Error/NeedsDeci > Working > Offline > Done)。同 cwd 多会话时,
+/// 任一在跑(Working)或出错(Error)都拉起整组,不被同路径的 Done 会话压下。
+fn most_active(a: AgentStatus, b: AgentStatus) -> AgentStatus {
+    fn rank(s: AgentStatus) -> u8 {
+        match s {
+            AgentStatus::Error | AgentStatus::NeedsDeci => 4,
+            AgentStatus::Working => 3,
+            AgentStatus::Offline => 2,
+            AgentStatus::Done => 1,
+        }
+    }
+    if rank(a) >= rank(b) { a } else { b }
 }
 
 /// 单会话状态判定(纯函数,优先级):

@@ -40,7 +40,8 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `hermes/` — `HermesSource`（子模块：`db` 只读 sqlite 查询 / `gateway` 进程存活探测 / `tests`）。数据源：
   - ① 只读 `~/.hermes/state.db`（sqlite，WAL，gateway 持续写）：`sessions`（cli/tui，未 archived）+ `messages` 尾部信号（`tool_calls`/`user`/`tool`→Working；`assistant+stop`+`active_agents==0`→**Done 立即**——学 OpenClaw「stop 即完成」,无 10min 窗口;用户继续追问写新 `user` 消息自动转 Working；`active_agents>0` 时 stop 保守算 Working；hermes gateway 架构 agent 自主执行工具,无「等用户决策」中间态故**不产 NeedsDeci**）+ `async_delegations`（state=failed→Error）
   - ② `~/.hermes/gateway_state.json` 的 pid 配 `kill(pid,0)`：gateway 不活→空 discover（该 kind Offline，与 OpenClaw/Claude 一致）
-  - 会话过滤：`ended_at IS NULL`（排除已 cli_close / new_session 等）+ 最后消息 30min 内（滤 cli 僵尸——关终端窗口不触发 cli_close、会话永远 OPEN）+ 只 cli/tui（排除 feishu 等远程平台）；label = display_name ‖ title ‖ cwd basename ‖ id
+  - 会话过滤：`ended_at IS NULL`（排除已 cli_close / new_session 等；**正常 /exit 退出写 `end_reason='cli_close'` + ended_at,Asig 即时不显示**）+ 最后消息 30min 内（滤 cli 僵尸——关终端窗口不触发 cli_close、会话永远 OPEN）+ 只 cli/tui（排除 feishu 等远程平台）；label = display_name ‖ title ‖ cwd basename ‖ id
+  - **按 cwd 聚合**(学 claude cwd group):同路径多 cli 会话合并 1 行,代表取 `last_msg_at` 最新者,状态取组内最活跃(`most_active`:Error/NeedsDeci > Working > Done)
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
 - `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
 - `config.rs` — `Settings` / `StyleKey` / `StateStyle` / `LightPosition`：可配置灯效 + 浮窗位置，serde 持久化（`load`/`save` 失败可见不静默：无文件静默默认、IO 错提示、JSON 损坏备份成 `settings.json.bad`，均回退默认绝不 panic）
