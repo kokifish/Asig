@@ -192,7 +192,7 @@ pub const DONE_NOTIF_DURATION_DEFAULT_S: u32 = 30;
 /// clamp 到此范围,默认值兜底 —— slider 与 clamp 共用同一组常量,避免边界两处分写而漂移。
 pub const DOT_SIZE_MIN_PX: u32 = 20;
 pub const DOT_SIZE_MAX_PX: u32 = 80;
-pub const DOT_SIZE_DEFAULT_PX: u32 = 50;
+pub const DOT_SIZE_DEFAULT_PX: u32 = 60;
 
 /// 全部设置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
