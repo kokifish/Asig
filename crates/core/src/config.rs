@@ -5,11 +5,11 @@
 //! 改读 `Settings::light(&snap)`,不再用硬编码。
 
 use crate::Snapshot;
+use crate::persist;
 use crate::source::AgentKind;
 use crate::status::{AgentStatus, Color, LightAnim};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 /// 灯效类型(与 `LightAnim` 的变体对应,但去掉了 color/period —— 那俩放 `StateStyle`)。
 /// 共 3 种:快闪 / 慢闪 / 呼吸都是 `Pulse`(只是周期不同),故无独立 Blink。
@@ -67,7 +67,7 @@ impl StateStyle {
 
     /// 正向:翻译成内核的 `LightAnim`(带周期下限保护,避免过快)。不含渐变层数——
     /// 那是正交的圆点绘制规格,由 `layers()` 单独取,经 `set_light` 参数传入浮窗。
-    fn to_light(self) -> LightAnim {
+    pub fn to_light(self) -> LightAnim {
         match self.anim {
             Anim::Steady => LightAnim::Steady { color: self.color },
             Anim::Pulse => LightAnim::Pulse {
@@ -233,6 +233,9 @@ pub struct Settings {
     /// off → 删 plist(实现见 app/launch.rs,零成本、不依赖 SMAppService)。
     #[serde(default)]
     pub launch_at_login: bool,
+    /// 配置 schema 版本(留迁移口子;当前恒 1。老配置缺此字段 → 默认 1,不影响加载)。
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
 }
 
 fn default_poll_interval_ms() -> u32 {
@@ -253,6 +256,10 @@ fn default_notify_on() -> Vec<AgentStatus> {
 
 fn default_hide_in_fullscreen() -> bool {
     true
+}
+
+fn default_schema_version() -> u32 {
+    1
 }
 
 fn default_gradient_layers() -> u8 {
@@ -277,14 +284,9 @@ impl Default for Settings {
             notify_on: default_notify_on(),
             hide_in_fullscreen: default_hide_in_fullscreen(),
             launch_at_login: false,
+            schema_version: 1,
         }
     }
-}
-
-/// 设置加载失败的原因(诊断用)。`Settings::load` 据此提示用户后回退默认,绝不 panic。
-enum LoadError {
-    Read(std::io::Error),
-    Parse(serde_json::Error),
 }
 
 impl Settings {
@@ -327,6 +329,19 @@ impl Settings {
         self.hide_in_fullscreen = default_hide_in_fullscreen();
     }
 
+    /// 加载后归一化:把可被手改 settings.json 绕过的数值字段 clamp 到合法范围,并过滤保留但
+    /// 未实现的 `AgentKind`(CodeBuddy/Trae —— 否则 `build_sources` 静默不监控,用户在 chip 看不出
+    /// 原因)。仅在 `load` 后调一次;Default 出身的值本就合法,调也无副作用。
+    fn normalize(&mut self) {
+        self.dot_size = Self::dot_size_clamp(self.dot_size);
+        self.done_notif_duration_s = Self::done_notif_clamp(self.done_notif_duration_s);
+        // 轮询间隔下限 1s:防手改成亚秒值让 tick 疯跑(打破 <1% CPU 目标)。无上限——
+        // 大间隔只让响应变慢,不损 CPU;UI 预设最大 15s,用户可手改更大。
+        self.poll_interval_ms = self.poll_interval_ms.max(1000);
+        self.enabled_agents
+            .retain(|k| AgentKind::IMPLEMENTED.contains(k));
+    }
+
     /// 某个键对应的样式。配置缺失时回退到内置默认。
     pub fn style_for(&self, key: StyleKey) -> StateStyle {
         self.styles
@@ -366,60 +381,25 @@ impl Settings {
         self.style_for(self.style_key_of(snap)).layers()
     }
 
-    fn path() -> Option<PathBuf> {
-        Some(dirs::config_dir()?.join("Asig").join("settings.json"))
-    }
-
-    /// 从指定路径加载,区分"读失败 / 解析失败"(无文件由 `load` 按 NotFound 判定)。
-    fn load_result(path: &std::path::Path) -> Result<Self, LoadError> {
-        let text = std::fs::read_to_string(path).map_err(LoadError::Read)?;
-        serde_json::from_str(&text).map_err(LoadError::Parse)
-    }
-
     /// 从 `~/Library/Application Support/Asig/settings.json` 读。**不 panic**:
-    /// 无文件 → 静默默认(首次运行);权限/磁盘 IO 错 → eprintln 提示 + 默认;
-    /// JSON 损坏 → 把坏文件备份成 `settings.json.bad` + 提示 + 默认(避免下次还解析失败)。
+    /// 无文件 → 静默默认(首次运行);权限/IO 错 → `log::warn` + 默认;
+    /// JSON 损坏 → 备份成 `settings.json.bad` + `log::warn` + 默认。语义见 `persist::load_or_default`。
     pub fn load() -> Self {
-        let Some(path) = Self::path() else {
+        let Some(path) = persist::app_support_path("settings.json") else {
             return Self::default();
         };
-        match Self::load_result(&path) {
-            Ok(s) => s,
-            Err(LoadError::Read(e)) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
-            Err(LoadError::Read(e)) => {
-                log::warn!("读取设置失败({e}),使用默认值: {}", path.display());
-                Self::default()
-            }
-            Err(LoadError::Parse(e)) => {
-                log::warn!("settings.json 解析失败({e}),已备份为 .bad 并使用默认值");
-                let _ = std::fs::rename(&path, format!("{}.bad", path.display()));
-                Self::default()
-            }
-        }
+        let mut s: Self = persist::load_or_default(&path);
+        s.normalize();
+        s
     }
 
-    /// 写回配置文件。**不 panic**(只读环境也不该崩),但失败 eprintln 提示 —— 磁盘满/权限错时
-    /// 改动"看似生效但不落盘"会害调试,需可见。
+    /// 写回配置文件(原子写:`<path>.tmp → rename`)。**不 panic**,失败 `log::warn` ——
+    /// 磁盘满/权限错时改动「看似生效但不落盘」会害调试,需可见。
     pub fn save(&self) {
-        let Some(path) = Self::path() else {
+        let Some(path) = persist::app_support_path("settings.json") else {
             return;
         };
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                log::warn!("创建设置目录失败({e})");
-                return;
-            }
-        }
-        let text = match serde_json::to_string_pretty(self) {
-            Ok(t) => t,
-            Err(e) => {
-                log::warn!("序列化设置失败({e})");
-                return;
-            }
-        };
-        if let Err(e) = std::fs::write(&path, text) {
-            log::warn!("写入设置失败({e}): {}", path.display());
-        }
+        persist::save_json(&path, self);
     }
 }
 
@@ -701,15 +681,17 @@ mod tests {
     }
 
     #[test]
-    fn load_result_rejects_corrupt_json() {
-        // 损坏的 settings.json 应被 load_result 判为 Parse 失败(load 据此备份 .bad + 回退默认)。
-        let path = std::env::temp_dir().join(format!("asig_corrupt_{}.json", std::process::id()));
+    fn load_rejects_corrupt_json_and_backs_up() {
+        // 损坏的 settings.json → persist::load_or_default 备份 .bad + 回退默认。
+        let dir = std::env::temp_dir().join(format!("asig_cfg_corrupt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
         std::fs::write(&path, "{ 这是损坏的 json").unwrap();
-        assert!(matches!(
-            Settings::load_result(&path),
-            Err(LoadError::Parse(_))
-        ));
-        let _ = std::fs::remove_file(&path);
+        let s = persist::load_or_default::<Settings>(&path);
+        assert_eq!(s.dot_size, DOT_SIZE_DEFAULT_PX); // 回退默认
+        assert!(dir.join("settings.json.bad").exists(), "应备份为 .bad");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -774,5 +756,51 @@ mod tests {
         assert!(s.hide_in_fullscreen);
         assert_eq!(s.lang, Lang::En); // 未动
         assert_eq!(s.done_notif_duration_s, 10); // 未动
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn normalize_clamps_numeric_fields() {
+        // 手改 settings.json 绕过 UI clamp 的值,load 后被 clamp 回合法范围。
+        let mut s = Settings::default();
+        s.dot_size = 5; // < DOT_SIZE_MIN_PX(20)
+        s.done_notif_duration_s = 1; // < MIN_S(5)
+        s.poll_interval_ms = 10; // < 1000ms 下限
+        s.normalize();
+        assert_eq!(s.dot_size, DOT_SIZE_MIN_PX);
+        assert_eq!(s.done_notif_duration_s, DONE_NOTIF_DURATION_MIN_S);
+        assert_eq!(s.poll_interval_ms, 1000);
+        // 已合法的值不动
+        s.dot_size = 50;
+        s.poll_interval_ms = 3000;
+        s.normalize();
+        assert_eq!(s.dot_size, 50);
+        assert_eq!(s.poll_interval_ms, 3000);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn normalize_filters_unimplemented_agents() {
+        // 老配置/手改写入未实现的 CodeBuddy/Trae → normalize 过滤掉,避免静默不监控。
+        let mut s = Settings::default();
+        s.enabled_agents = vec![AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::Trae];
+        s.normalize();
+        assert_eq!(s.enabled_agents, vec![AgentKind::Claude]);
+        // 全是未实现 → 空(允许全不选 = 不监控任何 agent)
+        s.enabled_agents = vec![AgentKind::CodeBuddy];
+        s.normalize();
+        assert!(s.enabled_agents.is_empty());
+    }
+
+    #[test]
+    fn schema_version_default_is_one_and_roundtrip() {
+        let s = Settings::default();
+        assert_eq!(s.schema_version, 1);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.schema_version, 1);
+        // 老配置缺该字段 → 默认 1
+        let old = r#"{"dot_size":16,"styles":{}}"#;
+        let s: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!(s.schema_version, 1);
     }
 }

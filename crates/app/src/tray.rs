@@ -9,7 +9,7 @@ use objc2_app_kit::{NSMenu, NSMenuItem, NSStatusBar, NSStatusBarButton, NSStatus
 use objc2_foundation::{NSPoint, NSString, NSTimer};
 
 use crate::app_delegate::AppDelegate;
-use crate::overlay::swatch_image;
+use crate::paint::swatch_image;
 
 /// 建状态栏项,并把按钮点击接到 `togglePopover:`。须在主线程调用(button() 要 MainThreadMarker)。
 pub fn build(delegate: &Retained<AppDelegate>) {

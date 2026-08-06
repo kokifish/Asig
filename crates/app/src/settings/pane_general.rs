@@ -13,19 +13,19 @@ use agent_light_core::{DOT_SIZE_MAX_PX, DOT_SIZE_MIN_PX, Lang};
 
 use crate::app_delegate::AppDelegate;
 
-use super::consts::{
-    AGENT_KIND_ORDER, AGENT_OFF, CARD_GAP, COL_W, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, H,
-    HEADER_GAP, LANG_EN_TAG, LANG_ZH_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, PIN_RIGHT, RESIZE_W,
-    SIZE_LABEL_TAG, THEME_OFF, TOP_INSET,
-};
 use super::controls::{
     add_card, add_header_icon, add_plain_button, add_popup, add_radio_button, add_slider,
     add_switch, add_text, add_toggle_chip,
 };
-use super::strings::Strings;
-use super::tags::{
+use super::geometry::{
+    AGENT_KIND_ORDER, AGENT_OFF, CARD_GAP, COL_W, CONTENT_HEADER_H, CONTENT_PAD_X, CONTENT_W, H,
+    HEADER_GAP, LANG_EN_TAG, LANG_ZH_TAG, NOTIFY_OFF, NOTIFY_STATUS_ORDER, PIN_RIGHT, RESIZE_W,
+    SIZE_LABEL_TAG, THEME_OFF, TOP_INSET,
+};
+use super::geometry::{
     card_frame, card_height, label_col_width, poll_preset_index, row_center_y, theme_index,
 };
+use super::strings::Strings;
 
 /// NSSwitch frame 比 alignmentRect 宽(左侧 inset),origin 左移此值让 switch 与其他控件左对齐。
 const SWITCH_INSET: CGFloat = 5.0;

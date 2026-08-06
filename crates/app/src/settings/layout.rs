@@ -6,14 +6,14 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use agent_light_core::{Anim, StateStyle};
 
-use crate::overlay::swatch_image;
+use crate::paint::swatch_image;
 
-use super::consts::{
+use super::geometry::{
     ANIM_ORDER, CARD_BOT_PAD, CARD_TOP_PAD, COLOR_ORDER, CONTENT_PAD_X, HEADER_GAP, ROW_H,
     SPEED_MAX, SPEED_MIN, SWATCH_D, SWATCH_STEP, TOP_INSET,
 };
+use super::geometry::{color_flow_metrics, hz_of};
 use super::pane_state::StateControls;
-use super::tags::{color_flow_metrics, hz_of};
 
 /// 按 pane 宽度重排 state pane:card + 色块(固定间距 flow,行数随宽度)+ Anim/Speed/label。
 /// build 与 windowDidResize 都调 —— 宽度变时色块自动换行 / 合并到 1 行,间距始终固定。

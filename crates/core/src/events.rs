@@ -3,9 +3,10 @@
 //! 持久化到 `~/Library/Application Support/Asig/recent_events.json`(照抄 `config.rs` 模式:
 //! NotFound→空、IO 错 `log::warn`、JSON 损坏备份 `.bad`,**绝不 panic**)。跨 Asig 重启保留。
 
+use crate::persist;
 use crate::source::AgentKind;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// 最近事件 buffer 容量(超出按时间淘汰最旧)。
 pub const MAX_EVENTS: usize = 10;
@@ -72,58 +73,30 @@ fn fold_ws(s: &str) -> String {
     out
 }
 
-fn path() -> Option<PathBuf> {
-    Some(dirs::config_dir()?.join("Asig").join("recent_events.json"))
-}
-
 /// 从 `~/Library/Application Support/Asig/recent_events.json` 读(最新在前的 Vec)。**不 panic**:
-/// 无文件 → 空(首次运行);IO 错 / JSON 损坏 → `log::warn` + 备份 `.bad` + 空。
+/// 无文件 → 空;IO 错 / JSON 损坏 → `log::warn` + 备份 `.bad` + 空。语义见 `persist::load_or_default`。
 pub fn load() -> Vec<AgentEvent> {
-    path().map(|p| load_at(&p)).unwrap_or_default()
+    let Some(p) = persist::app_support_path("recent_events.json") else {
+        return Vec::new();
+    };
+    persist::load_or_default(&p)
 }
 
 /// 从指定路径加载(测试 / 注入用)。
 pub fn load_at(path: &Path) -> Vec<AgentEvent> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(_) => return Vec::new(), // 无文件 / 读失败 → 空(首次运行或权限问题,静默)
-    };
-    match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(e) => {
-            // 文件存在但解析失败:多半是损坏。备份 .bad(照抄 config.rs)避免下次还失败。
-            log::warn!("recent_events.json 解析失败({e}),已备份为 .bad 并清空");
-            let _ = std::fs::rename(path, format!("{}.bad", path.display()));
-            Vec::new()
-        }
-    }
+    persist::load_or_default(path)
 }
 
-/// 写「最新在前」的 Vec 到 `recent_events.json`。**不 panic**,失败 `log::warn`。
+/// 写「最新在前」的 Vec 到 `recent_events.json`(原子写)。**不 panic**,失败 `log::warn`。
 pub fn save(events: &[AgentEvent]) {
-    if let Some(p) = path() {
-        save_at(&p, events);
+    if let Some(p) = persist::app_support_path("recent_events.json") {
+        persist::save_json(&p, events);
     }
 }
 
 /// 写到指定路径(测试 / 注入用)。
 pub fn save_at(path: &Path, events: &[AgentEvent]) {
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            log::warn!("创建事件目录失败({e})");
-            return;
-        }
-    }
-    let text = match serde_json::to_string_pretty(events) {
-        Ok(t) => t,
-        Err(e) => {
-            log::warn!("序列化事件失败({e})");
-            return;
-        }
-    };
-    if let Err(e) = std::fs::write(path, text) {
-        log::warn!("写入事件失败({e}): {}", path.display());
-    }
+    persist::save_json(path, events);
 }
 
 #[cfg(test)]

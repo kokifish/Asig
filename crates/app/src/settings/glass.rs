@@ -13,8 +13,8 @@ use objc2_foundation::{NSPoint, NSRect, NSString};
 
 use crate::app_delegate::AppDelegate;
 
-use super::consts::{RESIZE_WH, STATE_KEYS, TAB_GENERAL};
 use super::controls::new_view;
+use super::geometry::{RESIZE_WH, STATE_KEYS, TAB_GENERAL};
 use super::strings::strings_for;
 
 /// 运行时是否存在真·液态玻璃类(macOS 26+)。minos=11.0,旧系统无此类,须回退 vibrancy。
@@ -39,7 +39,7 @@ pub(crate) fn glass_pane(
     let mtm = MainThreadMarker::new().expect("glass_pane 须主线程");
     // Reduce Transparency 开启时跳过 NSGlassEffectView,改走 NSVisualEffectView 分支
     // (它在 Reduce Transparency 下自动变不透明实色),保证文字可读。
-    if glass_available() && !crate::overlay::reduce_transparency_on() {
+    if glass_available() && !crate::paint::reduce_transparency_on() {
         // NSGlassEffectView 不在 cargo feature 表里(macOS 26 新类),保留 msg_send! 构造 + setter。
         let g: Retained<NSView> = unsafe { msg_send![class!(NSGlassEffectView), new] };
         let content = new_view(NSRect::new(NSPoint::new(0.0, 0.0), frame.size));

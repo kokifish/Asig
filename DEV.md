@@ -29,7 +29,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 
 - `source.rs` — `AgentSource` trait + `AgentSession` / `AgentKind`（每个工具实现一个 source）
 - `jsonl_tail.rs` — 只读 jsonl 尾部的取数工具（claude/openclaw 共用）
-- `claude.rs` — `ClaudeLikeSource`：Claude 的会话状态 source（参数化 root 保留,CodeBuddy 暂不支持）。读 session 文件（camelCase 字段：`sessionId`/`kind`/`status`…，`rename_all`）+ pid 存活：
+- `claude/` — `ClaudeLikeSource`：Claude 的会话状态 source（`mod` 主逻辑 + 聚合 + classify + transcript 读取 / `probe` CLI 诊断 DTO + `probe()` / `tests`；参数化 root 保留,CodeBuddy 暂不支持）。读 session 文件（camelCase 字段：`sessionId`/`kind`/`status`…，`rename_all`）+ pid 存活：
   - **按 cwd 聚合** —— 同目录的多个 session（用户手开 interactive + claude `--fork-session` 派发的后台子 claude `kind:"bg"`）合并为**一个**会话：**最新活动的 interactive**（`statusUpdatedAt` 最大 = 用户当前在用的）作主，bg 不单独显示但 busy 活跃度合并进主会话状态（否则 fork 任务到后台跑时主进程 idle 成 shell 会被误判不在运行）；**其他 interactive（用户另开的遗留 REPL）不参与合并**，避免一个遗留 `busy+end_turn` 会话把整组拉成 NeedsDeci。纯 bg 无 interactive 的目录整组跳过（避免与 OpenClaw source 重叠）
   - **状态判定**（status 层，优先于 transcript）：`waiting`（Claude 等用户输入/授权，如工具 permission）→NeedsDeci；busy+transcript 尾部信号（`end_turn`→NeedsDeci；`user`（用户刚输入、Claude 处理中）/`tool_use`→Working；`end_turn` 后若已有 `user` 判 Working，不被残留 `end_turn` 误判）；idle/shell（空闲）→Done；pid 死→Offline
 - `openclaw/` — `OpenClawSource`（子模块：`db` 只读 sqlite 归并 / `sessions` jsonl 尾部信号 / `probe` CLI 诊断 DTO）。两套数据源：
@@ -51,16 +51,17 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 
 - `main.rs` — 入口：加载设置 → 建浮窗 → 建 `AppDelegate` → 状态栏 + tick 定时器
 - `cli.rs` — CLI 子命令（`probe-openclaw`/`probe-claude`/`probe-hermes`：打印各 agent 诊断 + status，判定走 `core::<source>::probe` 单一事实源；`probe-claude` 按 cwd 组输出成员级 pid/kind/field/age/signal/classify/PRIMARY\|bg\|skip）
-- `app_delegate.rs` — `AppDelegate`（`define_class!`）：tick 轮询 / 渲染分发、popover 与 settings 生命周期、点击穿透、样式改动落盘、浮窗位置记忆的枢纽（`persist_light_pos` 改字段与落盘拆两个独立 borrow scope，避免 RefCell 重入 panic）
+- `app_delegate.rs` — `AppDelegate`（`define_class!`）：tick 轮询 / popover 与 settings 生命周期、点击穿透、样式改动落盘的枢纽（渲染分发 + 浮窗位置记忆拆到 `render.rs`；`persist_light_pos` 改字段与落盘拆两个独立 borrow scope，避免 RefCell 重入 panic）
+- `render.rs` — AppDelegate 的渲染 + 轮询取数 helper（从 app_delegate 外移：`render`/`render_anim`/`snap`/`maybe_notify`/`settings_changed`/`preview_tick`/`persist_light_pos`；define_class! 宏内 method 转发调用）
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗（`collectionBehavior` 据设置 `hide_in_fullscreen`:on → `Managed` 不进全屏 app 的 Space → 全屏自动消失 + 不打断菜单栏/Dock 自动隐藏;off → `CanJoinAllSpaces` 跨 Space 显示,含全屏）：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
+- `paint.rs` — 颜色 + 外观工具（从 overlay 抽出解耦：`nscolor` 动态/静态 NSColor + `swatch_image` 位图栅格化 + `apply_theme` + `is_dark_appearance` + 无障碍偏好 `reduce_motion_on`/`reduce_transparency_on`）；被 overlay / settings / tray / app_delegate 跨用
 - `panel.rs` — Drop-down Panel：`NSPopover`（圆角+vibrancy,SDK 26+ 液态玻璃）+ 三按钮（设置/锁定/退出）+ 会话列表（自适应高度）+ 事件列表（可滚动）；定位在图标左下方
 - `menu.rs` — 最小主菜单：仅切 regular（开设置窗）时显示。App 菜单留空（系统补 Quit ⌘Q 等）+ File 菜单 Close ⌘W（`performClose:` 走 responder chain 关设置窗 → 触发 `windowWillClose:` 切回 accessory）
-- `settings/` — Settings Panel（10 子模块）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)。子模块：
+- `settings/` — Settings Panel（9 子模块）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)。子模块：
   - `mod` — 装配 build/show/view_with_tag + pub use 外部 API
   - `strings` — 本地化文案
-  - `consts` — 不可变常量（几何 / tag 编码 / 业务顺序 / 数值范围）
-  - `tags` — helper（card_height / card_frame / row_center_y / parse_control_tag / hz_of / poll_preset_index / theme_index / sf_symbol / label_col_width）
+  - `geometry` — 几何常量 + helper（原 consts + tags 合并：常量 = 几何 / tag 编码 / 业务顺序 / 数值范围；helper = card_height / card_frame / row_center_y / parse_control_tag / hz_of / poll_preset_index / theme_index / sf_symbol / label_col_width）
   - `controls` — 控件工厂 add_*
   - `glass` — 液态玻璃 GlassPane + 选中态药丸
   - `layout` — StateControls + layout/refresh_*

@@ -15,18 +15,18 @@ use agent_light_core::{
 
 use crate::app_delegate::AppDelegate;
 
-use super::consts::{
+use super::controls::{
+    add_card, add_plain_button, add_radio_button, add_slider, add_swatch_button, add_text, new_view,
+};
+use super::geometry::{
     ANIM_OFF, CARD_BOT_PAD, CARD_TOP_PAD, COL_W, COLOR_OFF, COLOR_ORDER, CONTENT_HEADER_H,
     CONTENT_PAD_X, CONTENT_W, GRADIENT_LABEL_OFF, GRADIENT_OFF, H, HEADER_GAP, PIN_RIGHT,
     RESET_OFF, RESIZE_W, ROW_H, SPEED_LABEL_OFF, SPEED_MAX, SPEED_MIN, SPEED_OFF, SWATCH_D,
     TOP_INSET,
 };
-use super::controls::{
-    add_card, add_plain_button, add_radio_button, add_slider, add_swatch_button, add_text, new_view,
-};
+use super::geometry::{color_flow_metrics, label_col_width, tab_of_key};
 use super::layout::{layout_state_pane, refresh_duration, refresh_state_controls};
 use super::strings::Strings;
-use super::tags::{color_flow_metrics, label_col_width, tab_of_key};
 
 /// 一个状态 pane 的全部控件(类型化引用,便于 reset / 选择变更时批量刷新)。
 pub struct StateControls {

@@ -17,10 +17,10 @@ use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use agent_light_core::Color;
 
 use crate::app_delegate::AppDelegate;
-use crate::overlay::swatch_image;
+use crate::paint::swatch_image;
 
-use super::consts::{RESIZE_W, SWATCH_D};
-use super::tags::sf_symbol;
+use super::geometry::sf_symbol;
+use super::geometry::{RESIZE_W, SWATCH_D};
 
 /// 给控件配 target(=delegate)+ action。收口各 add_* 里重复的 setTarget/setAction
 /// (setTarget:/setAction: 在所有 NSControl 子类都响应,用 msg_send! 绕过具体子类类型)。

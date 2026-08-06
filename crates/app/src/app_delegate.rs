@@ -3,8 +3,8 @@
 use std::cell::RefCell;
 
 use agent_light_core::{
-    AgentStatus, Color, GRADIENT_LAYERS_DEFAULT, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN, Lang,
-    LightAnim, LightPosition, Monitor, Settings, Snapshot, StateStyle, StyleKey, Theme,
+    AgentStatus, GRADIENT_LAYERS_MAX, GRADIENT_LAYERS_MIN, Lang, Monitor, Settings, StateStyle,
+    StyleKey, Theme,
 };
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{Bool, NSObject};
@@ -16,7 +16,7 @@ use objc2_app_kit::{
     NSScrollView, NSStatusItem, NSView, NSWindow, NSWindowDelegate,
 };
 use objc2_core_foundation::CGFloat;
-use objc2_foundation::{NSObjectProtocol, NSPoint, NSRect, NSString, NSTimer};
+use objc2_foundation::{NSObjectProtocol, NSPoint, NSString, NSTimer};
 use std::collections::HashMap;
 
 use crate::overlay::PillView;
@@ -128,8 +128,8 @@ define_class!(
             let sig = format!(
                 "{}|rm={}|app={}",
                 snap.signature(),
-                crate::overlay::reduce_motion_on(),
-                crate::overlay::is_dark_appearance()
+                crate::paint::reduce_motion_on(),
+                crate::paint::is_dark_appearance()
             );
             let same = {
                 let last = self.ivars().last_sig.borrow();
@@ -439,7 +439,7 @@ define_class!(
                 crate::overlay::set_size(view, dot);
             }
             self.apply_click_through();
-            crate::overlay::apply_theme(self.ivars().settings.borrow().theme);
+            crate::paint::apply_theme(self.ivars().settings.borrow().theme);
             let ms = self.ivars().settings.borrow().poll_interval_ms;
             crate::tray::reschedule(self, ms as f64 / 1000.0);
             self.rebuild_settings();
@@ -547,7 +547,7 @@ define_class!(
             };
             self.ivars().settings.borrow_mut().theme = theme;
             self.ivars().settings.borrow().save();
-            crate::overlay::apply_theme(theme);
+            crate::paint::apply_theme(theme);
             self.rebuild_settings();
             let snap = self.snap();
             self.render(&snap);
@@ -583,10 +583,7 @@ define_class!(
                 .scroll
                 .as_ref()
                 .and_then(|s| s.documentView())
-                .map(|d| {
-                    let f: NSRect = unsafe { msg_send![&d, frame] };
-                    f.size.width
-                })
+                .map(|d| d.frame().size.width)
                 .filter(|w| *w > 0.0)
                 .unwrap_or(crate::settings::CONTENT_W);
             let controls = self.ivars().state_controls.borrow();
@@ -671,129 +668,6 @@ impl AppDelegate {
         if let Some(w) = self.ivars().settings_ui.borrow().window.as_ref() {
             crate::settings::show(w);
         }
-    }
-}
-
-impl AppDelegate {
-    /// 状态转入边沿检测:global 与上一轮不同 且 在 `notify_on` 列表 → 发 macOS 系统通知。
-    fn maybe_notify(&self, snap: &Snapshot) {
-        let st = snap.global;
-        let prev = self.ivars().last_global.replace(Some(st));
-        if prev != Some(st) && self.ivars().settings.borrow().notify_on.contains(&st) {
-            let lang = self.ivars().settings.borrow().lang;
-            crate::notify::send("Asig", crate::settings::strings::status_name(st, lang));
-        }
-    }
-
-    /// 把单个灯效分发到菜单栏灯 + 浮窗(渲染总在主线程)。`render` 与 `preview_tick` 共用,
-    /// 避免两处各写一遍 status_item + overlay 的 set_light。
-    fn render_anim(&self, anim: LightAnim, layers: u8) {
-        let mtm = MainThreadMarker::new().expect("render_anim 须在主线程");
-        if let Some(item) = self.ivars().status_item.borrow().as_ref() {
-            crate::tray::set_light(item, &anim, mtm);
-        }
-        if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
-            crate::overlay::set_light(view, anim, layers);
-        }
-    }
-
-    /// 把快照渲染到所有 UI(菜单栏灯 + 浮窗 + popover)。灯效来自用户设置。
-    fn render(&self, snap: &Snapshot) {
-        // 动画规格(LightAnim)与渐变层数是两条正交轴,分别从 settings 取:light() 不带 layers。
-        let (anim, layers) = {
-            let s = self.ivars().settings.borrow();
-            (s.light(snap), s.layers(snap))
-        };
-        self.render_anim(anim, layers);
-        if let Some(p) = self.ivars().popover.borrow().as_ref() {
-            crate::panel::update_label(p, snap);
-        }
-    }
-
-    /// 取一次快照:把 settings 里的 DoneNotif 持续时间 clamp 到合法范围后喂给内核 poll。
-    /// 内核 poll 不持有用户设置(保持纯净),故时长由 app 层每次喂入。
-    fn snap(&self) -> Snapshot {
-        let secs = Settings::done_notif_clamp(self.ivars().settings.borrow().done_notif_duration_s);
-        self.ivars()
-            .monitor
-            .borrow()
-            .poll(std::time::Duration::from_secs(secs as u64))
-    }
-
-    /// 设置改动后的【轻量重渲染】路径:存盘 + 立即重应用(圆点大小 + 灯效),不等下一轮 tick。
-    ///
-    /// 三条落盘路径分工:本函数 = 颜色/动效/速度/时长/大小/轮询(只需重渲染);
-    /// 语言/主题/ResetAll 因需整面板重建 / 设 `NSApp.appearance`,走直接 `settings.save()`;
-    /// 浮窗位置由 `persist_light_pos()` 每轮 tick 节流写(仅变化时落盘)。
-    fn settings_changed(&self) {
-        self.ivars().settings.borrow().save();
-        let dot = self.ivars().settings.borrow().dot_size;
-        if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
-            crate::overlay::set_size(view, dot);
-        }
-        let snap = self.snap();
-        self.render(&snap);
-    }
-
-    /// dev 预览(ASIG_PREVIEW=1):不轮询,每个 tick(~3s)把浮窗灯切到下一状态的**默认**动效并打印,
-    /// 便于一行命令查看 Done/DoneNotif/Working/NeedsDeci/Error/Offline 的默认灯效。循环不息。
-    fn preview_tick(&self) {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static IDX: AtomicUsize = AtomicUsize::new(0);
-        // (名称, 默认动效)。DoneNotif 不是 AgentStatus,单独构造其浅蓝快呼吸。
-        let states: [(&str, LightAnim); 6] = [
-            ("Done", AgentStatus::Done.light()),
-            (
-                "DoneNotif",
-                LightAnim::Pulse {
-                    color: Color::LightBlue,
-                    period_ms: 450,
-                },
-            ),
-            ("Working", AgentStatus::Working.light()),
-            ("NeedsDeci", AgentStatus::NeedsDeci.light()),
-            ("Error", AgentStatus::Error.light()),
-            ("Offline", AgentStatus::Offline.light()),
-        ];
-        let (name, anim) = states[IDX.fetch_add(1, Ordering::SeqCst) % states.len()];
-        self.render_anim(anim, GRADIENT_LAYERS_DEFAULT);
-        println!("[asig-preview] {name}: {anim:?}");
-        let mut out = std::io::stdout();
-        let _ = std::io::Write::flush(&mut out);
-    }
-
-    /// 记住浮窗当前位置(全局 origin + 所在屏 id),供下次启动恢复。tick 每 ~3s 调一次,
-    /// 仅在位置变化时写盘 —— 比 windowDidMove 更省事,且抗强杀(3s 内必落盘)。
-    fn persist_light_pos(&self) {
-        let frame = {
-            let win = self.ivars().overlay_window.borrow();
-            let Some(w) = win.as_ref() else { return };
-            let f: NSRect = unsafe { msg_send![&**w, frame] };
-            f
-        };
-        // origin 没动 → 位置不变 → 跳过昂贵的 screen_id_at(枚举所有屏)。仅在窗口实际移动
-        // 后才重算 screen_id 并落盘;99% 的 tick 走这条快路径(浮窗静置时不触屏枚举)。
-        if self
-            .ivars()
-            .settings
-            .borrow()
-            .light_pos
-            .is_some_and(|p| p.x == frame.origin.x && p.y == frame.origin.y)
-        {
-            return;
-        }
-        let center = NSPoint::new(
-            frame.origin.x + frame.size.width / 2.0,
-            frame.origin.y + frame.size.height / 2.0,
-        );
-        let pos = LightPosition {
-            x: frame.origin.x,
-            y: frame.origin.y,
-            screen_id: crate::overlay::screen_id_at(center),
-        };
-        // borrow_mut 的 RefMut 在此语句结束 drop,故下行 borrow() 安全(无并存可变借用)。
-        self.ivars().settings.borrow_mut().light_pos = Some(pos);
-        self.ivars().settings.borrow().save();
     }
 }
 

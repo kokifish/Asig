@@ -7,8 +7,10 @@ mod logger;
 mod menu;
 mod notify;
 mod overlay;
+mod paint;
 mod palette;
 mod panel;
+mod render;
 mod settings;
 mod tray;
 
@@ -73,7 +75,7 @@ fn main() {
     });
     // popover / 设置窗改为首次点击时懒创建(省常驻内存,压到 <60MB 预算内)。
 
-    overlay::apply_theme(theme); // 应用主题外观(跟随系统 / 深 / 浅)
+    crate::paint::apply_theme(theme); // 应用主题外观(跟随系统 / 深 / 浅)
 
     tray::build(&delegate); // 状态栏 Signal Icon(点击弹 Drop-down)
     // NSTimer 按设置的轮询间隔(默认 3s)轮询内核。
@@ -85,7 +87,10 @@ fn main() {
     // 生产运行不设这两个环境变量。
     unsafe {
         let open_after = |sel_name: Sel| {
-            let timer: Retained<NSTimer> = msg_send![
+            // scheduledTimer 已被 current runloop retain;此处 Retained 立即 drop(release)
+            // 不会 invalidate timer —— 它仍按 0.5s 触发一次后由 runloop 释放。故无需 mem::forget
+            // (原 forget 会让引用计数永驻到进程结束,虽是单对象小泄漏但不必要)。
+            let _: Retained<NSTimer> = msg_send![
                 class!(NSTimer),
                 scheduledTimerWithTimeInterval: 0.5f64,
                 target: &**delegate,
@@ -93,7 +98,6 @@ fn main() {
                 userInfo: std::ptr::null_mut::<NSObject>(),
                 repeats: Bool::NO,
             ];
-            std::mem::forget(timer);
         };
         if std::env::var("ASIG_PANEL").is_ok() {
             open_after(sel!(togglePopover:));

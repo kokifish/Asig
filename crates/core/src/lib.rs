@@ -15,6 +15,9 @@ pub mod status;
 /// jsonl 尾部读取共用工具(claude/openclaw 复用,内部)。
 pub(crate) mod jsonl_tail;
 
+/// 跨模块 JSON 持久化(config / events 共用,内部)。
+pub(crate) mod persist;
+
 /// 跨 source 共享系统工具(pid 探测 / 当前时间 / 只读 sqlite)。
 pub(crate) mod sys;
 
