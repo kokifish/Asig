@@ -2,6 +2,10 @@
 /target
 **/*.rs.bk
 
+# 工具本地状态(mimosa 扫描插件、ruff 缓存)
+.mimosa/
+.ruff_cache/
+
 __pycache__
 .venv/
 uv.lock
