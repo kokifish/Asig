@@ -20,7 +20,7 @@ Asig = macOS 多 Agent 状态监控灯(菜单栏灯 + 全局置顶浮窗 + 弹�
 - `msg_send!` 统管对象/基本类型返回(`msg_send_id!` 已废弃);多参数选择子参数间用**逗号**(`addAnimation:x, forKey:y`)。
 - 0.6 起 `CGFloat`/CG 类型搬到 `objc2-core-foundation`;`NSRect`/`NSPoint`/`NSSize` 在 `objc2-foundation`(NSGeometry feature)。框架自带方法(`NSBezierPath::...`/`path.fill()`)多**安全**,别再套 `unsafe {}`(clippy 报 `unused_unsafe`)。
 - 纯 `NSView` 只有 `tag()`/`viewWithTag:`,没 `setTag:`(打 tag 会 debug panic);`NSControl` 子类(`NSSlider`/`NSTextField`/`NSPopUpButton`/`NSButton`)才有。纯 `NSView`(如设置窗 pane)按 `Vec` 索引切、别打 tag。
-- 各 agent 状态判定(NeedsDeci/Working/Done 等)见 DEV.md「Code Map」各 source 条目(claude.rs / openclaw / hermes),统一走内核 sticky `transition`。
+- 各 agent 状态判定(NeedsDeci/Working/Done 等)见 DEV.md「Code Map」各 source 条目(claude.rs / openclaw / hermes / zcode),统一走内核 sticky `transition`。
 
 ## 陷阱方向(遇到这类问题往哪想)
 
@@ -41,6 +41,7 @@ Asig = macOS 多 Agent 状态监控灯(菜单栏灯 + 全局置顶浮窗 + 弹�
 - `ASIG_TAB=<1..=7>`:直接开到指定 pane(1=DoneNotif/2=Done/3=Working/4=NeedsDeci/5=Error/6=Offline/7=About;不设=General)。
 - `ASIG_PREVIEW=1`:跳过轮询,循环展示各状态默认灯效(便于动画截图)。
 - `ASIG_HERMES_ROOT=<dir>`:HermesSource 指向测试用 hermes 目录(构造小 `state.db` + `gateway_state.json` 做端到端三态验证,见 `hermes/tests.rs` 的 `#[ignore] probe_env`)。
+- `ASIG_ZCODE_ROOT=<dir>`:ZcodeSource 指向测试用 `.zcode` 根目录(`<root>/cli/db/db.sqlite`,常配 db 快照回放验证状态判定)。
 - 用法:`ASIG_SETTINGS=1 ./build/Asig.app/Contents/MacOS/agent-light`(`open` 不透传 env)。
 
 ## 供应链检查(cargo-deny)

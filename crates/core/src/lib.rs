@@ -11,6 +11,7 @@ pub mod hermes;
 pub mod openclaw;
 pub mod source;
 pub mod status;
+pub mod zcode;
 
 /// jsonl 尾部读取共用工具(claude/openclaw 复用,内部)。
 pub(crate) mod jsonl_tail;
@@ -147,6 +148,11 @@ impl Monitor {
         }
         if kinds.contains(&AgentKind::Hermes) {
             if let Some(s) = hermes::HermesSource::new() {
+                sources.push(Box::new(s));
+            }
+        }
+        if kinds.contains(&AgentKind::Zcode) {
+            if let Some(s) = zcode::ZcodeSource::new() {
                 sources.push(Box::new(s));
             }
         }

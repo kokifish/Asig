@@ -12,13 +12,14 @@ pub enum AgentKind {
     CodeBuddy, // 暂不支持(实现保留,见 claude.rs);保留 variant 保 serde 向后兼容。
     OpenClaw,
     Hermes,
+    Zcode,
     Trae, // 暂未实现;Accessibility 路线见 README 长期目标。
 }
 
 impl AgentKind {
     /// 全部已支持的 agent(chip 顺序 = 默认启用顺序)。CodeBuddy 暂不支持、Trae 暂未实现,均不含。
     /// `config::default_enabled_agents` / `Monitor::default` / 设置 chip 共用此单一事实源。
-    pub const IMPLEMENTED: [Self; 3] = [Self::Claude, Self::OpenClaw, Self::Hermes];
+    pub const IMPLEMENTED: [Self; 4] = [Self::Claude, Self::OpenClaw, Self::Hermes, Self::Zcode];
 
     /// 用户可见的全称(下拉会话列表等展示用)。变体名是简写,展示用全称(Claude → Claude Code)。
     pub fn display_name(self) -> &'static str {
@@ -27,6 +28,7 @@ impl AgentKind {
             Self::CodeBuddy => "CodeBuddy",
             Self::OpenClaw => "OpenClaw",
             Self::Hermes => "Hermes",
+            Self::Zcode => "Zcode",
             Self::Trae => "Trae",
         }
     }
@@ -53,7 +55,7 @@ impl AgentSession {
     /// agent 名(main/kotomi/…);Claude 显示 cwd basename(比 session UUID 易读)。
     pub fn display_label(&self) -> String {
         match self.kind {
-            AgentKind::OpenClaw | AgentKind::Hermes => {
+            AgentKind::OpenClaw | AgentKind::Hermes | AgentKind::Zcode => {
                 self.label.clone().unwrap_or_else(|| "-".into())
             }
             _ => self

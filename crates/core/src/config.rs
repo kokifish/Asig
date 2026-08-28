@@ -338,6 +338,15 @@ impl Settings {
         // 轮询间隔下限 1s:防手改成亚秒值让 tick 疯跑(打破 <1% CPU 目标)。无上限——
         // 大间隔只让响应变慢,不损 CPU;UI 预设最大 15s,用户可手改更大。
         self.poll_interval_ms = self.poll_interval_ms.max(1000);
+        // 迁移 v2:新增 Zcode。serde default 只对**缺失**的 enabled_agents 触发;老配置里
+        // 该字段已存在 → Zcode 不会自动进(chip 看不到、监控也不跑)。这里给 v1 老配置补上
+        // Zcode(用户此后可在设置里手动关);已是 v2(新装/迁移过)幂等跳过。
+        if self.schema_version < 2 {
+            if !self.enabled_agents.contains(&AgentKind::Zcode) {
+                self.enabled_agents.push(AgentKind::Zcode);
+            }
+            self.schema_version = 2;
+        }
         self.enabled_agents
             .retain(|k| AgentKind::IMPLEMENTED.contains(k));
     }
@@ -784,10 +793,12 @@ mod tests {
         // 老配置/手改写入未实现的 CodeBuddy/Trae → normalize 过滤掉,避免静默不监控。
         let mut s = Settings::default();
         s.enabled_agents = vec![AgentKind::Claude, AgentKind::CodeBuddy, AgentKind::Trae];
+        s.schema_version = 2; // 隔离 Zcode 迁移,专测 retain(未实现 kind 被滤掉)
         s.normalize();
         assert_eq!(s.enabled_agents, vec![AgentKind::Claude]);
         // 全是未实现 → 空(允许全不选 = 不监控任何 agent)
         s.enabled_agents = vec![AgentKind::CodeBuddy];
+        s.schema_version = 2; // 隔离 Zcode 迁移,专测 retain(未实现 kind 被滤掉)
         s.normalize();
         assert!(s.enabled_agents.is_empty());
     }
@@ -802,5 +813,40 @@ mod tests {
         let old = r#"{"dot_size":16,"styles":{}}"#;
         let s: Settings = serde_json::from_str(old).unwrap();
         assert_eq!(s.schema_version, 1);
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn zcode_migration_appends_for_v1_configs() {
+        // v1 老配置(三 agent,无 Zcode)→ normalize 补 Zcode + 升 v2。
+        let mut s = Settings::default();
+        s.enabled_agents = vec![AgentKind::Claude, AgentKind::OpenClaw, AgentKind::Hermes];
+        s.schema_version = 1;
+        s.normalize();
+        assert_eq!(
+            s.enabled_agents,
+            vec![
+                AgentKind::Claude,
+                AgentKind::OpenClaw,
+                AgentKind::Hermes,
+                AgentKind::Zcode
+            ]
+        );
+        assert_eq!(s.schema_version, 2);
+        // 二次 normalize 幂等(不重复 append)。
+        s.normalize();
+        assert_eq!(
+            s.enabled_agents
+                .iter()
+                .filter(|k| **k == AgentKind::Zcode)
+                .count(),
+            1
+        );
+        // v2 配置里用户已手动关掉 Zcode → 不再自动加回。
+        let mut s2 = Settings::default();
+        s2.enabled_agents = vec![AgentKind::Claude];
+        s2.schema_version = 2;
+        s2.normalize();
+        assert_eq!(s2.enabled_agents, vec![AgentKind::Claude]);
     }
 }

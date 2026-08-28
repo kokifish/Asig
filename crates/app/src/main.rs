@@ -41,6 +41,10 @@ fn main() {
             cli::probe_hermes();
             return;
         }
+        Some("probe-zcode") => {
+            cli::probe_zcode();
+            return;
+        }
         _ => {}
     }
     let mtm = MainThreadMarker::new().expect("main 须在主线程");

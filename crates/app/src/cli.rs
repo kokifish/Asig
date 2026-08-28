@@ -7,6 +7,7 @@
 use agent_light_core::claude;
 use agent_light_core::hermes;
 use agent_light_core::openclaw::{self, AgentProbe, OpenClawSource};
+use agent_light_core::zcode;
 
 /// 打印 db 路径 + 每 agent 诊断行(一行一个,便于 watch / jq / CI 断言)。
 pub fn probe_openclaw() {
@@ -105,6 +106,43 @@ pub fn probe_hermes() {
             p.last_finish.as_deref().unwrap_or("-"),
             format!("{}s", p.last_msg_age_s),
             p.active_agents,
+            if p.error_flag { "Y" } else { "-" },
+            p.label,
+        );
+    }
+}
+
+/// 打印 Zcode 每 session:一行(status + sid/role/完成/parts 信号/age + label)。
+pub fn probe_zcode() {
+    let probes = zcode::probe();
+    if probes.is_empty() {
+        eprintln!("(无 Zcode 会话 / ~/.zcode 不存在 / db 打不开)");
+        return;
+    }
+    eprintln!("zcode: {} 会话", probes.len());
+    for p in &probes {
+        let sid: String = p.session_id.chars().skip(5).take(9).collect(); // 去掉 sess_ 前缀
+        let tail = match (
+            p.finish_reason.as_deref(),
+            p.tool_status.as_deref(),
+            p.part_type.as_deref(),
+        ) {
+            (Some(f), _, _) => f.to_string(),
+            (None, Some(t), _) => format!("tool:{t}"),
+            (None, None, Some(t)) => t.to_string(),
+            (None, None, None) => "-".to_string(),
+        };
+        println!(
+            "{:<9} sid={:<9} role={:<10} done={:<2} tail={:<14} pend={:<6} age={:<6} err={} {}",
+            format!("{:?}", p.status),
+            sid,
+            p.last_role,
+            if p.completed { "Y" } else { "-" },
+            tail,
+            p.pending_age_s
+                .map(|s| format!("{s}s"))
+                .unwrap_or_else(|| "-".into()),
+            format!("{}s", p.last_msg_age_s),
             if p.error_flag { "Y" } else { "-" },
             p.label,
         );

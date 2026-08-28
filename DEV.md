@@ -6,7 +6,7 @@
 - Troubleshooting: 通用故障排查与修复经验沉淀在 [FIX.md](./FIX.md)。
 
 Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸浮窗。
-监控 Claude Code / OpenClaw / Hermes;CodeBuddy 暂不支持、Trae 待支持。
+监控 Claude Code / OpenClaw / Hermes / Zcode;CodeBuddy 暂不支持、Trae 待支持。
 
 ## Principals
 
@@ -42,6 +42,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
   - ② `~/.hermes/gateway_state.json` 的 pid 配 `kill(pid,0)`：gateway 不活→空 discover（该 kind Offline，与 OpenClaw/Claude 一致）
   - 会话过滤：`ended_at IS NULL`（排除已 cli_close / new_session 等；**正常 /exit 退出写 `end_reason='cli_close'` + ended_at,Asig 即时不显示**）+ 最后消息 30min 内（滤 cli 僵尸——关终端窗口不触发 cli_close、会话永远 OPEN）+ 只 cli/tui（排除 feishu 等远程平台）；label = display_name ‖ title ‖ cwd basename ‖ id
   - **按 cwd 聚合**(学 claude cwd group):同路径多 cli 会话合并 1 行,代表取 `last_msg_at` 最新者,状态取组内最活跃(`most_active`:Error/NeedsDeci > Working > Done)
+- `zcode/` — `ZcodeSource`（子模块：`db` 只读 sqlite 查询 / `tests`）。只读 `~/.zcode/cli/db/db.sqlite`（sqlite，WAL，zcode CLI/桌面版持续写）：`session`（顶层，`parent_id IS NULL` 滤 subagent）+ 每会话尾部 `message`/`part` 信号——尾部 message 带 `error`→Error；尾部 tool part `state.status=pending` 且停留 >10s→NeedsDeci（pending=已排队未执行，yolo 下瞬态，等授权时停留，用时长区分防误报）；尾部 `role=user` / assistant 缺 `time.completed` / `step-finish.reason=tool-calls`→Working；assistant 完成且 `reason=stop`→**Done 立即**（学 hermes）。最后更新 30min 内才显示（会话永久留 db，滤僵尸）；**按 cwd 聚合**（同 hermes，代表/`most_active` 同款）；label = 项目名（cwd basename，非 `.zcode` 内部 workspace 时）‖ zcode 自动题名 ‖ id 前 8 位。老配置迁移：`schema_version` v1→v2 自动补 Zcode 进 `enabled_agents`
 - `aggregate.rs` — `global_status()`：N 个会话压成最高优先级的全局灯态
 - `status.rs` — `AgentStatus` + `Color` + `LightAnim` + sticky 状态机 `transition()` + `AgentStatus::light()`（默认灯效的单一事实源）
 - `config.rs` — `Settings` / `StyleKey` / `StateStyle` / `LightPosition`：可配置灯效 + 浮窗位置，serde 持久化（`load`/`save` 失败可见不静默：无文件静默默认、IO 错提示、JSON 损坏备份成 `settings.json.bad`，均回退默认绝不 panic）
@@ -50,7 +51,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 **UI 壳 `crates/app`（objc2/AppKit，纯 Rust，无 WebView）：**
 
 - `main.rs` — 入口：加载设置 → 建浮窗 → 建 `AppDelegate` → 状态栏 + tick 定时器
-- `cli.rs` — CLI 子命令（`probe-openclaw`/`probe-claude`/`probe-hermes`：打印各 agent 诊断 + status，判定走 `core::<source>::probe` 单一事实源；`probe-claude` 按 cwd 组输出成员级 pid/kind/field/age/signal/classify/PRIMARY\|bg\|skip）
+- `cli.rs` — CLI 子命令（`probe-openclaw`/`probe-claude`/`probe-hermes`/`probe-zcode`：打印各 agent 诊断 + status，判定走 `core::<source>::probe` 单一事实源；`probe-claude` 按 cwd 组输出成员级 pid/kind/field/age/signal/classify/PRIMARY\|bg\|skip）
 - `app_delegate.rs` — `AppDelegate`（`define_class!`）：tick 轮询 / popover 与 settings 生命周期、点击穿透、样式改动落盘的枢纽（渲染分发 + 浮窗位置记忆拆到 `render.rs`；`persist_light_pos` 改字段与落盘拆两个独立 borrow scope，避免 RefCell 重入 panic）
 - `render.rs` — AppDelegate 的渲染 + 轮询取数 helper（从 app_delegate 外移：`render`/`render_anim`/`snap`/`maybe_notify`/`settings_changed`/`preview_tick`/`persist_light_pos`；define_class! 宏内 method 转发调用）
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
@@ -95,7 +96,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 跑法：`watch -n2 ./scripts/probe-openclaw.sh`，另开终端触发 openclaw 任务，对照 Asig 浮窗/面板。openclaw 升级后先跑此脚本回归（字段/表若变了，会先于 Asig 暴露不一致）。
 
-**Claude/Hermes 实测**：`agent-light probe-claude` / `probe-hermes`（判定走各 source 的 `probe`，单一事实源）。`probe-claude` 按 cwd 组输出成员级诊断，直观验证多 interactive 聚合（primary 取最新 activity、其他 interactive `skip` 不污染组）；`probe-hermes` 每 session 一行（role/finish/age/active_agents/err）。判定改动后跑此回归。
+**Claude/Hermes/Zcode 实测**：`agent-light probe-claude` / `probe-hermes` / `probe-zcode`（判定走各 source 的 `probe`，单一事实源）。`probe-claude` 按 cwd 组输出成员级诊断，直观验证多 interactive 聚合（primary 取最新 activity、其他 interactive `skip` 不污染组）；`probe-hermes` 每 session 一行（role/finish/age/active_agents/err）；`probe-zcode` 每 session 一行（role/done/tail/pend/age/err）。判定改动后跑此回归。
 
 ## 已修复的 Claude 状态判定误判
 
@@ -244,7 +245,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
   - Light size/浮窗灯大小: 左右方向的调整拉杆，右侧显示 `xx px`。范围20-80px，默认60px
   - Click-through/点击穿透(取消可拖动): 开关。默认开。运行时态,不持久化(每次启动回 true)
   - Agent poll interval/Agent状态轮询间隔: 单选栏，1/2/3/5/10/15 秒。默认3秒
-  - Agent to monitor/监控的 Agent: 多选块(Claude Code / OpenClaw / Hermes 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
+  - Agent to monitor/监控的 Agent: 多选块(Claude Code / OpenClaw / Hermes / Zcode 横排圆角块,选中=强调色边框+浅底,点击 toggle;选中=监控该 Agent,未选=不监控)。默认全选；允许全不选(=不监控任何 agent)；数据结构 `enabled_agents: Vec<AgentKind>`
   - Status notifications/状态通知: 多选块(已完成/运行中/待决策/错误/异常 横排圆角块,选中=转入该状态时弹 macOS 系统通知,点击 toggle)。默认 待决策+错误;数据结构 `notify_on: Vec<AgentStatus>`
   - Hide in fullscreen/全屏自动隐藏: 开关。默认开。开启时浮窗 collectionBehavior=Managed(不进全屏 Space:全屏自动消失 + 不打断菜单栏);关闭时=CanJoinAllSpaces(跨 Space 显示,含全屏);数据结构 `hide_in_fullscreen: bool`
   - Launch at login/开机自启动: 开关。默认关。on → 写 `~/Library/LaunchAgents/com.kokifish.asig.plist`(launchd 登录时 `open` app;零成本,不需签名);off → 删 plist
