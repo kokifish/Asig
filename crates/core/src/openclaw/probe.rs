@@ -3,7 +3,7 @@
 //! bash 重新实现(消除 rs/sh 双实现同步负担)。没装 openclaw / 打不开库 → 空。
 
 use super::db::collect;
-use super::sessions::latest_session_signals;
+use super::sessions::{latest_session_signals, materialized_agents};
 use super::{OpenClawSource, classify_agent};
 use crate::status::AgentStatus;
 use crate::sys::now_ms;
@@ -34,8 +34,9 @@ pub fn probe() -> Vec<AgentProbe> {
         return Vec::new();
     };
     let signals = latest_session_signals(src.root_path());
+    let materialized = materialized_agents(src.root_path());
     let now = now_ms();
-    collect(&conn, now, &signals)
+    collect(&conn, now, &signals, &materialized)
         .into_iter()
         .map(|(aid, acc, sig)| {
             let (role, stop, coordinating, age_s) = match &sig {

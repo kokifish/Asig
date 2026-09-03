@@ -3,7 +3,7 @@
 use super::db::{AGENT_RECENT_MS, agent_of};
 use super::*;
 use rusqlite::{Connection, params};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// 建最小 schema(只含查询用到的列),seed 后返回内存连接。
 fn db(seed: impl FnOnce(&Connection)) -> Connection {
@@ -53,9 +53,26 @@ fn task(conn: &Connection, aid: &str, status: &str, ended_at: Option<i64>) {
 }
 
 fn status_of(conn: &Connection) -> AgentStatus {
-    let s = discover_from(conn, NOW, &HashMap::new());
+    let s = discover_all(conn, &HashMap::new());
     assert_eq!(s.len(), 1, "单 agent 测试应有且仅有一个会话");
     s[0].status
+}
+
+/// 全部已注册 agent 的 id 集合(查询夹具库,构造 materialized 用)。
+fn all_registered(conn: &Connection) -> HashSet<String> {
+    let mut stmt = conn
+        .prepare("SELECT agent_id FROM agent_databases")
+        .unwrap();
+    stmt.query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .flatten()
+        .collect()
+}
+
+/// 便捷封装:materialized = 全部已注册(等价过滤前行为)。现有用例聚焦状态判定,不测过滤;
+/// 过滤行为由 ghost/materialized 专测覆盖。
+fn discover_all(conn: &Connection, signals: &HashMap<String, SessionSignal>) -> Vec<AgentSession> {
+    discover_from(conn, NOW, signals, &all_registered(conn))
 }
 
 #[test]
@@ -120,7 +137,7 @@ fn agent_of_parses_prefix() {
 #[test]
 fn empty_db_no_sessions() {
     let conn = db(|_| {});
-    assert!(discover_from(&conn, NOW, &HashMap::new()).is_empty());
+    assert!(discover_all(&conn, &HashMap::new()).is_empty());
 }
 
 #[test]
@@ -164,9 +181,8 @@ fn session_tooluse_is_working() {
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
-    let s = discover_from(
+    let s = discover_all(
         &conn,
-        NOW,
         &HashMap::from([sig("assistant", Some("toolUse"), 5_000)]),
     );
     assert_eq!(s[0].status, AgentStatus::Working);
@@ -177,7 +193,7 @@ fn session_toolresult_is_working() {
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
-    let s = discover_from(&conn, NOW, &HashMap::from([sig("toolResult", None, 5_000)]));
+    let s = discover_all(&conn, &HashMap::from([sig("toolResult", None, 5_000)]));
     assert_eq!(s[0].status, AgentStatus::Working);
 }
 
@@ -186,7 +202,7 @@ fn session_user_message_is_working() {
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
-    let s = discover_from(&conn, NOW, &HashMap::from([sig("user", None, 5_000)]));
+    let s = discover_all(&conn, &HashMap::from([sig("user", None, 5_000)]));
     assert_eq!(s[0].status, AgentStatus::Working);
 }
 
@@ -196,9 +212,8 @@ fn session_assistant_end_is_done() {
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
-    let s = discover_from(
+    let s = discover_all(
         &conn,
-        NOW,
         &HashMap::from([sig("assistant", Some("end_turn"), 5_000)]),
     );
     assert_eq!(s[0].status, AgentStatus::Done);
@@ -210,11 +225,7 @@ fn session_stale_role_is_done() {
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
-    let s = discover_from(
-        &conn,
-        NOW,
-        &HashMap::from([sig("user", None, 6 * 60 * 1000)]),
-    );
+    let s = discover_all(&conn, &HashMap::from([sig("user", None, 6 * 60 * 1000)]));
     assert_eq!(s[0].status, AgentStatus::Done);
 }
 
@@ -225,9 +236,8 @@ fn session_tooluse_stale_still_working() {
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
-    let s = discover_from(
+    let s = discover_all(
         &conn,
-        NOW,
         &HashMap::from([sig("assistant", Some("toolUse"), 6 * 60 * 1000)]),
     );
     assert_eq!(s[0].status, AgentStatus::Working);
@@ -240,9 +250,8 @@ fn session_yield_leaf_subagents_running_is_working() {
         agent(c, "kotomi", NOW as i64);
         task(c, "kotomi", "running", None);
     });
-    let s = discover_from(
+    let s = discover_all(
         &conn,
-        NOW,
         &HashMap::from([sig_ext("assistant", Some("stop"), 60_000, true, true)]),
     );
     assert_eq!(s[0].status, AgentStatus::Working);
@@ -254,9 +263,8 @@ fn session_yield_leaf_subagents_ended_is_error() {
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
-    let s = discover_from(
+    let s = discover_all(
         &conn,
-        NOW,
         &HashMap::from([sig_ext("assistant", Some("stop"), 60_000, true, true)]),
     );
     assert_eq!(s[0].status, AgentStatus::Error);
@@ -269,9 +277,8 @@ fn session_yield_leaf_stale_is_error() {
         agent(c, "kotomi", NOW as i64);
         task(c, "kotomi", "running", None);
     });
-    let s = discover_from(
+    let s = discover_all(
         &conn,
-        NOW,
         &HashMap::from([sig_ext(
             "assistant",
             Some("stop"),
@@ -289,9 +296,8 @@ fn session_leaf_without_yield_is_done() {
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
-    let s = discover_from(
+    let s = discover_all(
         &conn,
-        NOW,
         &HashMap::from([sig_ext("assistant", Some("stop"), 60_000, true, false)]),
     );
     assert_eq!(s[0].status, AgentStatus::Done);
@@ -303,9 +309,8 @@ fn session_error_stop_is_error() {
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
-    let s = discover_from(
+    let s = discover_all(
         &conn,
-        NOW,
         &HashMap::from([sig("assistant", Some("error"), 5_000)]),
     );
     assert_eq!(s[0].status, AgentStatus::Error);
@@ -317,9 +322,8 @@ fn session_error_stop_stale_is_done() {
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
-    let s = discover_from(
+    let s = discover_all(
         &conn,
-        NOW,
         &HashMap::from([sig("assistant", Some("error"), 6 * 60 * 1000)]),
     );
     assert_eq!(s[0].status, AgentStatus::Done);
@@ -446,7 +450,46 @@ fn stale_agent_filtered() {
     let conn = db(|c| {
         agent(c, "ghost", old);
     });
-    assert!(discover_from(&conn, NOW, &HashMap::new()).is_empty());
+    assert!(discover_all(&conn, &HashMap::new()).is_empty());
+}
+
+#[test]
+fn ghost_registry_row_filtered() {
+    // 注册行 last_seen 新鲜但 agents/<id>/ 目录不落地(acpx 后端 claude/codex 残留,
+    // gateway 重启盲刷 last_seen 让幽灵行永远新鲜)→ 不进结果。
+    let conn = db(|c| {
+        agent(c, "codex", NOW as i64);
+    });
+    let s = discover_from(&conn, NOW, &HashMap::new(), &HashSet::new());
+    assert!(s.is_empty(), "幽灵注册行(目录不落地)应被滤掉");
+}
+
+#[test]
+fn ghost_row_with_runs_still_filtered() {
+    // 幽灵行即使主库有 runs 归并,也在 agent 集合层整agent滤掉(不过滤会以 Working 露面)。
+    let conn = db(|c| {
+        agent(c, "claude", NOW as i64);
+        task(c, "claude", "running", None);
+    });
+    let s = discover_from(&conn, NOW, &HashMap::new(), &HashSet::new());
+    assert!(s.is_empty());
+}
+
+#[test]
+fn materialized_idle_agent_still_shown() {
+    // 目录落地但无 run 无会话(纯 idle)→ 仍显示 Done。不能改成「有 runs/会话证据才显示」:
+    // idle agent(如无后台任务的 munger)会整个消失。
+    let conn = db(|c| {
+        agent(c, "munger", NOW as i64);
+    });
+    let s = discover_from(
+        &conn,
+        NOW,
+        &HashMap::new(),
+        &HashSet::from(["munger".to_string()]),
+    );
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].status, AgentStatus::Done);
 }
 
 #[test]
@@ -455,5 +498,5 @@ fn collect_now_zero_returns_empty() {
     let conn = db(|c| {
         agent(c, "ghost", 0);
     });
-    assert!(collect(&conn, 0, &HashMap::new()).is_empty());
+    assert!(collect(&conn, 0, &HashMap::new(), &all_registered(&conn)).is_empty());
 }

@@ -29,7 +29,7 @@ use crate::status::AgentStatus;
 use db::{AgentAcc, collect};
 use rusqlite::Connection;
 use sessions::{SessionSignal, latest_session_signals};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub struct OpenClawSource {
@@ -71,17 +71,19 @@ impl AgentSource for OpenClawSource {
             return Vec::new();
         };
         let signals = latest_session_signals(&self.root);
-        discover_from(&conn, crate::sys::now_ms(), &signals)
+        let materialized = sessions::materialized_agents(&self.root);
+        discover_from(&conn, crate::sys::now_ms(), &signals, &materialized)
     }
 }
 
-/// 查询 + 归并核心(纯函数:接连接 + 当前 ms + 各 agent 交互式会话尾部信号)。
+/// 查询 + 归并核心(纯函数:接连接 + 当前 ms + 各 agent 交互式会话尾部信号 + 落地 agent 集合)。
 fn discover_from(
     conn: &Connection,
     now: u64,
     session_signals: &HashMap<String, SessionSignal>,
+    materialized: &HashSet<String>,
 ) -> Vec<AgentSession> {
-    collect(conn, now, session_signals)
+    collect(conn, now, session_signals, materialized)
         .into_iter()
         .map(|(aid, acc, sig)| AgentSession {
             kind: AgentKind::OpenClaw,

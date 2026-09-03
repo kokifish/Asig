@@ -3,7 +3,7 @@
 
 use super::sessions::{SessionSignal, session_running};
 use rusqlite::{Connection, params};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// "近期失败"窗口(ms):ended 落在此窗口内的 failed/lost/subagent-error 才报 Error。
 /// 与 done_notif 同量级;过窗后 source 报 Done,sticky 状态机自动解锁 Error。
@@ -36,10 +36,15 @@ pub(super) struct AgentAcc {
 /// 收集每 agent 的累加器 + 最新会话信号(复用于 `discover_from` 与 `probe`;SQL/session 逻辑
 /// 只此一处,杜绝 rs/sh 双实现漂移)。顺序同 `agent_databases` 返回顺序;无 run 的 agent 也含
 /// (acc 默认),让面板与探针都能看到。
+///
+/// `materialized`:`agents/<id>/` 目录真实存在的 agent 集合(`sessions::materialized_agents`)。
+/// 注册表行须落地才算 agent:acpx 后端(claude/codex)库被清理后注册行残留,gateway 重启
+/// 盲刷 `last_seen_at` 让幽灵行永远新鲜 —— 不滤就会上面板。
 pub(super) fn collect(
     conn: &Connection,
     now: u64,
     session_signals: &HashMap<String, SessionSignal>,
+    materialized: &HashSet<String>,
 ) -> Vec<(String, AgentAcc, Option<SessionSignal>)> {
     // now==0(系统时钟未就绪)→ cutoff 会失效(last_seen_at>=0 全过),早返回避免历史垃圾进结果。
     if now == 0 {
@@ -48,13 +53,13 @@ pub(super) fn collect(
     let cutoff_err = now.saturating_sub(ERROR_RECENT_MS) as i64;
     let cutoff_agent = now.saturating_sub(AGENT_RECENT_MS) as i64;
 
-    // 1) agent 集合:agent_databases 里近期见过的 agent_id(权威注册表)。
+    // 1) agent 集合:agent_databases 里近期见过 ∧ agents/<id>/ 目录落地。
     let mut agents: Vec<String> = Vec::new();
     if let Ok(mut stmt) =
         conn.prepare("SELECT agent_id FROM agent_databases WHERE last_seen_at >= ?1")
     {
         if let Ok(rows) = stmt.query_map(params![cutoff_agent], |r| r.get::<_, String>(0)) {
-            agents.extend(rows.flatten());
+            agents.extend(rows.flatten().filter(|aid| materialized.contains(aid)));
         }
     }
 

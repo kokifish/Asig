@@ -2,7 +2,7 @@
 //! 的 role/stopReason、文件是否以 `leaf` 结尾、尾部是否含 sessions_yield/spawn 协调信号。
 
 use crate::jsonl_tail;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// 一个 agent 最新交互式会话的尾部信号:mtime、最后一条 message 的 role 与 stop_reason、
@@ -126,6 +126,21 @@ fn mtime_ms(path: &Path) -> Option<u64> {
     use std::time::UNIX_EPOCH;
     let m = path.metadata().ok()?.modified().ok()?;
     Some(m.duration_since(UNIX_EPOCH).ok()?.as_millis() as u64)
+}
+
+/// `agents/<id>/` 目录名集合:注册行的「落地面」。`agent_databases` 里会有文件已删但
+/// 注册行残留的幽灵(acpx 后端 agent 常见:claude/codex 的库被清理后注册行仍在,gateway
+/// 每次重启还盲刷 `last_seen_at` → 永远满足 30 天窗口)。只有目录真实存在才算 agent。
+pub(super) fn materialized_agents(root: &Path) -> HashSet<String> {
+    std::fs::read_dir(root.join("agents"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// 扫 `agents/<aid>/sessions/*.jsonl`,每 agent 取 mtime 最新的会话尾部信号。
