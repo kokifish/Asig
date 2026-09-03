@@ -14,7 +14,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use crate::app_delegate::AppDelegate;
-use crate::palette::status_emoji;
+use crate::palette::session_emoji;
 
 pub const PANEL_W: f64 = 420.0;
 
@@ -181,7 +181,8 @@ pub fn update_label(p: &Popover, snap: &Snapshot) {
             .map(|s| {
                 format!(
                     "{} {} · {}",
-                    status_emoji(s.status),
+                    // done_notif 窗口期内 Done 行显示 🔵,与浮窗/菜单栏全局灯一致(见 session_emoji)。
+                    session_emoji(s.status, snap.done_notif),
                     s.kind.display_name(),
                     s.display_label()
                 )
