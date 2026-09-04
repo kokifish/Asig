@@ -4,9 +4,10 @@
 //! 1. **后台任务** — `~/.openclaw/state/openclaw.sqlite`(WAL,单一事实源、`.migrated`
 //!    合并目标,升级只朝它收敛):只读打开 → 查询 → 丢弃;WAL 允许 N 读 + 1 写并发,
 //!    不抢 openclaw 写锁;连接局部、源结构只存 root,天然 Send+Sync。
-//! 2. **交互式会话** — `agents/<id>/sessions/<sid>.jsonl`(TUI/webchat 事件流,**不进主库**):
-//!    读尾部最后一条 message 的 `role` + `message.stopReason` 判在跑(类比 Claude 的
-//!    `stop_reason`)—— 不依赖写入连续性,工具执行的长间隙不会误判完成。
+//! 2. **交互式会话** — `agents/<id>/agent/openclaw-agent.sqlite`(新版存储;旧版
+//!    `sessions/<sid>.jsonl` 回退用):读尾部最后一条 message 的 `role` +
+//!    `message.stopReason` 判在跑(类比 Claude 的 `stop_reason`)—— 不依赖写入连续性,
+//!    工具执行的长间隙不会误判完成。
 //!
 //! 状态映射(每个近期 agent 一个会话):
 //!   - 后台:task_runs/flow_runs/subagent_runs 跨表归并(`ended_at IS NULL`→Working);
