@@ -13,7 +13,8 @@ pub(crate) struct SessionRow {
     pub(crate) last_role: String,
     /// 尾部 assistant message 是否已写完(`time.completed` 存在)。
     pub(crate) last_completed: bool,
-    /// 尾部 message 带 `error` 字段(模型流错误等)。
+    /// 尾部 message 带 `error` 字段且非用户取消(`model_request_cancelled`:
+    /// 归档会话 / Esc 中断时 zcode 取消在途请求写入,非失败)。
     pub(crate) last_error: bool,
     /// 尾部 part 的 `type`(step-finish/tool/text/…)。
     pub(crate) last_part_type: Option<String>,
@@ -31,7 +32,8 @@ pub(crate) struct SessionRow {
     pub(crate) last_assistant_content: String,
 }
 
-/// 活跃窗口内的顶层会话(parent_id IS NULL 滤 subagent_child)+ 各自尾部信号。
+/// 活跃窗口内的顶层会话(parent_id IS NULL 滤 subagent_child;time_archived IS NULL 滤
+/// 归档——zcode 当前版本归档不写该字段,但写了就该不显示)+ 各自尾部信号。
 /// `now_ms` = 0(时钟未就绪)→ 空,防历史垃圾。
 pub(crate) fn active_sessions(conn: &Connection, now_ms: u64) -> rusqlite::Result<Vec<SessionRow>> {
     if now_ms == 0 {
@@ -47,10 +49,14 @@ pub(crate) fn active_sessions(conn: &Connection, now_ms: u64) -> rusqlite::Resul
                           WHERE m.session_id = s.id
                           ORDER BY m.sequence DESC, m.time_created DESC LIMIT 1)
                          IS NOT NULL, 0) AS last_completed,
-                COALESCE((SELECT json_extract(m.data, '$.error') FROM message m
+                COALESCE((SELECT CASE WHEN json_extract(m.data, '$.error') IS NOT NULL
+                                       AND COALESCE(json_extract(m.data, '$.error.data.code'),
+                                                    json_extract(m.data, '$.error.code'), '')
+                                           != 'model_request_cancelled'
+                                      THEN 1 ELSE 0 END
+                          FROM message m
                           WHERE m.session_id = s.id
-                          ORDER BY m.sequence DESC, m.time_created DESC LIMIT 1)
-                         IS NOT NULL, 0) AS last_error,
+                          ORDER BY m.sequence DESC, m.time_created DESC LIMIT 1), 0) AS last_error,
                 (SELECT json_extract(p.data, '$.type') FROM message m
                  JOIN part p ON p.message_id = m.id
                  WHERE m.session_id = s.id
@@ -94,6 +100,7 @@ pub(crate) fn active_sessions(conn: &Connection, now_ms: u64) -> rusqlite::Resul
                           ORDER BY m.sequence DESC, p.sequence DESC LIMIT 1), '') AS last_assistant_content
          FROM session s
          WHERE s.parent_id IS NULL
+           AND s.time_archived IS NULL
            AND s.time_updated >= ?1
          ORDER BY s.time_updated DESC",
     )?;

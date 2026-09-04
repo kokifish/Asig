@@ -8,7 +8,9 @@
 //!     `tool.state.status`(pending=待授权 / running=执行中 / completed / error)。
 //!
 //! 状态映射(优先级 Error > NeedsDeci > Working > Done):
-//!   - 尾部 message 带 `error` → **Error**;
+//!   - 尾部 message 带 `error` → **Error**。但 `code=model_request_cancelled` 除外:那是
+//!     用户主动取消(归档会话 / Esc 中断在途请求)写入的,非失败,按后续信号正常判
+//!     (2026-09-04:归档会话闪红灯就是这么来的);
 //!   - 尾部 tool part `state.status=pending` 且停留超过 `PENDING_CONFIRM_MS` →
 //!     **NeedsDeci**。zcode 的 pending = ToolCallScheduled(已排队未开始):yolo 下转瞬即
 //!     running(排队),非 yolo 下等用户授权也停在 pending —— 用停留时长区分两者,
@@ -17,7 +19,8 @@
 //!     或尾部 `step-finish.reason=tool-calls` → **Working**;
 //!   - 尾部 assistant 已写完且 `reason=stop`(回复完成交还用户)→ **Done**(立即,
 //!     学 hermes「stop 即完成」;用户继续追问写新 user 消息自动转 Working);
-//!   - 僵尸(最后更新 >30min)不显示(会话永久留在 db,需窗口过滤,同 hermes)。
+//!   - 僵尸(最后更新 >30min)与归档(`time_archived` 非空)不显示(会话永久留在 db,
+//!     需窗口过滤,同 hermes;zcode 当前版本归档不写 time_archived,写了即生效)。
 //!
 //! 同 cwd 多会话聚合为一行(组内取最活跃状态),学 hermes cwd group。
 

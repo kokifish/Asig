@@ -14,7 +14,7 @@ fn db() -> Connection {
     conn.execute_batch(
         "CREATE TABLE session (
             id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, title TEXT,
-            task_type TEXT DEFAULT 'interactive',
+            task_type TEXT DEFAULT 'interactive', time_archived INTEGER,
             time_created INTEGER, time_updated INTEGER);
          CREATE TABLE message (
             id TEXT PRIMARY KEY, session_id TEXT, data TEXT,
@@ -99,6 +99,19 @@ fn assistant_msg(completed: bool, error: bool) -> String {
         ""
     };
     format!("{{\"role\":\"assistant\",\"time\":{time}{err}}}")
+}
+
+/// 尾部带取消类 error(zcode 归档会话 / Esc 中断在途请求时写入,真实结构同款)。
+fn assistant_msg_cancelled(completed: bool) -> String {
+    let time = if completed {
+        "{\"created\":1,\"completed\":2}"
+    } else {
+        "{\"created\":1}"
+    };
+    format!(
+        "{{\"role\":\"assistant\",\"time\":{time},\"error\":{{\"name\":\"AiSdkModelAdapterError\",\
+         \"data\":{{\"message\":\"Model request was cancelled.\",\"code\":\"model_request_cancelled\"}}}}}}"
+    )
 }
 
 fn status_of(sessions: &[AgentSession], id_suffix: &str) -> AgentStatus {
@@ -272,6 +285,67 @@ fn error_when_last_message_has_error() {
         status_of(&discover_from(&conn, NOW, Path::new(ZROOT)), "s1"),
         AgentStatus::Error
     );
+}
+
+#[test]
+fn cancelled_error_not_error() {
+    // 归档会话 / Esc 中断在途请求 → 尾部 error code=model_request_cancelled(用户主动
+    // 取消,非失败)→ 不判 Error;回合已收尾(completed + stop)→ Done。
+    let conn = db();
+    session(&conn, "s1", Some("/w/c"), 0);
+    msg(
+        &conn,
+        "s1",
+        0,
+        &assistant_msg_cancelled(true),
+        &[("text", "\"text\":\"x\""), ("step-finish", "\"reason\":\"stop\"")],
+    );
+    assert_eq!(
+        status_of(&discover_from(&conn, NOW, Path::new(ZROOT)), "s1"),
+        AgentStatus::Done
+    );
+}
+
+#[test]
+fn cancelled_error_does_not_pull_group_to_error() {
+    // 回归 2026-09-04:归档的会话尾部留 cancelled error(zcode 归档取消在途请求,
+    // 不写 time_archived),同 cwd 的活跃会话不被它拉成 Error。
+    let conn = db();
+    session(&conn, "cancelled", Some("/w/g"), -60_000);
+    session(&conn, "live", Some("/w/g"), 0);
+    msg(
+        &conn,
+        "cancelled",
+        0,
+        &assistant_msg_cancelled(true),
+        &[("text", "\"text\":\"x\"")],
+    );
+    msg(
+        &conn,
+        "live",
+        0,
+        &assistant_msg(true, false),
+        &[("step-finish", "\"reason\":\"stop\"")],
+    );
+    let ss = discover_from(&conn, NOW, Path::new(ZROOT));
+    assert_eq!(ss.len(), 1, "同 cwd 聚合为一行");
+    assert_eq!(ss[0].status, AgentStatus::Done, "cancelled 不拉组");
+}
+
+#[test]
+fn archived_session_hidden() {
+    // time_archived 非空 → 不显示(zcode 当前版本归档不写它;写了即生效)。
+    let conn = db();
+    session(&conn, "live", Some("/w/f"), 0);
+    session(&conn, "archived", Some("/w/a"), 0);
+    conn.execute(
+        "UPDATE session SET time_archived = ?1 WHERE id = 'archived'",
+        params![NOW as i64],
+    )
+    .unwrap();
+    let ss = discover_from(&conn, NOW, Path::new(ZROOT));
+    assert_eq!(ss.len(), 1);
+    assert!(ss[0].id.ends_with("live"));
 }
 
 #[test]
