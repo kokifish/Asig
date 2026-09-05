@@ -70,10 +70,14 @@ pub(super) fn collect(
     }
 
     // task_runs(干净 agent_id 列,SQL 聚合 running / 近期 failed+lost)。
+    // 排除 scope_kind='system':openclaw 自身的 cron 心跳(`heartbeat-<id>`,空心跳文件
+    // 记 status='failed')每 30min 一次,失败落窗内会把毫无会话的 agent 刷成红灯。
     if let Ok(mut stmt) = conn.prepare(
         "SELECT agent_id,
-                SUM(ended_at IS NULL),
-                SUM(ended_at IS NOT NULL AND ended_at > ?1 AND status IN ('failed','lost'))
+                SUM(ended_at IS NULL AND COALESCE(scope_kind,'') != 'system'),
+                SUM(ended_at IS NOT NULL AND ended_at > ?1
+                    AND status IN ('failed','lost')
+                    AND COALESCE(scope_kind,'') != 'system')
          FROM task_runs GROUP BY agent_id",
     ) {
         if let Ok(rows) = stmt.query_map(params![cutoff_err], |r| {

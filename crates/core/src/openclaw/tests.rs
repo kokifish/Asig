@@ -15,7 +15,7 @@ fn db(seed: impl FnOnce(&Connection)) -> Connection {
                 PRIMARY KEY(agent_id, path));
              CREATE TABLE task_runs (
                 task_id TEXT PRIMARY KEY, agent_id TEXT, status TEXT NOT NULL,
-                ended_at INTEGER);
+                ended_at INTEGER, scope_kind TEXT);
              CREATE TABLE flow_runs (
                 flow_id TEXT PRIMARY KEY, owner_key TEXT, status TEXT NOT NULL,
                 ended_at INTEGER);
@@ -40,14 +40,25 @@ fn agent(conn: &Connection, aid: &str, last_seen: i64) {
 }
 
 fn task(conn: &Connection, aid: &str, status: &str, ended_at: Option<i64>) {
+    insert_task(conn, aid, status, ended_at, "user")
+}
+
+fn insert_task(
+    conn: &Connection,
+    aid: &str,
+    status: &str,
+    ended_at: Option<i64>,
+    scope_kind: &str,
+) {
     let suffix = match ended_at {
         Some(x) => x.to_string(),
         None => "n".into(),
     };
-    let id = format!("{aid}-{status}-{suffix}");
+    let id = format!("{aid}-{status}-{scope_kind}-{suffix}");
     conn.execute(
-        "INSERT INTO task_runs(task_id, agent_id, status, ended_at) VALUES(?1, ?2, ?3, ?4)",
-        params![id, aid, status, ended_at],
+        "INSERT INTO task_runs(task_id, agent_id, status, ended_at, scope_kind)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+        params![id, aid, status, ended_at, scope_kind],
     )
     .unwrap();
 }
@@ -400,6 +411,19 @@ fn stale_failed_is_done() {
     let conn = db(|c| {
         agent(c, "main", NOW as i64);
         task(c, "main", "failed", Some(ended));
+    });
+    assert_eq!(status_of(&conn), AgentStatus::Done);
+}
+
+#[test]
+fn system_heartbeat_failed_is_ignored() {
+    // openclaw 自身 cron 心跳(`scope_kind='system'`,空心跳文件记 failed)每 30min
+    // 失败一次:落窗内也不应把 agent 刷红;在跑的系统任务也不算 Working。
+    let ended = NOW as i64 - 1_000;
+    let conn = db(|c| {
+        agent(c, "main", NOW as i64);
+        insert_task(c, "main", "failed", Some(ended), "system");
+        insert_task(c, "main", "running", None, "system");
     });
     assert_eq!(status_of(&conn), AgentStatus::Done);
 }
