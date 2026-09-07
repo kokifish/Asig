@@ -143,12 +143,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/ruff-action@v3
+      - uses: astral-sh/ruff-action@v4
         with:
           version: 0.16.6
           args: check --output-format=github .
 
-      - uses: astral-sh/ruff-action@v3
+      - uses: astral-sh/ruff-action@v4
         with:
           version: 0.16.6
           args: format --check .
