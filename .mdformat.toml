@@ -11,8 +11,9 @@ wrap = "keep"
 # 行尾统一 LF
 end_of_line = "lf"
 
-# 有序列表不强改连续编号(保留原文写法)
-number = false
+# 有序列表按 1. 2. 3. 递增渲染(true)。注意语义反直觉:false(默认)会把所有项
+# 渲染成 "1."、并不保留原文编号;true 才让 1.2.3. 的原文写法原样保留。
+number = true
 
 # 渲染 HTML 一致性校验:防止格式化改变语义(默认 true)
 validate = true

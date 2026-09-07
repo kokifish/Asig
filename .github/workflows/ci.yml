@@ -120,3 +120,17 @@ jobs:
         run: cargo machete
       - name: Outdated dependencies (advisory)
         run: cargo outdated --workspace || true
+
+  # 文档格式:mdformat 按 .mdformat.toml 检查 git 跟踪的 Markdown。
+  # 版本须与 pyproject.toml dev 组的 pin 一致(formatter 输出随版本漂移,不能浮动);
+  # 大版本升级若风格漂移,需两边同步改 + 一次性重排。
+  docs-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install mdformat (pinned)
+        run: pip install mdformat==1.0.0 mdformat-gfm==1.0.0
+
+      - name: mdformat --check (tracked .md)
+        run: git ls-files '*.md' | xargs mdformat --check

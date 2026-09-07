@@ -18,7 +18,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 ## Tech Overview
 
 - **内核**: Rust workspace `crates/core`，零 AppKit 依赖 — 可移植，Windows 壳可直接复用
-- **UI 壳**: objc2 / AppKit 纯 Rust，无 WebView — 常驻灯 <60MB，CoreAnimation 交 render server，CPU ~0%
+- **UI 壳**: objc2 / AppKit 纯 Rust，无 WebView — 常驻灯 \<60MB，CoreAnimation 交 render server，CPU ~0%
 - **跨平台**: 暂只 macOS，留口子（内核可移植，UI 壳按平台另写）
 
 ### Code Map
@@ -51,7 +51,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 **UI 壳 `crates/app`（objc2/AppKit，纯 Rust，无 WebView）：**
 
 - `main.rs` — 入口：加载设置 → 建浮窗 → 建 `AppDelegate` → 状态栏 + tick 定时器
-- `cli.rs` — CLI 子命令（`probe-openclaw`/`probe-claude`/`probe-hermes`/`probe-zcode`：打印各 agent 诊断 + status，判定走 `core::<source>::probe` 单一事实源；`probe-claude` 按 cwd 组输出成员级 pid/kind/field/age/signal/classify/PRIMARY\|bg\|skip）
+- `cli.rs` — CLI 子命令（`probe-openclaw`/`probe-claude`/`probe-hermes`/`probe-zcode`：打印各 agent 诊断 + status，判定走 `core::<source>::probe` 单一事实源；`probe-claude` 按 cwd 组输出成员级 pid/kind/field/age/signal/classify/PRIMARY|bg|skip）
 - `app_delegate.rs` — `AppDelegate`（`define_class!`）：tick 轮询 / popover 与 settings 生命周期、点击穿透、样式改动落盘的枢纽（渲染分发 + 浮窗位置记忆拆到 `render.rs`；`persist_light_pos` 改字段与落盘拆两个独立 borrow scope，避免 RefCell 重入 panic）
 - `render.rs` — AppDelegate 的渲染 + 轮询取数 helper（从 app_delegate 外移：`render`/`render_anim`/`snap`/`maybe_notify`/`settings_changed`/`preview_tick`/`persist_light_pos`；define_class! 宏内 method 转发调用）
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
@@ -63,9 +63,9 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
   - `mod` — 装配 build/show/view_with_tag + pub use 外部 API
   - `strings` — 本地化文案
   - `geometry` — 几何常量 + helper（原 consts + tags 合并：常量 = 几何 / tag 编码 / 业务顺序 / 数值范围；helper = card_height / card_frame / row_center_y / parse_control_tag / hz_of / poll_preset_index / theme_index / sf_symbol / label_col_width）
-  - `controls` — 控件工厂 add_*
+  - `controls` — 控件工厂 add\_\*
   - `glass` — 液态玻璃 GlassPane + 选中态药丸
-  - `layout` — StateControls + layout/refresh_*
+  - `layout` — StateControls + layout/refresh\_\*
   - `pane_general` / `pane_state` / `pane_about` — 各 pane builder
 - `palette.rs` — 下拉面板会话列表用的状态 emoji(`status_emoji`)
 - `notify.rs` — macOS 系统通知（UserNotifications framework：授权 + 发送）
@@ -88,29 +88,21 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 
 **真实 openclaw 实测（针对本机最新版）**：`./scripts/probe-openclaw.sh` 是薄壳，判定走 `agent-light probe-openclaw` 子命令（即 `openclaw.rs` 单一事实源），对真实状态库跑同款判定、打印每 agent 应判状态。配合 `openclaw agent --agent <id> -m "..."` 触发各场景：
 
-| 目标状态 | prompt | 期望 |
-|---|---|---|
-| Working（工具链）| `用 bash 执行 'ls ~/git_space/Asig/crates' 然后逐个解释` | 🟡，toolUse 期间不抖 |
-| 长工具（>30s）| `用 bash 执行 'sleep 40' 然后说完成` | 🟡 持续，不闪蓝 |
-| 完成 | （上一条跑完）| 转 🟢，转绿瞬间闪浅蓝（完成通知）|
+| 目标状态          | prompt                                                   | 期望                              |
+| ----------------- | -------------------------------------------------------- | --------------------------------- |
+| Working（工具链） | `用 bash 执行 'ls ~/git_space/Asig/crates' 然后逐个解释` | 🟡，toolUse 期间不抖              |
+| 长工具（>30s）    | `用 bash 执行 'sleep 40' 然后说完成`                     | 🟡 持续，不闪蓝                   |
+| 完成              | （上一条跑完）                                           | 转 🟢，转绿瞬间闪浅蓝（完成通知） |
 
 跑法：`watch -n2 ./scripts/probe-openclaw.sh`，另开终端触发 openclaw 任务，对照 Asig 浮窗/面板。openclaw 升级后先跑此脚本回归（字段/表若变了，会先于 Asig 暴露不一致）。
 
 **Claude/Hermes/Zcode 实测**：`agent-light probe-claude` / `probe-hermes` / `probe-zcode`（判定走各 source 的 `probe`，单一事实源）。`probe-claude` 按 cwd 组输出成员级诊断，直观验证多 interactive 聚合（primary 取最新 activity、其他 interactive `skip` 不污染组）；`probe-hermes` 每 session 一行（role/finish/age/active_agents/err）；`probe-zcode` 每 session 一行（role/done/tail/pend/age/err）。判定改动后跑此回归。
 
-## 已修复的 Claude 状态判定误判
-
-Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑（按修复时间倒序，便于回溯）：
-
-| 误判现象 | 根因 | 修复 |
-|---|---|---|
-| 同 cwd 多个 interactive、当前会话已结束、Asig 仍显示待决策 | `group_status` 把组内所有成员（含其他 interactive）`most_active` 合并，遗留 `busy+end_turn` REPL 把整组拉成 NeedsDeci | primary 改取 `statusUpdatedAt` 最新 interactive；`group_status` 只合并 primary+bg，跳过其他 interactive |
-| 实际等用户（待决策）、Asig 显示运行中 | session `status=waiting`（Claude 等输入/授权，如工具 permission）`classify` 不识别，落 `_=>Working`；且 bg transcript 尾部是历史 `tool_use`，读 transcript 也给 Working | `classify` 在 status 层加 `waiting=>NeedsDeci`，优先于 transcript（5390228）|
-| 实际在运行、Asig 显示待决策 | `read_tail_stop_reason` 只读尾部最后一条 assistant `stop_reason`，忽略其后的 `user` 消息 → 上一轮 `end_turn` 残留被误读 | 改 `read_tail_signal`：尾部最后一条有意义事件（`type:user`→"user"；`type:assistant`→其 stop_reason）；`busy+user=>Working`（82a7a35）|
-| fork 任务到后台跑、主进程 idle 成 shell、显示不在运行 | 旧实现跳过所有 `kind:"bg"`，丢失 bg 的 busy 活跃度 | 按 cwd 聚合：interactive 作主、bg 活跃度合并（bb28c06）|
-| Claude REPL 空闲（shell）显示运行中 | `shell` status 被当未知 → Working | `classify` 加 `shell=>Done`（20579ca）|
+## Claude 状态判定
 
 判定优先级（**status 层优先于 transcript**）：pid 死→Offline；活 `waiting`→NeedsDeci；活 `busy` 读 transcript 尾部信号（`end_turn`→NeedsDeci、`user`/`tool_use`/未知→Working）；活 `idle`/`shell`→Done。
+
+历史误判案例（误判现象/根因/修复，按修复时间倒序）沉淀在 [FIX.md](./FIX.md)。
 
 ## Design
 
@@ -120,24 +112,30 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 
 一个 `AgentStatus` 同时决定**灯的颜色 + 灯效(动画)**,UI 层只消费 `status.light()`。
 
-| 优先级 | 状态 | 状态名称 | 灯 | 默认动效 | 含义 |
-|:---:|---|---|:---:|---|---|
-| 5 | `Error` | 错误/Error | 🔴 红 | 快闪 | agent 报错且无法自动恢复 |
-| 4 | `NeedsDeci` | 待决策/Pending | 🟠 琥珀 | 波纹 | 待决策（要权限 / 要输入） |
-| 3 | `Offline` | 异常/Offline | 🟣 紫 | 常亮 | 异常 / 卡住 / 进程没了 / 未知 |
-| 2 | `Working` | 运行中/Working | 🟡 金黄 #FCD74E(MutedGold,浅/深同值) | 波纹 | 正在跑 |
-| 1 | `Done` | 已完成/Done | 🟢 绿 | 波纹 | 完成 / 空闲 / 初始默认态 |
-| 0 | `DoneNotif` | 完成通知/Notify | 🔵 浅蓝 | 快速呼吸 | 其他状态转入Done状态 |
+| 优先级 | 状态        | 状态名称        |                  灯                  | 默认动效 | 含义                          |
+| :----: | ----------- | --------------- | :----------------------------------: | -------- | ----------------------------- |
+|   5    | `Error`     | 错误/Error      |                🔴 红                 | 快闪     | agent 报错且无法自动恢复      |
+|   4    | `NeedsDeci` | 待决策/Pending  |               🟠 琥珀                | 波纹     | 待决策（要权限 / 要输入）     |
+|   3    | `Offline`   | 异常/Offline    |                🟣 紫                 | 常亮     | 异常 / 卡住 / 进程没了 / 未知 |
+|   2    | `Working`   | 运行中/Working  | 🟡 金黄 #FCD74E(MutedGold,浅/深同值) | 波纹     | 正在跑                        |
+|   1    | `Done`      | 已完成/Done     |                🟢 绿                 | 波纹     | 完成 / 空闲 / 初始默认态      |
+|   0    | `DoneNotif` | 完成通知/Notify |               🔵 浅蓝                | 快速呼吸 | 其他状态转入Done状态          |
 
 - **状态名称** = 中文 / 英文（两档双语专称，表中并列）。Settings Panel「Left Side Tabs」状态 tab 的显示名**只取其中一档**——按常规设置「语言」决定（中文模式→中文 / 英文模式→英文短称），不双语并排。英文为面向 tab 的简称：Error / Pending / Offline / Working / Done / Notify。
 
 - **Done Notification**: 在别的状态转入`Done`时，默认持续 30s 的 DoneNotif (Done-Notification)，用浅蓝色表示，默认动效为快速呼吸
+
 - **Aggregation（两层归并，优先级语义不同）**：
+
   - **跨 agent 全局聚合**（`aggregate::global_status`）：N 个 agent 会话压成一颗全局灯，统一用 `AgentStatus::priority()`（数字大者覆盖）。排序：红 > 琥珀 > 紫 > 黄 > 绿。
   - **单 agent 内多会话归并**（source 层，聚合之前）：各 source 自行归并，允许有设计性差异 —— 如 `claude::most_active` 故意把 `Offline` 压在 `Done` 之下（一个崩溃的 bg 子进程不该把整个 agent 拉成 Offline，抗抖动），与全局 `priority()`（Offline>Working>Done）有意不同；`openclaw::classify_agent` 不产生 Offline，顺序与 `priority()` 一致。
+
 - **Sticky state**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
+
 - **Latched grace period**：会话连续 `LATCH_GRACE`（=2 轮，约 6s）未被观测到才从锁定表清除，而非一轮即删——覆盖 source 端文件原子替换 / 瞬时改名等抖动（本轮 `live` 集合短暂不含该会话）；否则下轮重现会以 `Done` 为基线重算，丢失锁定态（违反 sticky）。连续超宽限才清，避免幻影堆积。
+
 - **Animation types**：`Steady`（常亮）/ `Pulse`（呼吸）/ `Ripple`（波纹），共 3 种（详见 [Light Animations](#light-animations)）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**，无独立的明灭（Blink）动效。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
+
 - **Color enum**：颜色定义在内核、平台无关；app 层翻译成具体 RGB。共 13 色：6 个与默认状态一一对应（Green / LightBlue / Yellow / Amber / Red / Purple）+ Working 默认的金黄 **MutedGold**（#FCD74E，colordrop Golden Yellow，浅/深双档同值；替代高饱和 Yellow 以与 Amber 待决策区分）+ 6 个个性化扩展（Blue / Indigo / Teal / Cyan / Orange / Pink，仅 Settings 可选，无默认映射）。每色浅 / 深两档，随外观自适应（见下「Appearance」；MutedGold 非 Tailwind 源）
 
 ### Light Animations
@@ -146,10 +144,10 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 
 **全部交 CoreAnimation 在 render server 上驱动 GPU 插值，app 进程 ~0% CPU。**
 
-| 动效 | 英文 | 视觉 | 涉及的属性 |
-|---|---|---|---|
-| 常亮 | Steady | 不变，纯色常亮 | 无周期，period_ms 置 0 |
-| 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
+| 动效 | 英文   | 视觉                                                                                                                                                                                       | 涉及的属性                                                                                                                                                    |
+| ---- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 常亮 | Steady | 不变，纯色常亮                                                                                                                                                                             | 无周期，period_ms 置 0                                                                                                                                        |
+| 呼吸 | Pulse  | 透明度 ~0.2↔1 往复（周期越短越「闪」）                                                                                                                                                     | `opacity`，可定义频率                                                                                                                                         |
 | 波纹 | Ripple | 两圈环从**最内层外缘**起、错相(半周期)对称扩散（layers>0 时穿过半透明外层，视觉读作「从最内层扩散出去」）；最大直径 = 灯直径（扩到灯边缘）；`opacity` 中段完全不透明（硬边）、仅末尾短淡出 | `transform`（绕圆心缩放的 `CATransform3D`；scale 终值 = l，终态直径 = dot）+ `opacity`（2 个错相 `RingView` 的 keyframe：中段 1.0、末尾淡到 0），单程一次扩散 |
 
 - Default period：`Error`=350（快闪）/ `NeedsDeci`=2500（波纹,≈0.4Hz，比 Done 稍快）/ `Working`=2500（波纹,与 NeedsDeci 同速）/ `Done`=3333（波纹,≈0.3Hz）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。

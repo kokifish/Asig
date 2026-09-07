@@ -38,9 +38,9 @@ brew install --HEAD asig          # 当前(未发 Release,从 main 源码编译)
 
 ## 与 install.sh 的关系
 
-| 方式 | 命令 | 适合 |
-|---|---|---|
-| install.sh | `curl -fsSL .../install.sh \| bash` | 不用 Homebrew 的用户 |
-| Homebrew | `brew install asig` | Homebrew 用户(开发者主流) |
+| 方式       | 命令                                | 适合                      |
+| ---------- | ----------------------------------- | ------------------------- |
+| install.sh | `curl -fsSL .../install.sh \| bash` | 不用 Homebrew 的用户      |
+| Homebrew   | `brew install asig`                 | Homebrew 用户(开发者主流) |
 
 两者都零成本、产物无 quarantine。Homebrew 还顺带管理升级(`brew upgrade`)。

@@ -70,3 +70,15 @@ open build/Asig.app
   - **再一个坑**：不要直接 `sudo su` 后再用 `$HOME/Library/...`，因为此时 `$HOME` 会变成 `/var/root`，路径就错了。正确做法是**保留普通用户 shell，只对碰系统 plist 的 `cp` 命令单独加 `sudo`**，或者把路径写死成 `/Users/<你的用户名>/Library/...`
   - **如果连 `sudo cp /Users/<你>/Library/Group Containers/...` 都报 `Operation not permitted`**：说明问题已经不是管理员权限，而是当前终端 app 没有 **Full Disk Access**。这时先去 `System Settings -> Privacy & Security -> Full Disk Access` 给你正在用的终端（Terminal / iTerm / Warp 等）开权限，然后重开终端再执行修复命令；否则脚本本身永远没有输入文件可修
   - 如果只是想验证根因，不要先改源码，优先做“临时 bundle id 对照实验”
+
+## Claude Code: 状态判定误判(历史)
+
+Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑（按修复时间倒序，便于回溯；现行判定优先级见 [DEV.md](./DEV.md)）：
+
+| 误判现象                                                   | 根因                                                                                                                                                                    | 修复                                                                                                                                  |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 同 cwd 多个 interactive、当前会话已结束、Asig 仍显示待决策 | `group_status` 把组内所有成员（含其他 interactive）`most_active` 合并，遗留 `busy+end_turn` REPL 把整组拉成 NeedsDeci                                                   | primary 改取 `statusUpdatedAt` 最新 interactive；`group_status` 只合并 primary+bg，跳过其他 interactive                               |
+| 实际等用户（待决策）、Asig 显示运行中                      | session `status=waiting`（Claude 等输入/授权，如工具 permission）`classify` 不识别，落 `_=>Working`；且 bg transcript 尾部是历史 `tool_use`，读 transcript 也给 Working | `classify` 在 status 层加 `waiting=>NeedsDeci`，优先于 transcript（5390228）                                                          |
+| 实际在运行、Asig 显示待决策                                | `read_tail_stop_reason` 只读尾部最后一条 assistant `stop_reason`，忽略其后的 `user` 消息 → 上一轮 `end_turn` 残留被误读                                                 | 改 `read_tail_signal`：尾部最后一条有意义事件（`type:user`→"user"；`type:assistant`→其 stop_reason）；`busy+user=>Working`（82a7a35） |
+| fork 任务到后台跑、主进程 idle 成 shell、显示不在运行      | 旧实现跳过所有 `kind:"bg"`，丢失 bg 的 busy 活跃度                                                                                                                      | 按 cwd 聚合：interactive 作主、bg 活跃度合并（bb28c06）                                                                               |
+| Claude REPL 空闲（shell）显示运行中                        | `shell` status 被当未知 → Working                                                                                                                                       | `classify` 加 `shell=>Done`（20579ca）                                                                                                |

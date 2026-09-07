@@ -11,19 +11,19 @@ macOS 上的多 Agent 状态监控灯。把 Claude Code / OpenClaw / Hermes / Zc
 
 > 当前为早期版本(Phase 1–2)。Claude Code / OpenClaw / Hermes / Zcode 已支持;CodeBuddy / Trae 暂不支持。
 
----
+______________________________________________________________________
 
 ## 灯的含义
 
-| 优先级 | 灯 | 状态 | 动画 | 含义 |
-|:---:|:---:|---|---|---|
-| 5 | 🔴 红 | Error | 快闪 | 报错且无法自动恢复 |
-| 4 | 🟠 琥珀 | NeedsDeci | 慢闪 | 待决策(要权限 / 要输入) |
-| 3 | 🟣 紫 | Offline | 常亮 | 不可观测 / 卡住 / 进程没了 / 未知 |
-| 2 | 🟡 金黄 #FCD74E(MutedGold) | Working | 波纹 | 正在跑 |
-| 1 | 🟢 绿 | Done | 波纹 | 完成 / 空闲 / 初始默认态 |
+| 优先级 |         灯         | 状态      | 动画 | 含义                              |
+| :----: | :----------------: | --------- | ---- | --------------------------------- |
+|   5    |       🔴 红        | Error     | 快闪 | 报错且无法自动恢复                |
+|   4    |      🟠 琥珀       | NeedsDeci | 慢闪 | 待决策(要权限 / 要输入)           |
+|   3    |       🟣 紫        | Offline   | 常亮 | 不可观测 / 卡住 / 进程没了 / 未知 |
+|   2    | 🟡 金黄(MutedGold) | Working   | 波纹 | 正在跑                            |
+|   1    |       🟢 绿        | Done      | 波纹 | 完成 / 空闲 / 初始默认态          |
 
-- **Done Notification**:别的状态刚转入 Done 的 **30 秒内**,灯短暂变成**浅蓝、快速呼吸**(菜单栏用 🔵 表示),提示「刚完成,回来看」;之后回退为绿色波纹。
+- **Done Notification**:别的状态刚转入 Done 时,灯短暂变成**浅蓝、快速呼吸**(菜单栏用 🔵 表示),提示「刚完成,回来看」;窗口时长可在设置调整,之后回退为绿色波纹。
 - 多个会话同时存在时,灯显示最需要关注的那一个(优先级数字大者覆盖:**红 > 琥珀 > 紫 > 金黄 > 绿**)。
 - `NeedsDeci` / `Error` / `Offline` 一旦出现即**保持**,只有重新 `Working` 或 `Done` 才解除——不会因超时自动变。
 
@@ -31,11 +31,11 @@ macOS 上的多 Agent 状态监控灯。把 Claude Code / OpenClaw / Hermes / Zc
 
 灯的颜色之外,还有 3 种动效(括号内为通用英文 / 代码里的名字):
 
-| 动效 | 英文 | 看起来 |
-|---|---|---|
-| 常亮 | Steady(solid) | 纯色不变 |
-| 呼吸 | Pulse(breathing) | 明暗往复(周期越短越「闪」) |
-| 波纹 | Ripple(sonar) | 一圈环以圆点为圆心对称扩散并淡出 |
+| 动效 | 英文             | 看起来                           |
+| ---- | ---------------- | -------------------------------- |
+| 常亮 | Steady(solid)    | 纯色不变                         |
+| 呼吸 | Pulse(breathing) | 明暗往复(周期越短越「闪」)       |
+| 波纹 | Ripple(sonar)    | 一圈环以圆点为圆心对称扩散并淡出 |
 
 - **快闪 / 慢闪 / 呼吸都是 `Pulse`**,只是周期不同(Error 最快 → NeedsDeci → Working)。
 - 药丸浮窗默认停在主屏左上角;拖到任意位置(含外接屏)都会记住,下次启动自动回到上次位置。
@@ -78,14 +78,14 @@ curl -fsSL https://raw.githubusercontent.com/kokifish/Asig/main/scripts/install.
 
 ## 支持的 Agent
 
-| Agent | 支持 | 怎么读状态 |
-|---|---|---|
-| Claude Code | ✅ | `~/.claude/sessions/<pid>.json`(`busy`/`idle`/`shell`/`waiting`) + transcript 尾部信号(`waiting` 或 `busy`+`end_turn`→🟠) |
-| CodeBuddy | ⏳ 暂不支持 | (实现已保留,待恢复;见 DEV.md) |
-| OpenClaw | ✅ | `~/.openclaw/state/openclaw.sqlite`(按 agent 聚合 task/flow/subagent runs) |
-| Hermes | ✅ | `~/.hermes/state.db`(cli/tui 会话 messages 尾部 `tool_calls`/`stop` 信号)+ `gateway_state.json`(gateway 存活 / `active_agents`) |
-| Zcode | ✅ | `~/.zcode/cli/db/db.sqlite`(尾部 message `role`/`completed`/`error` + part `step-finish.reason`/`tool.state.status`;pending 停留 >10s → 🟠 等授权) |
-| Trae | ⏳ 暂未 | (闭源,需 Accessibility,见 DEV.md) |
+| Agent       | 支持        | 怎么读状态                                                                                                                                         |
+| ----------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code | ✅          | `~/.claude/sessions/<pid>.json`(`busy`/`idle`/`shell`/`waiting`) + transcript 尾部信号(`waiting` 或 `busy`+`end_turn`→🟠)                          |
+| CodeBuddy   | ⏳ 暂不支持 | (实现已保留,待恢复;见 DEV.md)                                                                                                                      |
+| OpenClaw    | ✅          | `~/.openclaw/state/openclaw.sqlite`(按 agent 聚合 task/flow/subagent runs)                                                                         |
+| Hermes      | ✅          | `~/.hermes/state.db`(cli/tui 会话 messages 尾部 `tool_calls`/`stop` 信号)+ `gateway_state.json`(gateway 存活 / `active_agents`)                    |
+| Zcode       | ✅          | `~/.zcode/cli/db/db.sqlite`(尾部 message `role`/`completed`/`error` + part `step-finish.reason`/`tool.state.status`;pending 停留 >10s → 🟠 等授权) |
+| Trae        | ⏳ 暂未     | (闭源,需 Accessibility,见 DEV.md)                                                                                                                  |
 
 ## 隐私
 
@@ -98,4 +98,4 @@ curl -fsSL https://raw.githubusercontent.com/kokifish/Asig/main/scripts/install.
 - OpenClaw:`flow_runs.status='blocked'` → 🟠 待决策(可能含投递卡住等非「等用户输入」情形,准度待 trajectory 解析补强)。
 - 设置面板(菜单栏灯 → 设置…):浮窗外观(大小/颜色/动画/速度)、轮询间隔、主题、完成通知、开机自启动等均可配;界面随系统无障碍开关自适应。改动即时生效并持久化到 `~/Library/Application Support/Asig/settings.json`。
 
-更多信息见 [DEV.md](./DEV.md)。
+更多信息与灯效精确参数(色值 / 周期 / 窗口时长默认值)见 [DEV.md](./DEV.md)。

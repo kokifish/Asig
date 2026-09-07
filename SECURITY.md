@@ -2,12 +2,12 @@
 
 > English follows Chinese. / 中文在前,英文在后。
 
----
+______________________________________________________________________
 
 ## 支持的版本 / Supported Versions
 
-| Source / 来源                | Supported / 支持 |
-| ---------------------------- | ---------------- |
+| Source / 来源                 | Supported / 支持 |
+| ----------------------------- | ---------------- |
 | Latest release / 最新 release | ✅               |
 | Older releases / 旧 release   | ❌               |
 
@@ -15,7 +15,7 @@
 
 **Only the latest release is supported.** Please always upgrade to the latest version; older releases are no longer maintained.
 
----
+______________________________________________________________________
 
 ## 报告漏洞 / Reporting a Vulnerability
 
@@ -25,7 +25,7 @@
 
 请使用 **GitHub 私有漏洞报告**(推荐,加密传输、可直接转成安全公告):
 
-  👉 <https://github.com/kokifish/Asig/security/advisories/new>
+👉 <https://github.com/kokifish/Asig/security/advisories/new>
 
 或发送邮件至 **k0k1fish@outlook.com**(标题请加 `[Asig Security]` 前缀)。
 
@@ -44,7 +44,7 @@
 
 Use **GitHub private vulnerability reporting** (recommended; encrypted, can be turned into an advisory directly):
 
-  👉 <https://github.com/kokifish/Asig/security/advisories/new>
+👉 <https://github.com/kokifish/Asig/security/advisories/new>
 
 Or email **k0k1fish@outlook.com** (please prefix the subject with `[Asig Security]`).
 
@@ -57,19 +57,23 @@ Or email **k0k1fish@outlook.com** (please prefix the subject with `[Asig Securit
 - Affected versions and environment (macOS version, Asig version)
 - Your contact info (for follow-up)
 
----
+______________________________________________________________________
 
 ## 披露策略 / Disclosure Policy
 
 - 我们采用**协调披露**:确认漏洞后,会先发布修复版本,再公开 CVE / GHSA 详情。
+
 - 修复发布后,致谢报告者(除非你要求匿名)。
+
 - 若 **90 天**内未收到回复,可在公开渠道自行披露 —— 但仍建议先邮件沟通。
 
 - We follow **coordinated disclosure**: fix is released first, then full details (CVE / GHSA) are published.
+
 - Reporters are credited after the fix ships (unless anonymity is requested).
+
 - If we have not responded within **90 days**, you may disclose publicly — but please email us first.
 
----
+______________________________________________________________________
 
 ## 范围 / Scope
 
@@ -79,7 +83,7 @@ Out-of-scope: 第三方 agent(Claude Code / OpenClaw / Hermes / Trae)自身的�
 In-scope: `crates/core`, `crates/app`, `scripts/make-app.sh`, release artifacts (`.app`).
 Out-of-scope: bugs in third-party agents (Claude Code / OpenClaw / Hermes / Trae) and in macOS itself.
 
----
+______________________________________________________________________
 
 ## 致谢 / Acknowledgements
 
