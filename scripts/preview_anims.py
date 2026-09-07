@@ -17,7 +17,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-APP = Path(__file__).resolve().parent.parent / "build/Asig.app/Contents/MacOS/agent-light"
+APP = (
+    Path(__file__).resolve().parent.parent / "build/Asig.app/Contents/MacOS/agent-light"
+)
 
 # Order matches the app's preview cycle (settings tab order). Bilingual hint.
 STATES = [

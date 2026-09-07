@@ -134,3 +134,21 @@ jobs:
 
       - name: mdformat --check (tracked .md)
         run: git ls-files '*.md' | xargs mdformat --check
+
+  # Python 脚本质量:ruff 官方 action(astral-sh/ruff-action),规则走 ruff 默认
+  # (pyproject 无 [tool.ruff] 段)。check 用 --output-format=github 在 PR 上内联标注;
+  # format --check 守默认 88 行宽。版本与 pyproject dev 组 pin 一致(lint 结果随版本漂移)。
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/ruff-action@v3
+        with:
+          version: 0.16.6
+          args: check --output-format=github .
+
+      - uses: astral-sh/ruff-action@v3
+        with:
+          version: 0.16.6
+          args: format --check .

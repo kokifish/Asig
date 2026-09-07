@@ -64,7 +64,9 @@ class RepairStats:
 def parse_args() -> argparse.Namespace:
     """Parse command-line flags."""
     parser = argparse.ArgumentParser(
-        description=("Repair Tahoe StatusKit/ControlCenter blocked state for a menu-bar bundle id.")
+        description=(
+            "Repair Tahoe StatusKit/ControlCenter blocked state for a menu-bar bundle id."
+        )
     )
     parser.add_argument(
         "--bundle-id",
@@ -109,7 +111,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--relaunch-app",
         type=Path,
-        help=("Optional app bundle path to reopen after the repair, for example `build/Asig.app`."),
+        help=(
+            "Optional app bundle path to reopen after the repair, for example `build/Asig.app`."
+        ),
     )
     parser.add_argument(
         "--apply",
@@ -174,7 +178,9 @@ def summarize_entries(
             continue
         if entry.get("isAllowed") is False:
             refs = menu_item_locations(entry)
-            foreign_ref_count += sum(1 for item in refs if location_bundle_id(item) == bundle_id)
+            foreign_ref_count += sum(
+                1 for item in refs if location_bundle_id(item) == bundle_id
+            )
     return target_count, target_allowed, foreign_ref_count
 
 
@@ -219,7 +225,7 @@ def load_outer_plist(path: Path) -> dict[str, Any]:
     with path.open("rb") as handle:
         data = plistlib.load(handle)
     if not isinstance(data, dict):
-        raise ValueError("outer plist is not a dictionary")
+        raise TypeError("outer plist is not a dictionary")
     return data
 
 
@@ -234,7 +240,7 @@ def load_tracked_entries(outer: dict[str, Any]) -> list[Any]:
         )
     decoded = plistlib.loads(bytes(tracked))
     if not isinstance(decoded, list):
-        raise ValueError("decoded `trackedApplications` is not an array")
+        raise TypeError("decoded `trackedApplications` is not an array")
     return decoded
 
 
@@ -336,7 +342,7 @@ def main() -> int:
     except PermissionError as exc:  # pragma: no cover - terminal lacks Full Disk Access
         print_fda_error(args.input, exc)
         return 1
-    except Exception as exc:  # pragma: no cover - surface exact failure to CLI
+    except Exception as exc:  # noqa: BLE001 - pragma: no cover - surface exact failure to CLI
         print(f"error: failed to load plist: {exc}", file=sys.stderr)
         return 1
 
@@ -373,7 +379,7 @@ def main() -> int:
     except PermissionError as exc:  # pragma: no cover - terminal lacks Full Disk Access
         print_fda_error(output_path, exc)
         return 1
-    except Exception as exc:  # pragma: no cover - surface exact failure to CLI
+    except Exception as exc:  # noqa: BLE001 - pragma: no cover - surface exact failure to CLI
         print(f"error: failed to write patched plist: {exc}", file=sys.stderr)
         return 1
 

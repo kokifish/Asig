@@ -10,20 +10,14 @@ requires-python = ">=3.13"
 package = false
 
 [dependency-groups]
-# python-style.md 规定用 ruff;放 dev 组,`uv sync` 后即可 `uv run ruff check/format`。
+# ruff 不做自定义配置(无 [tool.ruff] 段),直接走 ruff 默认规则集 + 88 行宽(format)。
+# 精确 pin 与 CI(ci.yml python-lint job)同版:lint 结果随版本漂移(默认规则集会增)。
+# 本地 `uv sync` 后 `uv run ruff check/format`。
 # mdformat 两件精确 pin:formatter 输出随版本漂移,须与 CI(ci.yml docs-format job)同版;
 # 1.0.0(2025-10)是风格定版的大版本(主题断线/转义规范化),升版需两边同步 + 一次性重排;
 # gfm 1.0.0 起表格支持内建,不再拉 mdformat-tables 插件。
 dev = [
-    "ruff>=0.16",
+    "ruff==0.16.6",
     "mdformat==1.0.0",
     "mdformat-gfm==1.0.0",
 ]
-
-[tool.ruff]
-line-length = 100
-target-version = "py313"
-
-[tool.ruff.lint]
-# E/F: pycodestyle/pyflakes;I: import 排序;UP: pyupgrade;B: bugbear。
-select = ["E", "F", "I", "UP", "B"]
