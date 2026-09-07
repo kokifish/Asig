@@ -428,8 +428,8 @@ mod tests {
         ));
         assert!(matches!(
             s.light_for(AgentStatus::Working),
-            LightAnim::Pulse {
-                color: Color::Yellow,
+            LightAnim::Ripple {
+                color: Color::MutedGold,
                 ..
             }
         ));

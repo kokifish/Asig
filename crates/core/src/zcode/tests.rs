@@ -298,7 +298,10 @@ fn cancelled_error_not_error() {
         "s1",
         0,
         &assistant_msg_cancelled(true),
-        &[("text", "\"text\":\"x\""), ("step-finish", "\"reason\":\"stop\"")],
+        &[
+            ("text", "\"text\":\"x\""),
+            ("step-finish", "\"reason\":\"stop\""),
+        ],
     );
     assert_eq!(
         status_of(&discover_from(&conn, NOW, Path::new(ZROOT)), "s1"),

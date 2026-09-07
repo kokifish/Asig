@@ -47,7 +47,7 @@ pub(crate) const RESIZE_H: NSAutoresizingMaskOptions = NSAutoresizingMaskOptions
 
 // ===== 业务顺序数组 =====
 pub const ANIM_ORDER: [Anim; 3] = [Anim::Steady, Anim::Pulse, Anim::Ripple];
-pub const COLOR_ORDER: [Color; 12] = [
+pub const COLOR_ORDER: [Color; 13] = [
     Color::LightBlue,
     Color::Green,
     Color::Yellow,
@@ -61,6 +61,7 @@ pub const COLOR_ORDER: [Color; 12] = [
     Color::Cyan,
     Color::Orange,
     Color::Pink,
+    Color::MutedGold,
 ];
 /// 轮询间隔下拉的可选项(ms)。index ↔ 选中项。
 pub const POLL_PRESETS_MS: [u32; 6] = [1000, 2000, 3000, 5000, 10000, 15000];

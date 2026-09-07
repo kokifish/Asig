@@ -38,10 +38,10 @@ impl AgentStatus {
                 color: Color::Green,
                 period_ms: 3333, // ≈0.3Hz(1000/0.3);Done 波纹默认速度
             }, // 波纹
-            Self::Working => LightAnim::Pulse {
-                color: Color::Yellow,
-                period_ms: 1800,
-            }, // 呼吸-慢速
+            Self::Working => LightAnim::Ripple {
+                color: Color::MutedGold,
+                period_ms: 2500,
+            }, // 波纹金黄 #FCD74E(与 Amber 靠色相/饱和度差异区分;与 NeedsDeci 同速)
             Self::NeedsDeci => LightAnim::Ripple {
                 color: Color::Amber,
                 period_ms: 2500, // ≈0.4Hz,比 Done(3333)稍快
@@ -64,17 +64,20 @@ pub enum Color {
     /// Done Notification(刚转入 Done 的 30 秒内)。浅蓝。旧配置的 "dark_green" 兼容映射。
     #[serde(alias = "dark_green")]
     LightBlue,
-    Yellow, // Working
+    Yellow,
     Amber,  // NeedsDeci
     Red,    // Error
     Purple, // Offline
-    // —— 个性化扩展色(无默认状态映射,仅 Settings 可选;Tailwind 源,见 overlay.rs)——
+    // —— 个性化扩展色(Tailwind 源,见 overlay.rs)——
     Blue,
     Indigo,
     Teal,
     Cyan,
     Orange,
     Pink,
+    /// 金黄(colordrop Golden Yellow,#FCD74E,浅/深同值),Working 默认 —— 替代高饱和
+    /// Yellow,与 Amber 待决策区分。
+    MutedGold,
 }
 
 impl Color {
@@ -94,6 +97,7 @@ impl Color {
             Self::Cyan => [(0.024, 0.714, 0.831), (0.133, 0.827, 0.933)],  // 06B6D4 / 22D3EE
             Self::Orange => [(0.976, 0.451, 0.086), (0.984, 0.573, 0.235)], // F97316 / FB923C
             Self::Pink => [(0.925, 0.282, 0.600), (0.957, 0.447, 0.714)],  // EC4899 / F472B6
+            Self::MutedGold => [(0.988, 0.843, 0.306); 2], // FCD74E(colordrop Golden Yellow;浅/深同值,统一 Working 默认色)
         }
     }
 }
@@ -153,7 +157,7 @@ mod tests {
 
     #[test]
     fn light_mapping_matches_dev_doc() {
-        // Done=波纹绿 / Working=慢呼吸黄 / NeedsDeci=波纹琥珀(比 Done 稍快)/ Error=快闪红 / Offline=常亮紫
+        // Done=波纹绿 / Working=波纹金黄 / NeedsDeci=波纹琥珀(比 Done 稍快)/ Error=快闪红 / Offline=常亮紫
         // 快闪·慢闪·呼吸 都是 Pulse(周期不同),无独立 Blink 动效。
         assert!(matches!(
             AgentStatus::Done.light(),
@@ -164,8 +168,8 @@ mod tests {
         ));
         assert!(matches!(
             AgentStatus::Working.light(),
-            LightAnim::Pulse {
-                color: Color::Yellow,
+            LightAnim::Ripple {
+                color: Color::MutedGold,
                 ..
             }
         ));
@@ -190,17 +194,15 @@ mod tests {
                 ..
             }
         ));
-        // 快闪(Error)Pulse 周期最短;呼吸(Working)Pulse 周期 ≥1500。
+        // 快闪(Error)Pulse 周期最短。
         assert!(
             matches!(AgentStatus::Error.light(), LightAnim::Pulse { period_ms, .. } if period_ms < 600)
         );
-        assert!(
-            matches!(AgentStatus::Working.light(), LightAnim::Pulse { period_ms, .. } if period_ms >= 1500)
-        );
-        // NeedsDeci 波纹(2500)比 Done 波纹(3333)稍快。
+        // NeedsDeci 波纹(2500)比 Done 波纹(3333)稍快;Working 波纹与 NeedsDeci 同速。
         let nd = matches!(AgentStatus::NeedsDeci.light(), LightAnim::Ripple { period_ms, .. } if period_ms < 3333);
         let done = matches!(AgentStatus::Done.light(), LightAnim::Ripple { period_ms, .. } if period_ms == 3333);
-        assert!(nd && done);
+        let working = matches!(AgentStatus::Working.light(), LightAnim::Ripple { period_ms, .. } if period_ms == 2500);
+        assert!(nd && done && working);
     }
 
     #[test]
@@ -252,8 +254,8 @@ mod tests {
     }
 
     #[test]
-    fn color_serde_roundtrip_all_12() {
-        // 12 色 serde rename snake_case 往返(含新增 6 个性化色)。
+    fn color_serde_roundtrip_all_13() {
+        // 13 色 serde rename snake_case 往返(含 7 个性化色)。
         let cases = [
             ("green", Color::Green),
             ("light_blue", Color::LightBlue),
@@ -267,6 +269,7 @@ mod tests {
             ("cyan", Color::Cyan),
             ("orange", Color::Orange),
             ("pink", Color::Pink),
+            ("muted_gold", Color::MutedGold),
         ];
         for (name, c) in cases {
             let s = serde_json::to_string(&c).unwrap();

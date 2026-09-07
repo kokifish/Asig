@@ -125,7 +125,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 | 5 | `Error` | 错误/Error | 🔴 红 | 快闪 | agent 报错且无法自动恢复 |
 | 4 | `NeedsDeci` | 待决策/Pending | 🟠 琥珀 | 波纹 | 待决策（要权限 / 要输入） |
 | 3 | `Offline` | 异常/Offline | 🟣 紫 | 常亮 | 异常 / 卡住 / 进程没了 / 未知 |
-| 2 | `Working` | 运行中/Working | 🟡 黄 | 呼吸-慢速 | 正在跑 |
+| 2 | `Working` | 运行中/Working | 🟡 金黄 #FCD74E(MutedGold,浅/深同值) | 波纹 | 正在跑 |
 | 1 | `Done` | 已完成/Done | 🟢 绿 | 波纹 | 完成 / 空闲 / 初始默认态 |
 | 0 | `DoneNotif` | 完成通知/Notify | 🔵 浅蓝 | 快速呼吸 | 其他状态转入Done状态 |
 
@@ -138,7 +138,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 - **Sticky state**：`NeedsDeci` / `Error` / `Offline` 一旦进入即**锁定**——只有观测到明确的 `Working`（恢复）或 `Done`（结束）才解锁（`transition()`）。不因超时自动清，锁定态之间也**不互相覆盖**（先到先得，避免抖动闪烁）；`Done` / `Working` 可自由接受任意新观测。
 - **Latched grace period**：会话连续 `LATCH_GRACE`（=2 轮，约 6s）未被观测到才从锁定表清除，而非一轮即删——覆盖 source 端文件原子替换 / 瞬时改名等抖动（本轮 `live` 集合短暂不含该会话）；否则下轮重现会以 `Done` 为基线重算，丢失锁定态（违反 sticky）。连续超宽限才清，避免幻影堆积。
 - **Animation types**：`Steady`（常亮）/ `Pulse`（呼吸）/ `Ripple`（波纹），共 3 种（详见 [Light Animations](#light-animations)）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**，无独立的明灭（Blink）动效。全部交 CoreAnimation 在 render server 上跑，app 进程 ~0% CPU。
-- **Color enum**：颜色定义在内核、平台无关；app 层翻译成具体 RGB。共 12 色（Tailwind 源）：6 个与默认状态一一对应（Green / LightBlue / Yellow / Amber / Red / Purple）+ 6 个个性化扩展（Blue / Indigo / Teal / Cyan / Orange / Pink，仅 Settings 可选，无默认映射）。每色浅 / 深两档（Tailwind 500 / 400），随外观自适应（见下「Appearance」）
+- **Color enum**：颜色定义在内核、平台无关；app 层翻译成具体 RGB。共 13 色：6 个与默认状态一一对应（Green / LightBlue / Yellow / Amber / Red / Purple）+ Working 默认的金黄 **MutedGold**（#FCD74E，colordrop Golden Yellow，浅/深双档同值；替代高饱和 Yellow 以与 Amber 待决策区分）+ 6 个个性化扩展（Blue / Indigo / Teal / Cyan / Orange / Pink，仅 Settings 可选，无默认映射）。每色浅 / 深两档，随外观自适应（见下「Appearance」；MutedGold 非 Tailwind 源）
 
 ### Light Animations
 
@@ -152,7 +152,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 | 呼吸 | Pulse | 透明度 ~0.2↔1 往复（周期越短越「闪」） | `opacity`，可定义频率 |
 | 波纹 | Ripple | 两圈环从**最内层外缘**起、错相(半周期)对称扩散（layers>0 时穿过半透明外层，视觉读作「从最内层扩散出去」）；最大直径 = 灯直径（扩到灯边缘）；`opacity` 中段完全不透明（硬边）、仅末尾短淡出 | `transform`（绕圆心缩放的 `CATransform3D`；scale 终值 = l，终态直径 = dot）+ `opacity`（2 个错相 `RingView` 的 keyframe：中段 1.0、末尾淡到 0），单程一次扩散 |
 
-- Default period：`Error`=350（快闪）/ `NeedsDeci`=2500（波纹,≈0.4Hz，比 Done 稍快）/ `Working`=1800（呼吸）/ `Done`=3333（波纹,≈0.3Hz）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
+- Default period：`Error`=350（快闪）/ `NeedsDeci`=2500（波纹,≈0.4Hz，比 Done 稍快）/ `Working`=2500（波纹,与 NeedsDeci 同速）/ `Done`=3333（波纹,≈0.3Hz）/ `DoneNotif`=450（快速呼吸）。**快闪 / 慢闪 / 呼吸都是 `Pulse`，只是周期不同**（数字越小越快），不是不同动效。
 - **Done Notification**：别的态刚转 `Done` 的窗口期内，用 `Pulse`（LightBlue，450ms）覆盖全局态。
 - Configurable：Settings 里每状态独立改 动效 + 颜色 + 周期 + 渐变层数（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
 - Carrier：Signal Light 浮窗——圆点本体做 Steady/Pulse，波纹用两个错相 `RingView` 子视图扩散（动画用绕圆心缩放的 `CATransform3D`——不动 layer-backed 视图会被 AppKit 重置的 `anchorPoint`，故环从圆点对称扩散）；Signal Icon（菜单栏）无动效，只显示自绘彩色圆点（`overlay::swatch_image`，`setTemplate:NO` 保留真彩），不可设动效。
@@ -180,7 +180,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 ### Appearance（Theme + 颜色深浅自适应）
 
 - **Theme**（Settings → General）：跟随系统 / 深色 / 浅色（横向 radio 单选,与「效果」同款），默认跟随系统。改动即设 `NSApp.appearance`（FollowSystem→nil 继承系统）并重建 + 重绘；持久化在 `settings.json` 的 `theme` 字段（serde，旧配置无该字段回退默认）。
-- **颜色随外观自适应**：12 色每色含浅 / 深两档（Tailwind 500 / 400），经 `NSColor colorWithDynamicProvider` 包装。
+- **颜色随外观自适应**：13 色每色含浅 / 深两档（Tailwind 系为 500 / 400；MutedGold 浅/深同值 #FCD74E），经 `NSColor colorWithDynamicProvider` 包装。
   - 浮窗：自绘 `drawRect` 每次重绘按当前 `NSAppearance` 取档；`PillView` / `RingView` 重写 `viewDidChangeEffectiveAppearance`，故系统深浅切换时浮窗**实时**重绘。
   - 菜单栏图标 / Settings 色块（栅格化位图 `swatch_image`）：动态色在 `lockFocus` 时会被冻结，故改用「当前外观静态色」栅格化，并靠 tick 渲染签名并入 `effectiveAppearance`（同 reduce_motion 模式）在 ≤ 轮询周期内自动刷新。
 
@@ -218,7 +218,7 @@ Claude source（`claude.rs::classify`）的 NeedsDeci/Working 判定踩过的坑
 - Content:
   - 右侧内容区有自己的 **header**：标题固定在右侧内容区的左上方（State pane 的 Reset 按钮对齐到该 header 右侧），而不是漂在卡片列中央；标题下方不再有分隔线。
   - General pane: 浮窗大小（滑块）、浮窗点击穿透（勾选；与 Drop-down「锁定」同步同一开关）、轮询间隔（下拉；改完即时重排 tick 定时器）、监控的 Agent（多选块；选中=监控,点击 toggle）、开机启动（占位，待实现）。详见 General Settings Card。
-  - State pane(每状态一个): 颜色（12 色块,**固定像素间距(15px)、左对齐 flow**——随窗宽自动换行,每行数量可不同,很宽时合并为 1 行;间距始终恒定、换行后与第一行同间距左对齐;label 左对齐（列宽 = `label_col_width` sizeToFit 测最宽文字）、控件区往左加宽;Tailwind 源、随主题深浅自适应）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
+  - State pane(每状态一个): 颜色（13 色块,**固定像素间距(15px)、左对齐 flow**——随窗宽自动换行,每行数量可不同,很宽时合并为 1 行;间距始终恒定、换行后与第一行同间距左对齐;label 左对齐（列宽 = `label_col_width` sizeToFit 测最宽文字）、控件区往左加宽;Tailwind 源、随主题深浅自适应）/ 动画（单选）/ 速度(Hz，`period_ms = 1000/Hz`；常亮时速度禁用)。详见 State Settings Card。
   - About pane: 版本号 + GitHub 链接（纯展示）。
   - 各状态可独立改 动画 + 颜色 + 周期（`StateStyle`）；缺省回退内置 `AgentStatus::light()`。
 - **Left Side Tabs**（左侧栏顶部、左对齐、自上而下 7 项；顺序固定）：

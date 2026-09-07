@@ -144,22 +144,23 @@ define_class!(
             let color: &NSColor = &b.color;
             let dot = b.dot;
             // 渐变层数 layers(slider 值 0..=4) → 实际层数 L=layers+1。第 k 层(k=0 中心)透明度
-            // α=1−k/L,按半径等距分段 [k/L·R, (k+1)/L·R](R=dot/2)。每段画 even-odd 环(外圆+内圆)
-            // 各自独立 α、互不重叠 —— 避免 source-over 合成使中间层 α 累加(否则「中 2/3」会
-            // 渗入外层色)。layers=0 → L=1 → 单个实心圆(等价历史纯色圆点)。
+            // α=1−k/L,半径按 1.5:1:1:… 加权分段(最内层 1.5 份、外层各 1 份,总份数 L+0.5)。每段画
+            // even-odd 环(外圆+内圆)各自独立 α、互不重叠 —— 避免 source-over 合成使中间层 α
+            // 累加(否则「中 2/3」会渗入外层色)。layers=0 → L=1 → 单个实心圆(等价历史纯色圆点)。
             let l = b.layers as usize + 1;
             let r = dot / 2.0;
             let c = dot_origin(dot) + r; // 圆心(正方形圆点,cx=cy=c)
             for k in 0..l {
                 let frac_in = k as CGFloat / l as CGFloat;
-                let r_out = (k as CGFloat + 1.0) / l as CGFloat * r;
+                // 第 k 层外缘 = 前 k+1 层份额之和 / 总份额(第 0 层权重 1.5,其余各 1)。
+                let r_out = (k as CGFloat + 1.5) / (l as CGFloat + 0.5) * r;
                 let outer = NSRect::new(
                     NSPoint::new(c - r_out, c - r_out),
                     NSSize::new(2.0 * r_out, 2.0 * r_out),
                 );
                 let path = NSBezierPath::bezierPathWithOvalInRect(outer);
                 if k > 0 {
-                    let r_in = frac_in * r;
+                    let r_in = (k as CGFloat + 0.5) / (l as CGFloat + 0.5) * r;
                     let inner = NSRect::new(
                         NSPoint::new(c - r_in, c - r_in),
                         NSSize::new(2.0 * r_in, 2.0 * r_in),
