@@ -9,7 +9,7 @@ license.workspace = true
 [dependencies]
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
-dirs       = "6"
+dirs       = "7"
 libc       = "0.2"
 log        = "0.4"
 # Phase 2/3 再按需开启:
