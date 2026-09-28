@@ -517,6 +517,29 @@ fn materialized_idle_agent_still_shown() {
 }
 
 #[test]
+fn duplicate_registry_rows_dedup_to_one_session() {
+    // agent_databases PK 是 (agent_id, path):同 agent_id 可合法多行(path 迁移/拷贝残留)。
+    // 不去重时输出循环对重复 id 各出一行:第二行 acc.remove 落空走默认 acc → 恒 Done,
+    // 与第一行(Error)矛盾 —— 面板同 id 双行、Monitor 双计入。须按 agent_id 去重。
+    let conn = db(|c| {
+        for path in ["a", "b"] {
+            c.execute(
+                "INSERT INTO agent_databases(agent_id, path, schema_version, last_seen_at)
+                     VALUES('main', ?1, 1, ?2)",
+                params![path, NOW as i64],
+            )
+            .unwrap();
+        }
+        // 近期 failed → 行 1 应报 Error;若重复行未去重,行 2 拿默认 acc 报 Done。
+        task(c, "main", "failed", Some(NOW as i64 - 1000));
+    });
+    let s = discover_all(&conn, &HashMap::new());
+    assert_eq!(s.len(), 1, "重复注册行应去重为单会话");
+    assert_eq!(s[0].id, "OpenClaw:main");
+    assert_eq!(s[0].status, AgentStatus::Error, "去重后应保留真实 acc 判定");
+}
+
+#[test]
 fn collect_now_zero_returns_empty() {
     // 时钟未就绪(now=0):cutoff 失效,collect 早返回空。
     let conn = db(|c| {

@@ -62,6 +62,11 @@ pub(super) fn collect(
             agents.extend(rows.flatten().filter(|aid| materialized.contains(aid)));
         }
     }
+    // 注册表 PK 是 (agent_id, path) 复合键:同一 agent_id 可合法多行(path 迁移/拷贝残留)。
+    // 按 agent_id 去重 —— 否则下方输出循环对重复 id 各出一行,第二行 acc.remove 落空走
+    // unwrap_or_default() 恒报 Done,面板同 id 双行状态矛盾,Monitor 也按重复 id 双计入。
+    agents.sort();
+    agents.dedup();
 
     // 2) 每 agent 状态累加器(预置所有 agent,确保无 run 的也输出 Done)。
     let mut acc: HashMap<&str, AgentAcc> = HashMap::new();
