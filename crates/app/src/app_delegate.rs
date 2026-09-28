@@ -195,16 +195,9 @@ define_class!(
                 let w = crate::settings::build(self);
                 self.ivars().settings_ui.borrow_mut().window = Some(w);
             }
-            // 打开设置窗期间切 regular:Asig 本是 accessory 菜单栏 app(LSUIElement,不占 Dock /
-            // 不在 Cmd+Tab 切换器);切 regular 后出现在 Dock + Cmd+Tab + 主菜单栏,可正常窗口切换。
-            // 关闭时由 windowWillClose: 切回 accessory。
-            let mtm = MainThreadMarker::new().expect("openSettings 须主线程");
-            let app = NSApplication::sharedApplication(mtm);
-            let _: Bool = unsafe {
-                msg_send![&app, setActivationPolicy: NSApplicationActivationPolicy::Regular]
-            };
-            // 首次建最小主菜单(App 菜单系统补 Quit ⌘Q + File 菜单 Close ⌘W)。
-            crate::menu::ensure_main_menu(self.ivars().settings.borrow().lang);
+            // 打开设置窗期间切 regular + 备好主菜单(accessory 壳平时不进 Dock / Cmd+Tab,
+            // ⌘Q⌘W 快捷键由主菜单提供)。关闭时由 windowWillClose: 切回 accessory。
+            self.present_settings_regular();
             if let Some(w) = self.ivars().settings_ui.borrow().window.as_ref() {
                 crate::settings::show(w);
             }
@@ -610,6 +603,12 @@ define_class!(
         /// AppDelegate 仅被设为设置窗的 window delegate,故本回调只由设置窗触发,无需判断 object。
         #[unsafe(method(windowWillClose:))]
         fn window_will_close(&self, _notif: *mut NSObject) {
+            // rebuild_settings 先 take() 再 close:此刻 window 已是 None ⇒ 属重建丢弃而非用户
+            // 关窗,跳过切回(避免 Regular→Accessory→Regular 抖动;新窗 show 前由
+            // present_settings_regular 恢复)。正常关窗时 window 仍被跟踪 → 照常切回。
+            if self.ivars().settings_ui.borrow().window.is_none() {
+                return;
+            }
             let mtm = MainThreadMarker::new().expect("windowWillClose 须主线程");
             let app = NSApplication::sharedApplication(mtm);
             let _: Bool = unsafe {
@@ -655,16 +654,34 @@ impl AppDelegate {
         edit(s.styles.entry(key).or_insert(key.default_style()));
     }
 
+    /// 设置窗可见期间 app 须为 Regular + 备好主菜单(accessory 壳不进 Dock / Cmd+Tab;
+    /// ⌘Q/⌘W 快捷键由主菜单项提供)。open_settings 与 rebuild_settings 共用:后者 close 旧窗
+    /// 会同步触发 windowWillClose: 切回 Accessory,故新窗 show 前必须重设。
+    fn present_settings_regular(&self) {
+        let mtm = MainThreadMarker::new().expect("present_settings_regular 须主线程");
+        let app = NSApplication::sharedApplication(mtm);
+        let _: Bool =
+            unsafe { msg_send![&app, setActivationPolicy: NSApplicationActivationPolicy::Regular] };
+        // 幂等(已有主菜单则 no-op)。
+        crate::menu::ensure_main_menu(self.ivars().settings.borrow().lang);
+    }
+
     /// 关闭旧设置窗、丢弃其 pane/控件引用,按当前(可能已变的语言/设置)重新构建并显示。
     fn rebuild_settings(&self) {
-        // 先 close 旧窗(丢弃前显式关),再整体丢弃 UI 态(一行清零,替代旧实现逐字段 None)。
-        if let Some(w) = self.ivars().settings_ui.borrow_mut().window.take() {
+        // 先 take 再 close(丢弃前显式关)。take 与 close 拆成两条语句:borrow_mut 的临时
+        // 在 if-let 成功分支内仍存活,而 close 会同步触发 windowWillClose: —— 该回调现要读
+        // settings_ui(重建守卫),借用在手会 panic,故 close 前必须先归还借用。
+        let old = self.ivars().settings_ui.borrow_mut().window.take();
+        if let Some(w) = old {
             let _: () = unsafe { msg_send![&w, close] };
         }
         *self.ivars().settings_ui.borrow_mut() = SettingsUi::default();
         self.ivars().state_controls.borrow_mut().clear();
         let w = crate::settings::build(self);
         self.ivars().settings_ui.borrow_mut().window = Some(w);
+        // close 旧窗已把策略切回 Accessory:新窗 show 前恢复 Regular,否则设置窗开着而
+        // Dock 图标 / ⌘Q⌘W 主菜单消失。
+        self.present_settings_regular();
         if let Some(w) = self.ivars().settings_ui.borrow().window.as_ref() {
             crate::settings::show(w);
         }
