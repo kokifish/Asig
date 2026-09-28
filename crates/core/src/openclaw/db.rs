@@ -172,9 +172,12 @@ pub(super) fn collect(
 
     // 交互式会话合并 + 收集输出(含 sig,供 probe 诊断)。
     // user/toolResult 需 mtime 近 SESSION_RECENT_MS(防历史会话尾部永远 Working);
-    // stopReason='toolUse' 跳过 mtime 闸门(工具长间隙不算完成)。stopReason='error'
-    //   (turn 失败,不进主库)近 SESSION_RECENT_MS → Error(补交互式缺失的 Error 出口)。
-    //   协调态(leaf+yield):子 agent 全 ended(!run_active)或协调态超 SUBAGENT_WAIT_MS → 卡死 → Error。
+    // stopReason='toolUse' 容忍工具长间隙(>5min 不算完成),但同样以 SUBAGENT_WAIT_MS
+    //   封顶:死在工具中途的会话(再无后续事件)曾借无界旁路永远 Working(munger 实测
+    //   挂黄 4 天,runs=0)。过窗回落 Done —— 真长任务由 task_runs run_active 独立供 Working。
+    //   stopReason='error'(turn 失败,不进主库)近 SESSION_RECENT_MS → Error(补交互式缺失
+    //   的 Error 出口)。协调态(leaf+yield):子 agent 全 ended(!run_active)或协调态超
+    //   SUBAGENT_WAIT_MS → 卡死 → Error。
     let mut out: Vec<(String, AgentAcc, Option<SessionSignal>)> = Vec::with_capacity(agents.len());
     for aid in &agents {
         let sig = session_signals.get(aid).cloned();
@@ -183,7 +186,7 @@ pub(super) fn collect(
             let stop = s.stop.as_deref();
             let fresh = now.saturating_sub(s.mtime_ms) < SESSION_RECENT_MS;
             let stale = now.saturating_sub(s.mtime_ms) >= SUBAGENT_WAIT_MS;
-            if session_running(&s.role, stop) && (fresh || stop == Some("toolUse")) {
+            if session_running(&s.role, stop) && (fresh || (stop == Some("toolUse") && !stale)) {
                 a.running = true;
             } else if s.ends_with_leaf && s.coordinating && (!a.run_active || stale) {
                 a.stuck = true; // 协调态卡死(B 子 agent 全 ended / A 超 30min)→ Error

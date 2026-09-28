@@ -241,9 +241,9 @@ fn session_stale_role_is_done() {
 }
 
 #[test]
-fn session_tooluse_stale_still_working() {
-    // stopReason='toolUse' 是「工具在执行」的权威在跑信号:跳过 mtime 闸门,
-    // 否则 >5min 的长工具会误判完成闪蓝。
+fn session_tooluse_long_gap_still_working() {
+    // stopReason='toolUse' 容忍工具长间隙:>5min(过 SESSION_RECENT_MS)但 <30min
+    // (SUBAGENT_WAIT_MS 封顶)仍 Working —— 长工具不误判完成闪蓝。
     let conn = db(|c| {
         agent(c, "kotomi", NOW as i64);
     });
@@ -252,6 +252,20 @@ fn session_tooluse_stale_still_working() {
         &HashMap::from([sig("assistant", Some("toolUse"), 6 * 60 * 1000)]),
     );
     assert_eq!(s[0].status, AgentStatus::Working);
+}
+
+#[test]
+fn session_tooluse_beyond_cap_is_done() {
+    // 回归(munger 挂黄 4 天):死在工具中途的会话尾部 toolUse 曾无界绕过新鲜度闸门。
+    // 超 SUBAGENT_WAIT_MS 封顶 → 不再 Working,回落 Done(sticky 状态机随之解锁)。
+    let conn = db(|c| {
+        agent(c, "kotomi", NOW as i64);
+    });
+    let s = discover_all(
+        &conn,
+        &HashMap::from([sig("assistant", Some("toolUse"), 4 * 24 * 3600 * 1000)]),
+    );
+    assert_eq!(s[0].status, AgentStatus::Done);
 }
 
 #[test]
