@@ -185,17 +185,45 @@ fn mtime_ms(path: &Path) -> Option<u64> {
 
 /// `agents/<id>/` 目录名集合:注册行的「落地面」。`agent_databases` 里会有文件已删但
 /// 注册行残留的幽灵(acpx 后端 agent 常见:claude/codex 的库被清理后注册行仍在,gateway
-/// 每次重启还盲刷 `last_seen_at` → 永远满足 30 天窗口)。只有目录真实存在才算 agent。
+/// 每次重启还盲刷 `last_seen_at` → 永远满足 30 天窗口);也有目录在但会话库纯空壳的
+/// (gateway 以默认 agent_id 脚手架出的 store,2026-09 实测 `agents/openclaw/`)。
+/// 只有目录真实存在 **且** 会话库有真实数据(建过 session / 写过 transcript / 旧版
+/// jsonl 会话)才算 agent。判据是「历史上有过会话数据」而非「当前有活动」——纯 idle
+/// 的真实 agent(库里有历史会话)不受影响。
 pub(super) fn materialized_agents(root: &Path) -> HashSet<String> {
     std::fs::read_dir(root.join("agents"))
         .map(|entries| {
             entries
                 .flatten()
-                .filter(|e| e.path().is_dir())
+                .filter(|e| e.path().is_dir() && has_session_data(&e.path()))
                 .map(|e| e.file_name().to_string_lossy().to_string())
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// 会话库是否有真实数据:per-agent sqlite 的 `session_windows`/`transcript_events`
+/// 任一有行(存在即返回,O(1),不随历史增长变慢),或旧版 `sessions/` 下有活跃 jsonl
+/// 会话。库打不开/表缺失按无数据走 jsonl 兜底;空壳(只有脚手架 schema 的空库)两条
+/// 都不满足 → 排除。
+fn has_session_data(agent_dir: &Path) -> bool {
+    if let Some(conn) =
+        crate::sys::open_readonly(&agent_dir.join("agent").join("openclaw-agent.sqlite"))
+    {
+        for table in ["session_windows", "transcript_events"] {
+            let has_rows: Option<i64> = conn
+                .query_row(&format!("SELECT 1 FROM {table} LIMIT 1"), [], |r| r.get(0))
+                .ok();
+            if has_rows.is_some() {
+                return true;
+            }
+        }
+    }
+    std::fs::read_dir(agent_dir.join("sessions")).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|f| is_active_session(&f.file_name().to_string_lossy()))
+    })
 }
 
 /// 扫 `agents/<aid>/`,每 agent 取尾部信号:优先 per-agent sqlite,打不开(旧版无库 /
@@ -599,6 +627,64 @@ mod tests {
         );
         let sigs = latest_session_signals(&root);
         assert!(!sigs.contains_key("main"), "无 active 事件不应产生信号");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // ===== 落地判据(目录 ∧ 会话数据)=====
+
+    #[test]
+    fn materialized_requires_session_data_not_just_dir() {
+        // 四 agent 矩阵:只有目录 + 会话数据的落地,纯目录不算 ——
+        //   shell:gateway 以默认 id 脚手架的空壳(空库 schema 全建、0 行,2026-09
+        //     "openclaw openclaw" 实测),注册行会被 gateway 盲刷保鲜,只查目录滤不掉;
+        //   windows-only:仅 session_windows 有行(transcript 被压实/归档的场景),算数据;
+        //   main:transcript 有行(非 active 也算 —— 落地判据独立于 active join);
+        //   kotomi:无库仅旧版 jsonl 会话,算数据。
+        let root = test_root("materialized");
+        let shell = root.join("agents").join("shell").join("agent");
+        std::fs::create_dir_all(&shell).unwrap();
+        Connection::open(shell.join("openclaw-agent.sqlite"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE session_windows(session_id TEXT PRIMARY KEY);
+                 CREATE TABLE transcript_events(session_id TEXT, seq INTEGER,
+                     PRIMARY KEY(session_id, seq));",
+            )
+            .unwrap();
+        let win = root.join("agents").join("windows-only").join("agent");
+        std::fs::create_dir_all(&win).unwrap();
+        let win_conn = Connection::open(win.join("openclaw-agent.sqlite")).unwrap();
+        win_conn
+            .execute_batch("CREATE TABLE session_windows(session_id TEXT PRIMARY KEY);")
+            .unwrap();
+        win_conn
+            .execute("INSERT INTO session_windows(session_id) VALUES('s1')", [])
+            .unwrap();
+        agent_sqlite(
+            &root,
+            "main",
+            &[(
+                1,
+                r#"{"type":"message","message":{"role":"user","content":"x"}}"#,
+                1000,
+                false,
+            )],
+        );
+        agent_jsonl(
+            &root,
+            "kotomi",
+            &[r#"{"type":"message","message":{"role":"user","content":"旧"}}"#],
+        );
+        std::fs::create_dir_all(root.join("agents").join("bare")).unwrap();
+        let m = materialized_agents(&root);
+        assert!(!m.contains("shell"), "空壳(空库无 jsonl)不应落地");
+        assert!(!m.contains("bare"), "纯目录(无库无 jsonl)不应落地");
+        assert!(
+            m.contains("windows-only"),
+            "仅 session_windows 有行也算数据"
+        );
+        assert!(m.contains("main"), "transcript 有行应落地(active 与否无关)");
+        assert!(m.contains("kotomi"), "旧版 jsonl 会话应落地");
         std::fs::remove_dir_all(&root).ok();
     }
 }

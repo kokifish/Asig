@@ -37,9 +37,10 @@ pub(super) struct AgentAcc {
 /// 只此一处,杜绝 rs/sh 双实现漂移)。顺序同 `agent_databases` 返回顺序;无 run 的 agent 也含
 /// (acc 默认),让面板与探针都能看到。
 ///
-/// `materialized`:`agents/<id>/` 目录真实存在的 agent 集合(`sessions::materialized_agents`)。
-/// 注册表行须落地才算 agent:acpx 后端(claude/codex)库被清理后注册行残留,gateway 重启
-/// 盲刷 `last_seen_at` 让幽灵行永远新鲜 —— 不滤就会上面板。
+/// `materialized`:`agents/<id>/` 目录真实存在且会话库有真实数据的 agent 集合
+/// (`sessions::materialized_agents`)。注册表行须落地才算 agent:acpx 后端(claude/codex)
+/// 库被清理后注册行残留,gateway 重启盲刷 `last_seen_at` 让幽灵行永远新鲜;还有 gateway
+/// 以默认 id 脚手架的空壳(目录 + 空库都在)—— 只查目录滤不掉,故须查到会话数据。
 pub(super) fn collect(
     conn: &Connection,
     now: u64,
@@ -53,7 +54,7 @@ pub(super) fn collect(
     let cutoff_err = now.saturating_sub(ERROR_RECENT_MS) as i64;
     let cutoff_agent = now.saturating_sub(AGENT_RECENT_MS) as i64;
 
-    // 1) agent 集合:agent_databases 里近期见过 ∧ agents/<id>/ 目录落地。
+    // 1) agent 集合:agent_databases 里近期见过 ∧ agents/<id>/ 落地(目录 + 会话数据)。
     let mut agents: Vec<String> = Vec::new();
     if let Ok(mut stmt) =
         conn.prepare("SELECT agent_id FROM agent_databases WHERE last_seen_at >= ?1")
