@@ -57,7 +57,7 @@ Asig = macOS 多 Agent 状态监控灯。菜单栏灯 + 全局置顶动态药丸
 - `tray.rs` — 菜单栏 Signal Icon（`NSStatusItem` + 自绘彩色圆点按钮；点击弹 Drop-down）+ tick 定时器
 - `overlay.rs` — Signal Light 浮窗（`collectionBehavior` 据设置 `hide_in_fullscreen`:on → `Managed` 不进全屏 app 的 Space → 全屏自动消失 + 不打断菜单栏/Dock 自动隐藏;off → `CanJoinAllSpaces` 跨 Space 显示,含全屏）：自绘圆点 `PillView` + 波纹环 `RingView` + CoreAnimation 灯效 + 多屏位置几何
 - `paint.rs` — 颜色 + 外观工具（从 overlay 抽出解耦：`nscolor` 动态/静态 NSColor + `swatch_image` 位图栅格化 + `apply_theme` + `is_dark_appearance` + 无障碍偏好 `reduce_motion_on`/`reduce_transparency_on`）；被 overlay / settings / tray / app_delegate 跨用
-- `panel.rs` — Drop-down Panel：`NSPopover`（圆角+vibrancy,SDK 26+ 液态玻璃）+ 三按钮（设置/锁定/退出）+ 会话列表（自适应高度）+ 事件列表（可滚动）；定位在图标左下方
+- `panel.rs` — Drop-down Panel：`NSPopover`（圆角+vibrancy,SDK 26+ 液态玻璃）+ 三按钮（设置/锁定/退出）+ 会话列表（内容自适应高,硬上限 20 行）+ 事件列表（内容自适应高,无行数上限,可滚动）；定位在图标左下方
 - `menu.rs` — 最小主菜单：仅切 regular（开设置窗）时显示。App 菜单留空（系统补 Quit ⌘Q 等）+ File 菜单 Close ⌘W（`performClose:` 走 responder chain 关设置窗 → 触发 `windowWillClose:` 切回 accessory）
 - `settings/` — Settings Panel（9 子模块）。左侧栏导航 + 右侧 pane 切换；状态 pane = 颜色 / 动画 / 速度(Hz)。子模块：
   - `mod` — 装配 build/show/view_with_tag + pub use 外部 API
@@ -198,7 +198,7 @@ Performance budget: 运行内存 < 60MB，CPU 平均 < 1%
 - Position: 菜单栏单击后在图标右下方弹出菜单栏弹窗，菜单栏弹窗左侧和菜单栏Asig图标左侧对齐，但如果右侧空间不足，则右侧贴屏幕边缘。不可拖动不可自定义大小
 - Upper Button: 从左至右分别为`设置`-用于打开 Settings Panel 的最左侧按钮，`锁定`-用于快速设置是否可以拖动圆角单选按钮（与 Settings Panel「浮窗点击穿透」同步同一开关），`退出`-用于退出Asig的最右侧按钮
 - 材质：`NSPopover`（SDK 26+ 链接即自动获得液态玻璃，无需手动 vibrancy）。
-- 内容布局：会话列表（每行一个会话,**高度随会话数自适应**——行数×行高,每次全显示不裁剪）+ 事件列表（最近 start/done,`NSScrollView`+`NSTextView` 固定高、内容多自动滚动）。Popover 总高随会话行数动态调整。
+- 内容布局：会话列表（每行一个会话,`NSScrollView`+`NSTextView`,**高度随内容自适应**——内容少时收缩不留空白,**硬上限 20 行**）+ 事件列表（最近 start/done,最新在前,高度同样随内容自适应,**无行数上限**）。会话列表超出 20 行的部分进滚动区,只有滚动才能看到;事件列表只受所在屏可视高度的系统硬上限约束——超过 macOS 允许的最大高度才收缩、出滚动条（收缩不低于 2 行）。滚动条钉死 overlay 风格（不随系统「总是显示滚动条」退化为 legacy——legacy 会在布局中预留宽度,导致文本重折行、内容测量失真）。
 
 ### Settings Panel
 
