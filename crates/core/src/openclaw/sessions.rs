@@ -1,6 +1,7 @@
 //! 交互式会话尾部信号解析:优先读 `agents/<id>/agent/openclaw-agent.sqlite`(新版
 //! OpenClaw 的会话存储,jsonl 已停更仅存历史),无库 → 回退读 `agents/<id>/sessions/*.jsonl`
-//! 末尾。两源事件同构(`event_json` 即原 jsonl 行),统一经 `signals_from_events` 计算:
+//! 末尾。两源事件同构(`event_json` 即原 jsonl 行;新版对大行按大小 zstd 压缩,`event_json`
+//! 置 NULL、原文在 `event_zstd`,须解压还原),统一经 `signals_from_events` 计算:
 //! 最后一条 message 的 role/stopReason、是否以 `leaf` 结尾、尾部是否含
 //! sessions_yield/spawn 协调信号。
 
@@ -124,6 +125,9 @@ fn signals_from_events(events: &[serde_json::Value], mtime_ms: u64) -> SessionSi
 /// sqlite 源单会话尾部事件条数:覆盖一个完整 yield 循环(协调信号只看末 6 条)。
 const SQLITE_TAIL_EVENTS: i64 = 32;
 
+/// 单事件解压输出上限:openclaw schema CHECK 限 4MB,防御坏帧无限膨胀。
+const MAX_EVENT_BYTES: usize = 4_194_304;
+
 /// per-agent 库尾部信号:`agents/<id>/agent/openclaw-agent.sqlite` 的 `transcript_events`。
 /// 只读 **active** 事件(join `session_transcript_active_events`):rewind 会把旧事件移出
 /// active 集,按全量尾部取会被已回退的事件带偏。库打不开 / 表缺失 / 无 active 事件 →
@@ -142,11 +146,11 @@ fn read_sqlite_signals(agent_dir: &Path) -> Option<SessionSignal> {
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
         )
         .ok()?;
-    // 该会话尾部 active 事件:seq 倒序取 N 条再翻回正序;单条 event_json 解析失败跳过
-    //(与 jsonl 丢坏行一致)。
+    // 该会话尾部 active 事件:seq 倒序取 N 条再翻回正序。单行解码失败(明文坏 JSON /
+    // 压缩行解压失败)跳过,与 jsonl 丢坏行一致。
     let mut stmt = conn
         .prepare(
-            "SELECT e.event_json
+            "SELECT e.event_json, e.event_zstd, e.event_utf8_bytes
              FROM transcript_events e
              JOIN session_transcript_active_events a
                ON a.session_id = e.session_id AND a.event_seq = e.seq
@@ -155,17 +159,57 @@ fn read_sqlite_signals(agent_dir: &Path) -> Option<SessionSignal> {
         )
         .ok()?;
     let rows = stmt
-        .query_map(params![sid, SQLITE_TAIL_EVENTS], |r| r.get::<_, String>(0))
+        .query_map(params![sid, SQLITE_TAIL_EVENTS], |r| {
+            Ok((
+                r.get::<_, Option<String>>(0)?,
+                r.get::<_, Option<Vec<u8>>>(1)?,
+                r.get::<_, Option<i64>>(2)?,
+            ))
+        })
         .ok()?;
     let mut events: Vec<serde_json::Value> = rows
         .flatten()
-        .filter_map(|j| serde_json::from_str(&j).ok())
+        .filter_map(|(j, z, n)| decode_event_row(j, z, n))
         .collect();
     events.reverse();
     Some(signals_from_events(
         &events,
         u64::try_from(mtime).unwrap_or(0),
     ))
+}
+
+/// 单行事件解码:明文 `event_json` 直接解析;新版 OpenClaw 对大行(assistant 回复 /
+/// toolResult 等 ≥~3KB)按大小 zstd 压缩,`event_json` 置 NULL、原文在 `event_zstd`,
+/// 须解压还原 —— 压缩行不还原会把尾部停格在最后一条明文(通常是小 user 封包)上,
+/// turn 结束/toolUse/Error 全部漏判(2026-10-11 kotomi 实测)。两路都取不到 → None。
+fn decode_event_row(
+    json: Option<String>,
+    zstd: Option<Vec<u8>>,
+    utf8_len: Option<i64>,
+) -> Option<serde_json::Value> {
+    match (json, zstd) {
+        (Some(j), _) => serde_json::from_str(&j).ok(),
+        (None, Some(blob)) => {
+            // 解压输出上限:优先 schema 自带的原文大小,缺失时按上限兜底;截断会导致
+            // JSON 解析失败 → 跳过,与坏行同路。
+            let bound = utf8_len
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|n| (1..=MAX_EVENT_BYTES).contains(n))
+                .unwrap_or(MAX_EVENT_BYTES);
+            let bytes = zstd_decode(&blob, bound)?;
+            serde_json::from_slice(&bytes).ok()
+        }
+        (None, None) => None,
+    }
+}
+
+/// zstd 解压(纯 Rust ruzstd,零 C 依赖;`bound` 限解压输出大小)。
+fn zstd_decode(blob: &[u8], bound: usize) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    let dec = ruzstd::decoding::StreamingDecoder::new(std::io::Cursor::new(blob)).ok()?;
+    dec.take(bound as u64).read_to_end(&mut out).ok()?;
+    Some(out)
 }
 
 /// 派生/历史会话文件后缀(非真实交互式会话):trajectory / deleted / bak / reset。
@@ -399,7 +443,8 @@ mod tests {
 
     /// 在 `agents/<aid>/agent/` 建最小 per-agent 库(只含查询用到的表/列),按序插入
     /// `(seq, event_json, created_at_ms, active)` 事件;active=false 的行不进 active 索引
-    /// (模拟 rewind 摘除)。
+    /// (模拟 rewind 摘除)。schema 带新版 zstd 列(真实库 2026-10 实测:event_json 可 NULL,
+    /// 大行压缩进 event_zstd)—— 列缺失会让新查询 `SELECT e.event_zstd` 直接报错回退 jsonl。
     fn agent_sqlite(root: &Path, aid: &str, rows: &[(i64, &str, i64, bool)]) {
         let dir = root.join("agents").join(aid).join("agent");
         std::fs::create_dir_all(&dir).unwrap();
@@ -407,7 +452,8 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE transcript_events (
                     session_id TEXT NOT NULL, seq INTEGER NOT NULL,
-                    event_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    event_json TEXT, created_at INTEGER NOT NULL,
+                    event_zstd BLOB, event_utf8_bytes INTEGER,
                     PRIMARY KEY(session_id, seq));
              CREATE TABLE session_transcript_active_events (
                     session_id TEXT NOT NULL, active_position INTEGER NOT NULL,
@@ -627,6 +673,97 @@ mod tests {
         );
         let sigs = latest_session_signals(&root);
         assert!(!sigs.contains_key("main"), "无 active 事件不应产生信号");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // ===== zstd 压缩行(新版 openclaw 大行压缩存储)=====
+
+    /// zstd 压缩夹具:一段 assistant `stop="stop"` 事件 JSON(原文 128B)经 `zstd` CLI
+    /// 预压缩的字节(ruzstd 仅解码,夹具须离线生成)。
+    const ZSTD_EVENT_BLOB: &[u8] = &[
+        0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x58, 0x6d, 0x03, 0x00, 0x32, 0x46, 0x17, 0x21, 0xa0, 0x29,
+        0x8d, 0x01, 0xf1, 0xbf, 0xaf, 0xa5, 0x1b, 0x7b, 0x57, 0x1c, 0x7f, 0xe2, 0x78, 0xe3, 0x10,
+        0x4b, 0x34, 0xb0, 0x77, 0x73, 0xbf, 0x68, 0xcb, 0x62, 0xa0, 0x8e, 0x26, 0x01, 0xaa, 0xb2,
+        0x10, 0x8c, 0x05, 0xd8, 0x8b, 0x87, 0x33, 0xb1, 0x38, 0x0d, 0x4a, 0x93, 0x44, 0x9a, 0x02,
+        0xf2, 0x54, 0x2e, 0x0f, 0xc3, 0xd1, 0xc6, 0x7b, 0x11, 0xb9, 0x00, 0x7c, 0x53, 0x6e, 0x52,
+        0x82, 0x6f, 0x3c, 0x29, 0x45, 0xc9, 0x2c, 0xb5, 0xfa, 0xbd, 0x09, 0xad, 0x12, 0x54, 0xd1,
+        0x78, 0x16, 0xd4, 0xe1, 0x06, 0xef, 0x1c, 0x20, 0xd5, 0x34, 0x8c, 0xe7, 0x4a, 0xec, 0x4d,
+        0x04, 0x00, 0xaa, 0x51, 0x48, 0xa1, 0xbe, 0x60, 0xde, 0xa7, 0x45, 0x09, 0x03,
+    ];
+
+    /// 给既有 agent 库追加一条压缩事件行(event_json NULL + event_zstd),并登记 active。
+    fn add_zstd_row(root: &Path, aid: &str, seq: i64, ts: i64, blob: &[u8], raw_len: i64) {
+        let db = root
+            .join("agents")
+            .join(aid)
+            .join("agent")
+            .join("openclaw-agent.sqlite");
+        let conn = Connection::open(db).unwrap();
+        conn.execute(
+            "INSERT INTO transcript_events(session_id, seq, event_json, created_at,
+                                          event_zstd, event_utf8_bytes)
+             VALUES('s1', ?1, NULL, ?2, ?3, ?4)",
+            params![seq, ts, blob, raw_len],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session_transcript_active_events(
+                    session_id, active_position, event_seq, message_position, context_eligible)
+             SELECT 's1', COUNT(*), ?1, NULL, NULL
+               FROM session_transcript_active_events WHERE session_id='s1'",
+            params![seq],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sqlite_zstd_compressed_tail_decoded() {
+        // 新版压缩语义:assistant 回复(大行)压缩存储、user 封包(小行)明文。
+        // 若不解压,尾部停格在 user 上 → Working 挂满 fresh 窗后迟转 Done、done 事件无文案;
+        // 解压后应看到完整 turn 结束(assistant stop="stop")+ 回复文本。
+        let root = test_root("zstd");
+        agent_sqlite(
+            &root,
+            "main",
+            &[(
+                1,
+                r#"{"type":"message","message":{"role":"user","content":"问题"}}"#,
+                1000,
+                true,
+            )],
+        );
+        add_zstd_row(&root, "main", 2, 2000, ZSTD_EVENT_BLOB, 128);
+        let sigs = latest_session_signals(&root);
+        let sig = sigs.get("main").expect("应有 main 信号");
+        assert_eq!(sig.role, "assistant", "压缩回复应参与尾部判定");
+        assert_eq!(sig.stop.as_deref(), Some("stop"));
+        assert_eq!(sig.mtime_ms, 2000, "mtime 含压缩行");
+        assert_eq!(sig.last_user_msg.as_deref(), Some("问题"));
+        assert_eq!(sig.last_assistant_msg.as_deref(), Some("压缩的回复正文"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn sqlite_corrupt_zstd_row_skipped() {
+        // 坏压缩行解压失败 → 该行跳过,信号回落到更早的明文行(与 jsonl 丢坏行一致),
+        // 不应让整个 sqlite 源失效。
+        let root = test_root("zstdbad");
+        agent_sqlite(
+            &root,
+            "main",
+            &[(
+                1,
+                r#"{"type":"message","message":{"role":"user","content":"明文问题"}}"#,
+                1000,
+                true,
+            )],
+        );
+        add_zstd_row(&root, "main", 2, 2000, b"not-a-zstd-frame", 16);
+        let sigs = latest_session_signals(&root);
+        let sig = sigs.get("main").expect("坏行不应清空信号");
+        assert_eq!(sig.role, "user", "尾部应停在明文 user 行");
+        assert_eq!(sig.mtime_ms, 2000, "mtime 按行取,坏行仍计入");
+        assert_eq!(sig.last_user_msg.as_deref(), Some("明文问题"));
         std::fs::remove_dir_all(&root).ok();
     }
 
