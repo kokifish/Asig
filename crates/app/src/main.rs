@@ -69,7 +69,8 @@ fn main() {
         overlay_window: RefCell::new(Some(overlay_window)),
         overlay_view: RefCell::new(Some(overlay_view)),
         popover: RefCell::new(None),
-        click_through: RefCell::new(true),
+        // 点击穿透持久化在 Settings(跨启动记忆);ivar 是运行时镜像(渲染层读它)。
+        click_through: RefCell::new(settings.click_through),
         settings: RefCell::new(settings),
         last_sig: RefCell::new(String::new()),
         tick_timer: RefCell::new(None),

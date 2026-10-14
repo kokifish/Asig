@@ -197,9 +197,12 @@ pub const DOT_SIZE_DEFAULT_PX: u32 = 60;
 /// 全部设置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    /// 浮窗圆点直径(px)。app 层据此重绘。
+    /// 浮窗圆点直径(px)。app 层据此重绘。旧配置缺字段 → 默认值。
+    #[serde(default = "default_dot_size")]
     pub dot_size: u32,
     /// 各「可配置灯效键」的样式。缺某键时回退到 `StyleKey::default_style()`。
+    /// 旧配置缺字段 → 空 map(逐键回默认,行为等同内置默认)。
+    #[serde(default)]
     pub styles: HashMap<StyleKey, StateStyle>,
     /// Signal Light 浮窗位置(跨启动记忆)。缺省(None)→ 主屏左上角默认位。
     #[serde(default)]
@@ -233,6 +236,10 @@ pub struct Settings {
     /// off → 删 plist(实现见 app/launch.rs,零成本、不依赖 SMAppService)。
     #[serde(default)]
     pub launch_at_login: bool,
+    /// 浮窗点击穿透(开=锁定不可拖动,点事件穿透到下层)。默认 true。曾只是 app 层
+    /// 运行时 ivar,重启即丢 —— 现持久化;旧配置缺字段 → true,保持既有默认行为。
+    #[serde(default = "default_click_through")]
+    pub click_through: bool,
     /// 配置 schema 版本(留迁移口子;当前恒 1。老配置缺此字段 → 默认 1,不影响加载)。
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -262,6 +269,14 @@ fn default_schema_version() -> u32 {
     1
 }
 
+fn default_dot_size() -> u32 {
+    DOT_SIZE_DEFAULT_PX
+}
+
+fn default_click_through() -> bool {
+    true
+}
+
 fn default_gradient_layers() -> u8 {
     GRADIENT_LAYERS_DEFAULT
 }
@@ -284,6 +299,7 @@ impl Default for Settings {
             notify_on: default_notify_on(),
             hide_in_fullscreen: default_hide_in_fullscreen(),
             launch_at_login: false,
+            click_through: default_click_through(),
             schema_version: 1,
         }
     }
@@ -317,9 +333,10 @@ impl Settings {
         }
     }
 
-    /// 重置 General 页字段(灯大小/轮询/主题/agent/通知/全屏隐藏)为默认。**不动**语言、各状态
-    /// 样式、DoneNotif 时长、浮窗位置、开机自启(归各自页面 / 持久态)。默认值取与 `Default`
-    /// 同源的常量/函数,保持单一事实源(不重新构造整个 Settings,免无谓 HashMap 分配)。
+    /// 重置 General 页字段(灯大小/轮询/主题/agent/通知/全屏隐藏/点击穿透)为默认。**不动**
+    /// 语言、各状态样式、DoneNotif 时长、浮窗位置、开机自启(归各自页面 / 持久态)。默认值取
+    /// 与 `Default` 同源的常量/函数,保持单一事实源(不重新构造整个 Settings,免无谓 HashMap
+    /// 分配)。
     pub fn reset_general_fields(&mut self) {
         self.dot_size = DOT_SIZE_DEFAULT_PX;
         self.poll_interval_ms = default_poll_interval_ms();
@@ -327,6 +344,7 @@ impl Settings {
         self.enabled_agents = default_enabled_agents();
         self.notify_on = default_notify_on();
         self.hide_in_fullscreen = default_hide_in_fullscreen();
+        self.click_through = default_click_through();
     }
 
     /// 加载后归一化:把可被手改 settings.json 绕过的数值字段 clamp 到合法范围,并过滤保留但
@@ -449,6 +467,33 @@ mod tests {
         assert_eq!(st.color, Color::LightBlue);
         assert_eq!(st.anim, Anim::Pulse);
         assert_eq!(st.period_ms, 450);
+    }
+
+    #[test]
+    fn missing_early_fields_fall_back_to_defaults() {
+        // 回归:dot_size/styles 曾缺 serde(default),旧/残缺 settings.json 缺这两个 key
+        // 时整体反序列化失败(其余自定义全丢)。现在逐字段回默认。
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.dot_size, DOT_SIZE_DEFAULT_PX);
+        assert!(s.styles.is_empty());
+        // styles 空 map → 逐键回内置默认,灯效不受影响。
+        assert!(matches!(
+            s.light_for(AgentStatus::Done),
+            LightAnim::Ripple { .. }
+        ));
+    }
+
+    #[test]
+    fn click_through_defaults_true_and_roundtrips() {
+        // 旧配置缺字段 → true(保持既有默认行为);序列化往返保住用户改的 false。
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert!(s.click_through);
+        let s2 = Settings {
+            click_through: false,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s2).unwrap()).unwrap();
+        assert!(!back.click_through);
     }
 
     #[test]

@@ -210,10 +210,13 @@ define_class!(
         }
 
         /// 设置面板「浮窗点击穿透」复选框 action。sender=复选框,读其 state。
+        /// 落进 Settings 存盘(跨启动记忆;曾只是运行时 ivar,重启即丢)。
         #[unsafe(method(toggleClickThrough:))]
         fn toggle_click_through(&self, sender: *mut NSObject) {
             let on = ns_switch_on(sender); // NSOnState=1 / NSOffState=0
             *self.ivars().click_through.borrow_mut() = on;
+            self.ivars().settings.borrow_mut().click_through = on;
+            self.ivars().settings.borrow().save();
             self.apply_click_through();
         }
 
@@ -402,8 +405,10 @@ define_class!(
             if resp != 1000 {
                 return; // NSAlertFirstButtonReturn = 1000;非「重置」则取消
             }
-            // 重置全部自定义
+            // 重置全部自定义。launch_at_login 回默认 false —— 同步删 LaunchAgent plist,
+            // 否则 UI 已复位但下次登录仍会自启(设置与磁盘状态不一致)。
             *self.ivars().settings.borrow_mut() = Settings::default();
+            let _ = crate::launch::unregister();
             self.ivars().settings.borrow().save();
             *self.ivars().click_through.borrow_mut() = true;
             // 重应用:浮窗大小 + 点击穿透 + tick 重排
