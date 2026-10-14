@@ -100,7 +100,9 @@ pub(crate) fn build_state_pane(
     // pane 高不随窗变(autoresizing=2 只宽);宽度变时 card 行数变 → card_h 变,但 pane 高固定,
     // 若 card 超出则出滚动条(符合每页独立滚动语义)。先算 content_h,header 据它定位。
     let col_w0 = CONTENT_W - CONTENT_PAD_X * 2.0;
-    let cw0 = col_w0 - 16.0 - lw;
+    // 与 layout_state_pane 的色块宽度公式严格同式(左 16 + label 列 + 右 16):曾漏减右侧
+    // 16px,预估宽度偏宽 → 实际换行早于预估 → 特定窗宽下 card 底部被裁(M9)。
+    let cw0 = col_w0 - 16.0 - lw - 16.0;
     let (_, color_h0) = color_flow_metrics(cw0);
     let extra0 = if key == StyleKey::DoneNotif {
         ROW_H

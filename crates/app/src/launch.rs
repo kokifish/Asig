@@ -32,6 +32,13 @@ fn app_bundle_path() -> Option<String> {
     (!path.is_null()).then(|| unsafe { (*path).to_string() })
 }
 
+/// XML 元素文本转义(bundle 路径可能含 `&` 等,原样内插会写出解析失败的坏 plist)。
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 /// 注册开机自启:写 LaunchAgent plist。
 pub fn register() -> bool {
     let (Some(plist), Some(app)) = (plist_path(), app_bundle_path()) else {
@@ -46,12 +53,13 @@ pub fn register() -> bool {
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/open</string>
-    <string>{app}</string>
+    <string>{}</string>
   </array>
   <key>RunAtLoad</key><true/>
 </dict>
 </plist>
 "#,
+        xml_escape(&app),
     );
     let _ = fs::create_dir_all(plist.parent().unwrap_or(std::path::Path::new(".")));
     fs::write(plist, xml).is_ok()
@@ -64,4 +72,22 @@ pub fn unregister() -> bool {
     };
     let _ = fs::remove_file(&p);
     !p.exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::xml_escape;
+
+    #[test]
+    fn xml_escape_covers_amp_lt_gt() {
+        assert_eq!(
+            xml_escape("/Users/a&b/Apps/Asig.app"),
+            "/Users/a&amp;b/Apps/Asig.app"
+        );
+        assert_eq!(xml_escape("a<b>c"), "a&lt;b&gt;c");
+        assert_eq!(
+            xml_escape("/Applications/Asig.app"),
+            "/Applications/Asig.app"
+        );
+    }
 }
