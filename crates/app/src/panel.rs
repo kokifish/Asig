@@ -228,8 +228,9 @@ pub fn update_label(p: &Popover, snap: &Snapshot) {
             .map(|s| {
                 format!(
                     "{} {} · {}",
-                    // done_notif 窗口期内 Done 行显示 🔵,与浮窗/菜单栏全局灯一致(见 session_emoji)。
-                    session_emoji(s.status, snap.done_notif),
+                    // 只有「自己刚转入 Done」(窗口内)的行显 🔵;别的会话触发的全局完成通知
+                    // 不再把闲置已久的 Done 行刷蓝(见 Snapshot::done_notif_ids)。
+                    session_emoji(s.status, snap.done_notif_ids.contains(&s.id)),
                     s.kind.display_name(),
                     s.display_label()
                 )

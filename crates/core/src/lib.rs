@@ -46,28 +46,39 @@ pub struct Snapshot {
     /// 刚转入 Done 的 `done_notif_duration` 内为 true —— app 层据此用 Done-Notification
     /// 灯效覆盖 `global` 的默认灯效;过期或离开 Done 后回退 `global`。时长由 `poll()` 入参给。
     pub done_notif: bool,
+    /// **各自**刚转入 Done(`done_notif_duration` 窗口内)的会话 id —— Panel 行级 🔵 判定用。
+    /// 区别于全局 `done_notif`(任一会话完成即全局亮):闲置已久的 Done 会话不在此列,
+    /// 不会跟着别的会话的完成通知一起「假刚完成」(2026-10-14 kotomi/main/munger 实测)。
+    pub done_notif_ids: HashSet<String>,
     /// 最近 start/done 事件(最新在前),Drop-down Panel 事件列表展示。
     pub recent_events: Vec<AgentEvent>,
 }
 
 impl Snapshot {
-    /// 压成字符串指纹:任一关键字段(全局态/done_notif/会话 id+status/事件列表)变 → 指纹变。
-    /// app 层 tick 据此跳过无变化的 render(省 CPU,压到 ~0%)。事件指纹不含 `at_ms`(否则每轮
-    /// poll 时钟变都触发 render);新事件入列才变。
+    /// 压成字符串指纹:任一关键字段(全局态/done_notif/会话 id+status/行级蓝集合/事件列表)变
+    /// → 指纹变。app 层 tick 据此跳过无变化的 render(省 CPU,压到 ~0%)。事件指纹不含 `at_ms`
+    /// (否则每轮 poll 时钟变都触发 render);新事件入列才变。行级蓝集合排序后计入:窗口过期
+    /// 逐会话回落 🔵→🟢 时无其他字段变化,不进指纹会漏 render(残留过期 🔵)。
     pub fn signature(&self) -> String {
         let sessions: String = self
             .sessions
             .iter()
             .map(|s| format!("{}:{:?};", s.id, s.status))
             .collect();
+        let mut blue: Vec<&str> = self.done_notif_ids.iter().map(String::as_str).collect();
+        blue.sort_unstable();
         let events: String = self
             .recent_events
             .iter()
             .map(|e| format!("{:?}|{}|{:?}|{};", e.kind, e.label, e.event_kind, e.content))
             .collect();
         format!(
-            "{:?}|{}|{}|ev={}",
-            self.global, self.done_notif, sessions, events
+            "{:?}|{}|{}|blue={}|ev={}",
+            self.global,
+            self.done_notif,
+            sessions,
+            blue.join(","),
+            events
         )
     }
 }
@@ -90,6 +101,9 @@ pub struct Monitor {
     prev_global: RefCell<AgentStatus>,
     /// 最近一次「全局态转入 Done」的时刻。Done Notification 窗口期由 `poll()` 入参决定。
     done_since: RefCell<Option<Instant>>,
+    /// 每会话「转入 Done」的时刻(行级 done-notif 窗口用;全局窗口见 `done_since`)。
+    /// 离开 Done 即删;随 latched 裁剪清理,防幽灵积累。
+    done_at: RefCell<HashMap<String, Instant>>,
     /// 最近 start/done 事件 buffer(front=最新,容量 `events::MAX_EVENTS`)。跨轮询保留,
     /// 边沿检测产出。持久化到 `events_path`。
     recent_events: RefCell<VecDeque<AgentEvent>>,
@@ -127,6 +141,7 @@ impl Monitor {
             latched: RefCell::new(HashMap::new()),
             prev_global: RefCell::new(AgentStatus::Done),
             done_since: RefCell::new(None),
+            done_at: RefCell::new(HashMap::new()),
             recent_events: RefCell::new(recent),
             events_path,
         }
@@ -172,8 +187,17 @@ impl Monitor {
         let sessions = self.apply_state_machine(raw, &mut pushed);
         // 4) 聚合全局灯态
         let global = aggregate::global_status(&sessions);
-        // 5) Done Notification 边沿
-        let done_notif = self.detect_done_notif(global, Instant::now(), done_notif_duration);
+        // 5) Done Notification 边沿(全局窗口 + 行级窗口共用同一 duration / now)
+        let now = Instant::now();
+        let done_notif = self.detect_done_notif(global, now, done_notif_duration);
+        let done_notif_ids: HashSet<String> = {
+            let done_at = self.done_at.borrow();
+            done_at
+                .iter()
+                .filter(|(_, t)| now.duration_since(**t) < done_notif_duration)
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
         // 6) 边沿事件入 buffer(front=最新)+ 落盘
         if !pushed.is_empty() {
             let mut buf = self.recent_events.borrow_mut();
@@ -194,6 +218,7 @@ impl Monitor {
             sessions,
             global,
             done_notif,
+            done_notif_ids,
             recent_events,
         }
     }
@@ -207,6 +232,8 @@ impl Monitor {
         pushed: &mut Vec<AgentEvent>,
     ) -> Vec<AgentSession> {
         let mut latched = self.latched.borrow_mut();
+        let mut done_at = self.done_at.borrow_mut();
+        let tick = Instant::now();
         let now_ms = crate::sys::now_ms();
         let mut sessions: Vec<AgentSession> = Vec::with_capacity(raw.len());
         for mut s in raw {
@@ -215,6 +242,12 @@ impl Monitor {
                 .map(|l| l.status)
                 .unwrap_or(AgentStatus::Done);
             let new = transition(prev, s.status);
+            // 行级 done-notif 计时:转入 Done 记时刻,离开 Done 即清(窗口判定见 poll)。
+            if prev != AgentStatus::Done && new == AgentStatus::Done {
+                done_at.insert(s.id.clone(), tick);
+            } else if new != AgentStatus::Done {
+                done_at.remove(&s.id);
+            }
             // 边沿 → 记 Panel start/done 事件(对应消息内容非空才记)。
             if prev != AgentStatus::Working && new == AgentStatus::Working {
                 if let Some(c) = s.last_user_msg.as_ref() {
@@ -257,6 +290,8 @@ impl Monitor {
                 l.misses <= LATCH_GRACE
             }
         });
+        // 会话被裁出 latched(连续 LATCH_GRACE+1 轮消失)→ 行级计时同步清理。
+        done_at.retain(|id, _| latched.contains_key(id));
         sessions
     }
 
@@ -358,6 +393,75 @@ mod tests {
         let s = m.poll(Duration::from_secs(30));
         assert_eq!(s.global, AgentStatus::Done);
         assert!(s.done_notif, "再次转入 Done 应重新触发");
+    }
+
+    #[test]
+    fn per_session_done_notif_only_tracks_just_finished() {
+        // 2026-10-14 实测场景回归:zcode 会话完成触发全局完成通知(全局 done_notif=true、
+        // 灯闪浅蓝)时,面板所有闲置已久的 Done 行(openclaw 各 agent)被一起刷成 🔵
+        // 「假刚完成」。行级窗口必须只含**自己**刚转入 Done 的会话:
+        //   - fresh:Working→Done(刚完成)→ 在 done_notif_ids;
+        //   - stale:首轮即 Done(闲置已久,无边沿)→ 不在;
+        //   - fresh 再转 Working → 行级计时即时移除。
+        struct TwoSessionSource {
+            a: Mutex<Vec<AgentStatus>>, // "fresh"
+            b: Mutex<Vec<AgentStatus>>, // "stale"
+        }
+        impl AgentSource for TwoSessionSource {
+            fn kind(&self) -> AgentKind {
+                AgentKind::Zcode
+            }
+            fn discover(&self) -> Vec<AgentSession> {
+                // 每轮取脚本首位(耗尽后恒返回末位),两会话各一列。
+                let take = |v: &Mutex<Vec<AgentStatus>>, tag: &str| {
+                    let mut i = v.lock().unwrap();
+                    let st = if i.len() > 1 { i.remove(0) } else { i[0] };
+                    AgentSession {
+                        kind: AgentKind::Zcode,
+                        id: format!("Zcode:{tag}"),
+                        native_id: tag.into(),
+                        cwd: None,
+                        status: st,
+                        label: Some(tag.into()),
+                        last_user_msg: None,
+                        last_assistant_msg: None,
+                    }
+                };
+                vec![take(&self.a, "fresh"), take(&self.b, "stale")]
+            }
+        }
+        let m = Monitor::with_sources(vec![Box::new(TwoSessionSource {
+            a: Mutex::new(vec![
+                AgentStatus::Working, // 起步在跑
+                AgentStatus::Done,    // 刚完成 → 行级窗口
+                AgentStatus::Done,    // 仍 Done(窗口内)
+                AgentStatus::Working, // 再跑 → 行级计时清
+            ]),
+            b: Mutex::new(vec![AgentStatus::Done; 4]), // 一直闲置 Done,无边沿
+        })]);
+        let s = m.poll(Duration::from_secs(30));
+        assert_eq!(s.global, AgentStatus::Working);
+        assert!(!s.done_notif);
+        assert!(s.done_notif_ids.is_empty());
+
+        let s = m.poll(Duration::from_secs(30)); // fresh 完成,全局转 Done
+        assert!(s.done_notif, "全局完成通知应亮(灯闪浅蓝)");
+        assert_eq!(
+            s.done_notif_ids,
+            ["Zcode:fresh".to_string()].into(),
+            "只含刚完成的 fresh;闲置已久的 stale 不应进窗口"
+        );
+
+        let s = m.poll(Duration::from_secs(30)); // 窗口内仍是 Done
+        assert_eq!(
+            s.done_notif_ids,
+            ["Zcode:fresh".to_string()].into(),
+            "窗口内成员保持"
+        );
+
+        let s = m.poll(Duration::from_secs(30)); // fresh 再跑 → 移除
+        assert!(!s.done_notif_ids.contains("Zcode:fresh"));
+        assert!(!s.done_notif_ids.contains("Zcode:stale"));
     }
 
     #[test]

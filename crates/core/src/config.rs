@@ -490,6 +490,7 @@ mod tests {
             sessions: vec![],
             global: AgentStatus::Done,
             done_notif: true,
+            done_notif_ids: std::collections::HashSet::new(),
             recent_events: vec![],
         };
         assert!(matches!(
