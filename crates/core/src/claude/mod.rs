@@ -114,19 +114,9 @@ impl AgentSource for ClaudeLikeSource {
         });
         let root = &self.root;
         let cache = &self.transcript_paths;
-        // 带 path 缓存的 transcript 探测:首次未命中扫一次 projects/,后续轮询直接读缓存路径,
+        // 带路径缓存的 transcript 探测:首次未命中扫一次 projects/,后续轮询直接读缓存路径,
         // 把 N 个 busy 会话 × 全扫 projects/ 降到 N 次 O(1) 查表 + 至多一次扫描。
-        let signal_of = |sid: &str| -> Option<TailInfo> {
-            let path = {
-                let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
-                c.get(sid).cloned().unwrap_or_else(|| {
-                    let found = scan_transcript(root, sid);
-                    c.insert(sid.to_string(), found.clone());
-                    found
-                })
-            };
-            path.as_deref().and_then(read_tail)
-        };
+        let signal_of = |sid: &str| -> Option<TailInfo> { cached_signal(root, cache, sid) };
         discover_from(
             &files,
             &mut seen,
@@ -312,6 +302,36 @@ fn scan_transcript(root: &Path, session_id: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// 带路径缓存的 transcript 尾部信号(discover 每轮调用):命中缓存直接读尾,未命中扫一次
+/// `projects/`。**只缓存命中路径**:None 落缓存会让迟到出现的 transcript 永远读不到
+/// (丢 busy+end_turn 的 NeedsDeci 推断);代价是无 transcript 的会话每轮重扫一次
+/// projects/(通常每会话都有 transcript,罕见路径)。
+fn cached_signal(
+    root: &Path,
+    cache: &Mutex<HashMap<String, Option<PathBuf>>>,
+    sid: &str,
+) -> Option<TailInfo> {
+    let cached = cache
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(sid)
+        .cloned();
+    let path = match cached {
+        Some(p) => p,
+        None => {
+            let found = scan_transcript(root, sid);
+            if found.is_some() {
+                cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(sid.to_string(), found.clone());
+            }
+            found
+        }
+    };
+    path.as_deref().and_then(read_tail)
 }
 
 /// 读会话 transcript 尾部信号(扫描 + 读尾,无缓存 —— probe 用;discover 用带缓存的闭包)。

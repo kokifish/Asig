@@ -503,3 +503,26 @@ fn session_file_parses_camelcase_and_kind() {
     assert_eq!(f.kind.as_deref(), Some("bg"));
     assert_eq!(f.status.as_deref(), Some("shell"));
 }
+
+#[test]
+fn transcript_miss_not_cached_forever() {
+    // 回归(M1):首扫未命中(transcript 迟到/未落盘)曾被永久缓存 None,该会话此后
+    // 永远丢失 busy+end_turn 的 NeedsDeci 推断(首轮后 transcript 出现也读不到)。
+    // 修复:只缓存命中路径,未命中下轮重扫。
+    let root = std::env::temp_dir().join(format!("asig_test_m1_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("sessions")).unwrap();
+    let cache = Mutex::new(HashMap::new());
+    // 未命中:None(此刻 projects/ 都不存在)
+    assert!(cached_signal(&root, &cache, "sid-m1").is_none());
+    // transcript 迟到出现:尾部 end_turn → 信号应能被下一轮读到
+    std::fs::create_dir_all(root.join("projects/p1")).unwrap();
+    std::fs::write(
+        root.join("projects/p1/sid-m1.jsonl"),
+        "{\"type\":\"assistant\",\"message\":{\"stop_reason\":\"end_turn\"}}\n",
+    )
+    .unwrap();
+    let t = cached_signal(&root, &cache, "sid-m1").expect("未命中不应被缓存,重扫须命中");
+    assert_eq!(t.signal, "end_turn");
+    let _ = std::fs::remove_dir_all(&root);
+}

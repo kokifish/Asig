@@ -8,10 +8,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OpenFlags};
 
 /// `kill(pid, 0) == 0` → 进程存活。ESRCH(不存在)返回非 0;pid 非法兜底 false。
+/// pid 0 是「调用方进程组」而非具体进程,`kill(0,0)` 恒 0 —— 必须排除,否则网关
+/// 状态文件缺 pid 字段读成 0 时恒判活。
 /// SAFETY: signal 0 不发信号,只探测进程存在性;pid 来自本地状态文件,非敌对输入。
 pub(crate) fn pid_alive(pid: u32) -> bool {
     let pid = i32::try_from(pid).unwrap_or(-1);
-    pid >= 0 && unsafe { libc::kill(pid, 0) == 0 }
+    pid > 0 && unsafe { libc::kill(pid, 0) == 0 }
 }
 
 /// 当前 epoch 毫秒(时钟倒跳兜底为 0)。
@@ -29,4 +31,15 @@ pub(crate) fn open_readonly(path: &Path) -> Option<Connection> {
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pid_alive;
+
+    #[test]
+    fn pid_zero_is_not_alive() {
+        // pid 0 = 调用方进程组,kill(0,0) 恒成功 —— 曾被误当「进程 0 存活」。
+        assert!(!pid_alive(0));
+    }
 }

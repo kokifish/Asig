@@ -67,8 +67,12 @@ impl AgentSource for OpenClawSource {
     }
 
     fn discover(&self) -> Vec<AgentSession> {
+        // 没装 openclaw(库文件不存在)→ 静默空:否则每轮(~3s)一条 warn 刷日志。
+        // 文件在却打不开(损坏/权限)才 warn —— 提示路径便于排障。
+        if !self.db_path().is_file() {
+            return Vec::new();
+        }
         let Some(conn) = self.connect() else {
-            // 打不开:没装 openclaw(静默)vs 库损坏(应可见)。提示路径便于排障。
             log::warn!("openclaw 库打不开: {}", self.db_path().display());
             return Vec::new();
         };

@@ -284,6 +284,18 @@ fn session_yield_leaf_subagents_running_is_working() {
 }
 
 #[test]
+fn task_torn_failed_null_ended_is_error_not_working() {
+    // 回归(M4):写入撕裂行(status='failed' 且 ended_at NULL)曾被 task_runs 的
+    // running 臂 SUM(ended_at IS NULL) 误计为在跑 → 误报 Working。与 flow_runs
+    // 对称:failed 无论 ended_at 是否落地(含 NULL 撕裂)都算 recent_err → Error。
+    let conn = db(|c| {
+        agent(c, "kotomi", NOW as i64);
+        task(c, "kotomi", "failed", None);
+    });
+    assert_eq!(status_of(&conn), AgentStatus::Error);
+}
+
+#[test]
 fn session_yield_leaf_subagents_ended_is_error() {
     // 协调态 + 子 agent 全 ended(!run_active)→ 卡死 → Error。
     let conn = db(|c| {

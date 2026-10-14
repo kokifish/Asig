@@ -78,11 +78,16 @@ pub(super) fn collect(
     // task_runs(干净 agent_id 列,SQL 聚合 running / 近期 failed+lost)。
     // 排除 scope_kind='system':openclaw 自身的 cron 心跳(`heartbeat-<id>`,空心跳文件
     // 记 status='failed')每 30min 一次,失败落窗内会把毫无会话的 agent 刷成红灯。
+    // failed/lost 与 ended_at 的组合:running 臂必须排除它们 —— status='failed' 且
+    // ended_at IS NULL 是写入撕裂(进程中途崩),曾把失败误计为在跑 → 误报 Working;
+    // 与 flow_runs 的处理对称,撕裂行按 failed 记 recent_err(err 臂含 ended_at IS NULL)。
     if let Ok(mut stmt) = conn.prepare(
         "SELECT agent_id,
-                SUM(ended_at IS NULL AND COALESCE(scope_kind,'') != 'system'),
-                SUM(ended_at IS NOT NULL AND ended_at > ?1
-                    AND status IN ('failed','lost')
+                SUM(ended_at IS NULL
+                    AND COALESCE(status,'') NOT IN ('failed','lost')
+                    AND COALESCE(scope_kind,'') != 'system'),
+                SUM(COALESCE(status,'') IN ('failed','lost')
+                    AND (ended_at IS NULL OR ended_at > ?1)
                     AND COALESCE(scope_kind,'') != 'system')
          FROM task_runs GROUP BY agent_id",
     ) {
