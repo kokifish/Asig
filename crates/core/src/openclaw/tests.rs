@@ -20,8 +20,9 @@ fn db(seed: impl FnOnce(&Connection)) -> Connection {
                 flow_id TEXT PRIMARY KEY, owner_key TEXT, status TEXT NOT NULL,
                 ended_at INTEGER);
              CREATE TABLE subagent_runs (
-                run_id TEXT PRIMARY KEY, requester_display_key TEXT,
-                ended_at INTEGER, ended_reason TEXT);",
+                run_id TEXT PRIMARY KEY, child_session_key TEXT,
+                controller_session_key TEXT, requester_session_key TEXT,
+                created_at INTEGER NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}');",
     )
     .unwrap();
     seed(&conn);
@@ -467,18 +468,85 @@ fn flow_failed_via_owner_prefix() {
     assert_eq!(status_of(&conn), AgentStatus::Error);
 }
 
+/// 插一行 subagent_runs(新版 schema:生命周期在 payload_json)。`payload` 直接给出
+/// JSON(如 `{}`=在跑;带 `endedReason`/`endedHookEmittedAt`=已结束)。
+fn subagent(conn: &Connection, requester: &str, payload: &str) {
+    conn.execute(
+        "INSERT INTO subagent_runs(run_id, child_session_key, requester_session_key,
+                                   created_at, payload_json)
+             VALUES(?1, 'agent:main:subagent:child', ?2, 1, ?3)",
+        params![format!("r-{requester}"), requester, payload],
+    )
+    .unwrap();
+}
+
 #[test]
-fn subagent_running_via_display_key() {
+fn subagent_running_via_session_key() {
+    // 在跑(payload 无 endedReason)→ run_active → Working。
     let conn = db(|c| {
         agent(c, "main", NOW as i64);
-        c.execute(
-            "INSERT INTO subagent_runs(run_id, requester_display_key, ended_at, ended_reason)
-                 VALUES('r', 'agent:main:tui-z', NULL, NULL)",
-            [],
-        )
-        .unwrap();
+        subagent(c, "agent:main:tui-z", "{}");
     });
     assert_eq!(status_of(&conn), AgentStatus::Working);
+}
+
+#[test]
+fn subagent_completed_old_is_not_working() {
+    // subagent-complete(早于一切窗口)→ 不算在跑、不算错 → Done。
+    let conn = db(|c| {
+        agent(c, "main", NOW as i64);
+        subagent(
+            c,
+            "agent:main:tui-z",
+            r#"{"endedReason":"subagent-complete","endedHookEmittedAt":1}"#,
+        );
+    });
+    assert_eq!(status_of(&conn), AgentStatus::Done);
+}
+
+#[test]
+fn subagent_error_recent_is_error() {
+    // 近窗结束的 subagent-error(结束时刻 = endedHookEmittedAt,毫秒)→ Error。
+    let ended = NOW as i64 - 1_000;
+    let conn = db(|c| {
+        agent(c, "main", NOW as i64);
+        subagent(
+            c,
+            "agent:main:tui-z",
+            &format!(r#"{{"endedReason":"subagent-error","endedHookEmittedAt":{ended}}}"#),
+        );
+    });
+    assert_eq!(status_of(&conn), AgentStatus::Error);
+}
+
+#[test]
+fn subagent_error_stale_not_error() {
+    // 过窗(> ERROR_RECENT_MS)的 subagent-error → 不再报 Error(报 Done)。
+    let ended = NOW as i64 - 60_000;
+    let conn = db(|c| {
+        agent(c, "main", NOW as i64);
+        subagent(
+            c,
+            "agent:main:tui-z",
+            &format!(r#"{{"endedReason":"subagent-error","endedHookEmittedAt":{ended}}}"#),
+        );
+    });
+    assert_eq!(status_of(&conn), AgentStatus::Done);
+}
+
+#[test]
+fn subagent_error_end_time_falls_back_to_cleanup() {
+    // endedHookEmittedAt 缺失 → 回退 cleanupCompletedAt 作结束时刻(近窗 error 仍报)。
+    let ended = NOW as i64 - 2_000;
+    let conn = db(|c| {
+        agent(c, "main", NOW as i64);
+        subagent(
+            c,
+            "agent:main:tui-z",
+            &format!(r#"{{"endedReason":"subagent-error","cleanupCompletedAt":{ended}}}"#),
+        );
+    });
+    assert_eq!(status_of(&conn), AgentStatus::Error);
 }
 
 #[test]

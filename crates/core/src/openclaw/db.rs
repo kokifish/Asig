@@ -144,17 +144,27 @@ pub(super) fn collect(
         }
     }
 
-    // subagent_runs(requester_display_key 同前缀;running / 近期 subagent-error)。
+    // subagent_runs(requester_session_key 同前缀;running / 近期 subagent-error)。
+    // 新版 schema(2026-10 实测)生命周期搬进 `payload_json`:旧列 `ended_at`/`ended_reason`
+    // 没了,结束态 = `$.endedReason`(NULL=在跑;'subagent-error'=失败),结束时刻 =
+    // `$.endedHookEmittedAt`(缺则 `$.cleanupCompletedAt`,均毫秒 epoch)—— 按旧列查会
+    // prepare 失败被 `if let Ok` 静默吞掉,子 agent 信号整路丢失。
     if let Ok(mut stmt) = conn.prepare(
-        "SELECT requester_display_key, ended_at, ended_reason FROM subagent_runs
-         WHERE ended_at IS NULL
-            OR (ended_at IS NOT NULL AND ended_at > ?1 AND ended_reason='subagent-error')",
+        "SELECT requester_session_key,
+                json_extract(payload_json, '$.endedReason'),
+                COALESCE(json_extract(payload_json, '$.endedHookEmittedAt'),
+                         json_extract(payload_json, '$.cleanupCompletedAt'))
+         FROM subagent_runs
+         WHERE json_extract(payload_json, '$.endedReason') IS NULL
+            OR (json_extract(payload_json, '$.endedReason') = 'subagent-error'
+                AND COALESCE(json_extract(payload_json, '$.endedHookEmittedAt'),
+                             json_extract(payload_json, '$.cleanupCompletedAt')) > ?1)",
     ) {
         if let Ok(rows) = stmt.query_map(params![cutoff_err], |r| {
             Ok((
                 r.get::<_, String>(0)?,
-                r.get::<_, Option<i64>>(1)?,
-                r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<i64>>(2)?,
             ))
         }) {
             for row in rows.flatten() {
@@ -164,8 +174,8 @@ pub(super) fn collect(
                 let Some(a) = acc.get_mut(aid) else { continue };
                 if row.1.is_none() {
                     a.run_active = true;
-                } else if row.2.as_deref() == Some("subagent-error") {
-                    a.recent_err = true; // WHERE 已限定 ended_at > cutoff
+                } else if row.1.as_deref() == Some("subagent-error") {
+                    a.recent_err = true; // WHERE 已限定结束时刻 > cutoff
                 }
             }
         }

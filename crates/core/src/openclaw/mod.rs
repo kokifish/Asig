@@ -10,7 +10,8 @@
 //!    工具执行的长间隙不会误判完成。
 //!
 //! 状态映射(每个近期 agent 一个会话):
-//!   - 后台:task_runs/flow_runs/subagent_runs 跨表归并(`ended_at IS NULL`→Working);
+//!   - 后台:task_runs/flow_runs/subagent_runs 跨表归并(task/flow 看 `ended_at IS NULL`,
+//!     subagent 新版 schema 生命周期在 `payload_json.endedReason`,NULL→Working);
 //!   - 交互式:尾部 `role∈{user,toolResult}` 或 `stop_reason='toolUse'` → Working;
 //!   - `flow_runs.status='blocked'` 且 `ended_at IS NULL` → NeedsDeci(已结束的 blocked
 //!     投递失败终态不计);
