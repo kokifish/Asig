@@ -32,7 +32,7 @@ pub use events::{AgentEvent, EventKind};
 pub use source::{AgentKind, AgentSession, AgentSource};
 pub use status::{AgentStatus, Color, LightAnim, transition};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -107,6 +107,10 @@ pub struct Monitor {
     /// 最近 start/done 事件 buffer(front=最新,容量 `events::MAX_EVENTS`)。跨轮询保留,
     /// 边沿检测产出。持久化到 `events_path`。
     recent_events: RefCell<VecDeque<AgentEvent>>,
+    /// 是否已完成首轮 poll(false = 首轮)。首轮只建 latched 基线、不发边沿事件:重启 /
+    /// 设置切换重建 Monitor 后,latched 清空,在跑会话的 prev 从 Done 基线起会误发一条
+    /// 重复 Start(面板同内容 start 两条,2026-10-14 实测)。真边沿从第二轮起照常。
+    primed: Cell<bool>,
     /// 事件持久化路径(None = 默认 `~/Library/Application Support/Asig/recent_events.json`;
     /// Some = 测试注入,避免污染真实文件)。
     events_path: Option<PathBuf>,
@@ -143,6 +147,7 @@ impl Monitor {
             done_since: RefCell::new(None),
             done_at: RefCell::new(HashMap::new()),
             recent_events: RefCell::new(recent),
+            primed: Cell::new(false),
             events_path,
         }
     }
@@ -182,9 +187,10 @@ impl Monitor {
         for src in &self.sources {
             raw.extend(src.discover());
         }
-        // 2-3) sticky 状态机 + 宽限裁剪 + 边沿记事件
+        // 2-3) sticky 状态机 + 宽限裁剪 + 边沿记事件(首轮只建基线,不发事件)
         let mut pushed: Vec<AgentEvent> = Vec::new();
-        let sessions = self.apply_state_machine(raw, &mut pushed);
+        let emit_events = self.primed.get();
+        let sessions = self.apply_state_machine(raw, emit_events, &mut pushed);
         // 4) 聚合全局灯态
         let global = aggregate::global_status(&sessions);
         // 5) Done Notification 边沿(全局窗口 + 行级窗口共用同一 duration / now)
@@ -214,6 +220,7 @@ impl Monitor {
             }
         }
         let recent_events = self.recent_events.borrow().iter().cloned().collect();
+        self.primed.set(true);
         Snapshot {
             sessions,
             global,
@@ -226,9 +233,12 @@ impl Monitor {
     /// sticky 状态机:本轮观测叠加到 latched 锁定态;未出现的会话给 `LATCH_GRACE` 轮宽限
     /// 才裁(防文件原子替换/改名抖动清掉锁定态)。同时做 per-session 边沿检测(进 Working→
     /// Start 事件取 `last_user_msg`;进 Done→Done 事件取 `last_assistant_msg`),推入 `pushed`。
+    /// `emit_events=false`(首轮 poll)只建基线:在跑会话的 prev 从 Done 基线起,放行会
+    /// 误发重复 Start。
     fn apply_state_machine(
         &self,
         raw: Vec<AgentSession>,
+        emit_events: bool,
         pushed: &mut Vec<AgentEvent>,
     ) -> Vec<AgentSession> {
         let mut latched = self.latched.borrow_mut();
@@ -248,8 +258,8 @@ impl Monitor {
             } else if new != AgentStatus::Done {
                 done_at.remove(&s.id);
             }
-            // 边沿 → 记 Panel start/done 事件(对应消息内容非空才记)。
-            if prev != AgentStatus::Working && new == AgentStatus::Working {
+            // 边沿 → 记 Panel start/done 事件(对应消息内容非空才记;首轮只建基线)。
+            if emit_events && prev != AgentStatus::Working && new == AgentStatus::Working {
                 if let Some(c) = s.last_user_msg.as_ref() {
                     pushed.push(AgentEvent {
                         kind: s.kind,
@@ -260,7 +270,7 @@ impl Monitor {
                     });
                 }
             }
-            if prev != AgentStatus::Done && new == AgentStatus::Done {
+            if emit_events && prev != AgentStatus::Done && new == AgentStatus::Done {
                 if let Some(c) = s.last_assistant_msg.as_ref() {
                     pushed.push(AgentEvent {
                         kind: s.kind,
@@ -323,6 +333,19 @@ mod tests {
     use super::*;
     use crate::source::{AgentKind, AgentSession, AgentSource};
     use std::sync::Mutex;
+
+    /// 唯一临时事件路径(注入 Monitor,避免读写真实 `recent_events.json`)。
+    fn temp_events_path(tag: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "asig_monitor_{tag}_{}_{}.json",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
 
     /// 脚本化 mock source:按调用顺序依次返回预设的会话集(末项之后恒返回末项)。
     struct ScriptedSource {
@@ -462,6 +485,57 @@ mod tests {
         let s = m.poll(Duration::from_secs(30)); // fresh 再跑 → 移除
         assert!(!s.done_notif_ids.contains("Zcode:fresh"));
         assert!(!s.done_notif_ids.contains("Zcode:stale"));
+    }
+
+    #[test]
+    fn first_poll_builds_baseline_without_events() {
+        // 重启 / 设置切换重建 Monitor 后在跑的会话:latched 空 → prev 从 Done 基线起,
+        // 首轮若发边沿会误发一条重复 Start(2026-10-14 面板实测同内容 start 两条)。
+        // 首轮只建基线;之后的真边照常。
+        let path = temp_events_path("first_poll");
+        let m = Monitor::new_with_sources(
+            vec![Box::new(ScriptedSource {
+                kind: AgentKind::Claude,
+                call: Mutex::new(0),
+                script: vec![
+                    vec![AgentStatus::Working], // 起步即在跑(Asig 启动前已 Working)
+                    vec![AgentStatus::Working], // 仍在跑 → 无边沿
+                    vec![AgentStatus::Done],    // 真完成 → Done 事件
+                ],
+                user_msg: Some("umsg".into()),
+                assistant_msg: Some("amsg".into()),
+            })],
+            Some(path),
+        );
+        let s = m.poll(Duration::from_secs(30));
+        assert!(s.recent_events.is_empty(), "首轮不应发 Start");
+        let s = m.poll(Duration::from_secs(30));
+        assert!(s.recent_events.is_empty(), "Working→Working 无边沿");
+        let s = m.poll(Duration::from_secs(30));
+        assert_eq!(s.recent_events.len(), 1);
+        assert_eq!(s.recent_events[0].event_kind, EventKind::Done);
+    }
+
+    #[test]
+    fn start_fires_when_session_appears_after_startup() {
+        // 运行期新出现的在跑会话是真边沿,仍要发 Start(不能因首轮抑制而漏)。
+        let path = temp_events_path("late_appear");
+        let m = Monitor::new_with_sources(
+            vec![Box::new(ScriptedSource {
+                kind: AgentKind::Claude,
+                call: Mutex::new(0),
+                script: vec![vec![], vec![AgentStatus::Working]],
+                user_msg: Some("new task".into()),
+                assistant_msg: None,
+            })],
+            Some(path),
+        );
+        let s = m.poll(Duration::from_secs(30));
+        assert!(s.recent_events.is_empty());
+        let s = m.poll(Duration::from_secs(30));
+        assert_eq!(s.recent_events.len(), 1, "新会话进 Working 应发 Start");
+        assert_eq!(s.recent_events[0].event_kind, EventKind::Start);
+        assert_eq!(s.recent_events[0].content, "new task");
     }
 
     #[test]
