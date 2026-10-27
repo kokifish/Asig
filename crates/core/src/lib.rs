@@ -209,10 +209,8 @@ impl Monitor {
             let mut buf = self.recent_events.borrow_mut();
             for e in pushed {
                 buf.push_front(e);
-                while buf.len() > events::MAX_EVENTS {
-                    buf.pop_back();
-                }
             }
+            events::trim_balanced(&mut buf);
             let to_save: Vec<AgentEvent> = buf.iter().cloned().collect();
             match &self.events_path {
                 Some(p) => events::save_at(p, &to_save),
@@ -637,8 +635,10 @@ mod tests {
             N.fetch_add(1, Ordering::SeqCst)
         ));
         let _ = std::fs::remove_file(&path);
-        // 交替 Working↔Done(21 项),每 poll 一个边沿事件;最终被容量上限裁到 MAX_EVENTS。
-        let script: Vec<Vec<AgentStatus>> = (0..21)
+        // 交替 Working↔Done,每 poll 一个边沿事件;轮数超容量后按上限裁剪(单种类 =
+        // 保留最新 MAX_EVENTS 条)。首轮 poll 只建基线不发事件,故轮数要比上限多 2。
+        let polls = events::MAX_EVENTS + 2;
+        let script: Vec<Vec<AgentStatus>> = (0..polls)
             .map(|i| {
                 vec![if i % 2 == 0 {
                     AgentStatus::Working
@@ -657,7 +657,7 @@ mod tests {
             })],
             Some(path.clone()),
         );
-        for _ in 0..21 {
+        for _ in 0..polls {
             let _ = m.poll(Duration::from_secs(30));
         }
         let snap = m.poll(Duration::from_secs(30));
