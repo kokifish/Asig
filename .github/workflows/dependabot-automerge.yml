@@ -1,0 +1,33 @@
+# Dependabot PR 自动合并:patch/minor 挂 auto-merge,必需检查全绿后自动落地;major 留人工。
+# 前置(缺一不可):
+# - repo 设置开了 allow_auto_merge;
+# - main_protect ruleset 把 CI checks 设为必需——否则 auto-merge 会在 CI 跑完前直接合。
+name: Dependabot auto-merge
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    # 只处理 Dependabot 开的 PR,人开的 PR 一律不动
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Enable auto-merge for patch/minor
+        # update-type 取本 PR 内最高 semver 档(groups 语义):patch/minor 放行,major 拦下
+        if: >-
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --merge "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
