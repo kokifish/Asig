@@ -1,5 +1,5 @@
-//! Drop-down Panel:单击菜单栏 Signal Icon 后弹出的原生 NSPopover。内容 = 标题 + 三按钮
-//! (设置 / 锁定 / 退出)+ 会话列表 + 事件列表(可滚动)。会话列表硬上限 20 行(超出滚动);
+//! Drop-down Panel:单击菜单栏 Signal Icon 后弹出的原生 NSPopover。内容 = 标题 + 四按钮
+//! (设置 / 锁定 / 悬浮灯 / 退出)+ 会话列表 + 事件列表(可滚动)。会话列表硬上限 20 行(超出滚动);
 //! 事件列表无行数上限,高度随内容自适应(内容少时收缩不留空白),只受所在屏可视高度的
 //! 系统硬上限约束 —— 超过才滚动。
 //! NSPopover 自带圆角 + 箭头 + vibrancy 材质 + 失焦自动关(behavior=.transient),故不再
@@ -44,6 +44,7 @@ pub struct Popover {
     title_label: Retained<NSTextField>,
     btn_settings: Retained<NSButton>,
     btn_lock: Retained<NSButton>,
+    btn_light: Retained<NSButton>,
     btn_quit: Retained<NSButton>,
     sess_scroll: Retained<NSScrollView>,
     sess_text: Retained<NSTextView>,
@@ -55,7 +56,7 @@ pub struct Popover {
     event_text_cache: RefCell<String>,
 }
 
-/// 构建 popover(不显示):标题 + 三按钮 + 会话列表(自适应)+ 事件列表(可滚动)→ VC →
+/// 构建 popover(不显示):标题 + 四按钮 + 会话列表(自适应)+ 事件列表(可滚动)→ VC →
 /// NSPopover(transient)。具体高度在 `update_label` 按 snap 重算(build 给 1 行占位初值)。
 pub fn build(delegate: &AppDelegate) -> Popover {
     let mtm = MainThreadMarker::new().expect("panel build 须在主线程");
@@ -76,7 +77,8 @@ pub fn build(delegate: &AppDelegate) -> Popover {
         true,
     );
 
-    // —— 顶部三按钮(左→右):设置 / 锁定 / 退出。76pt 宽,在 PANEL_W-32 可用宽内均匀分布 ——
+    // —— 顶部四按钮(左→右):设置 / 锁定 / 悬浮灯 / 退出。76pt 宽(悬浮灯 92pt,三字
+    // 加勾选框更宽),在 PANEL_W-32 可用宽内均匀分布(两侧贴 16pt pad、间隙 ~23pt)。 ——
     let btn_settings = add_button(
         &content,
         NSRect::new(NSPoint::new(16.0, 0.0), NSSize::new(76.0, BTN_H)),
@@ -87,13 +89,28 @@ pub fn build(delegate: &AppDelegate) -> Popover {
     let locked = *delegate.ivars().click_through.borrow(); // 锁定 = 不可拖动 = click_through
     let btn_lock = add_button(
         &content,
-        NSRect::new(NSPoint::new(172.0, 0.0), NSSize::new(76.0, BTN_H)),
+        NSRect::new(NSPoint::new(115.0, 0.0), NSSize::new(76.0, BTN_H)),
         "锁定",
         delegate,
         sel!(toggleClickThrough:),
     );
     btn_lock.setButtonType(NSButtonType::Switch); // 圆角勾形 toggle
     btn_lock.setState(if locked {
+        NSControlStateValueOn
+    } else {
+        NSControlStateValueOff
+    });
+    // 悬浮灯(锁定右侧):勾选=展示悬浮灯(默认),取消=orderOut 收起仅留菜单栏灯。
+    let show_light = delegate.ivars().settings.borrow().show_light;
+    let btn_light = add_button(
+        &content,
+        NSRect::new(NSPoint::new(213.0, 0.0), NSSize::new(92.0, BTN_H)),
+        "悬浮灯",
+        delegate,
+        sel!(toggleShowLight:),
+    );
+    btn_light.setButtonType(NSButtonType::Switch);
+    btn_light.setState(if show_light {
         NSControlStateValueOn
     } else {
         NSControlStateValueOff
@@ -176,6 +193,7 @@ pub fn build(delegate: &AppDelegate) -> Popover {
         title_label,
         btn_settings,
         btn_lock,
+        btn_light,
         btn_quit,
         sess_scroll,
         sess_text,
@@ -352,8 +370,12 @@ fn layout(p: &Popover, sess_h: f64, ev_h: f64) {
         NSSize::new(76.0, BTN_H),
     ));
     p.btn_lock.setFrame(NSRect::new(
-        NSPoint::new(172.0, btn_y),
+        NSPoint::new(115.0, btn_y),
         NSSize::new(76.0, BTN_H),
+    ));
+    p.btn_light.setFrame(NSRect::new(
+        NSPoint::new(213.0, btn_y),
+        NSSize::new(92.0, BTN_H),
     ));
     p.btn_quit.setFrame(NSRect::new(
         NSPoint::new(PANEL_W - 16.0 - 76.0, btn_y),

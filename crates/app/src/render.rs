@@ -71,7 +71,7 @@ impl AppDelegate {
         self.render(&snap);
     }
 
-    /// dev 预览(ASIG_PREVIEW=1):不轮询,每个 tick(~3s)把浮窗灯切到下一状态的**默认**动效并打印,
+    /// dev 预览(ASIG_PREVIEW=1):不轮询,每个 tick(~3s)把悬浮灯切到下一状态的**默认**动效并打印,
     /// 便于一行命令查看 Done/DoneNotif/Working/NeedsDeci/Error/Offline 的默认灯效。循环不息。
     pub(crate) fn preview_tick(&self) {
         use std::sync::atomic::{AtomicUsize, Ordering};

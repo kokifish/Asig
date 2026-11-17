@@ -51,7 +51,7 @@ pub(crate) fn strings_for(l: Lang) -> Strings {
         Lang::Zh => Strings {
             general: "常规设置",
             about: "关于",
-            light_size: "浮窗灯大小",
+            light_size: "悬浮灯大小",
             click_through: "点击穿透(取消可拖动)",
             poll_interval: "Agent状态轮询间隔",
             launch_login: "开机自启动",

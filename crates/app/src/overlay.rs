@@ -239,10 +239,13 @@ impl RingView {
 
 // ---- 构建浮窗 ----
 /// `saved` = 上次记忆的位置(含所在屏 id);None 或该屏已断开 → 主屏左上角默认。
+/// `show` = 悬浮灯展示开关(settings.show_light);false 则不 orderFront(窗口保留、
+/// 位置记忆照常,后续 toggleShowLight 经 `set_visible` 切回)。
 pub fn build(
     dot_size: u32,
     saved: Option<LightPosition>,
     hide_in_fullscreen: bool,
+    show: bool,
 ) -> (Retained<NSWindow>, Retained<PillView>) {
     let origin = resolve_origin(saved, WIN);
     let frame = NSRect::new(origin, NSSize::new(WIN, WIN));
@@ -282,8 +285,21 @@ pub fn build(
     );
     view.setWantsLayer(true);
     window.setContentView(Some(&view));
-    window.orderFrontRegardless();
+    if show {
+        window.orderFrontRegardless();
+    }
     (window, view)
+}
+
+/// 切换悬浮灯窗口展示/隐藏。show=true → orderFrontRegardless(置顶显示,不抢焦点);
+/// false → orderOut(完全收起)。下拉「悬浮灯」勾选与启动初始化共用;隐藏期间窗口与
+/// 位置记忆保留(frame 不变),切回即原位恢复。
+pub fn set_visible(window: &NSWindow, show: bool) {
+    if show {
+        window.orderFrontRegardless();
+    } else {
+        window.orderOut(None);
+    }
 }
 
 /// 切换浮窗是否点击穿透。on=true → 忽略鼠标(穿透);on=false → 接收鼠标,可拖动。

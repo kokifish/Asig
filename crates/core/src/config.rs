@@ -240,6 +240,10 @@ pub struct Settings {
     /// 运行时 ivar,重启即丢 —— 现持久化;旧配置缺字段 → true,保持既有默认行为。
     #[serde(default = "default_click_through")]
     pub click_through: bool,
+    /// 悬浮灯展示开关(Drop-down「悬浮灯」勾选框;false = 收起悬浮灯窗口,仅留菜单栏灯)。
+    /// 默认 true;旧配置缺字段 → true,保持既有默认行为。
+    #[serde(default = "default_show_light")]
+    pub show_light: bool,
     /// 配置 schema 版本(留迁移口子;当前恒 1。老配置缺此字段 → 默认 1,不影响加载)。
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -277,6 +281,10 @@ fn default_click_through() -> bool {
     true
 }
 
+fn default_show_light() -> bool {
+    true
+}
+
 fn default_gradient_layers() -> u8 {
     GRADIENT_LAYERS_DEFAULT
 }
@@ -300,6 +308,7 @@ impl Default for Settings {
             hide_in_fullscreen: default_hide_in_fullscreen(),
             launch_at_login: false,
             click_through: default_click_through(),
+            show_light: default_show_light(),
             schema_version: 1,
         }
     }
@@ -494,6 +503,19 @@ mod tests {
         };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&s2).unwrap()).unwrap();
         assert!(!back.click_through);
+    }
+
+    #[test]
+    fn show_light_defaults_true_and_roundtrips() {
+        // 默认展示悬浮灯;旧配置缺字段 → true(保持既有默认行为);关掉后往返保住 false。
+        let s: Settings = serde_json::from_str("{}").unwrap();
+        assert!(s.show_light);
+        let s2 = Settings {
+            show_light: false,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s2).unwrap()).unwrap();
+        assert!(!back.show_light);
     }
 
     #[test]

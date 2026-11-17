@@ -36,8 +36,9 @@ fn quit_app() {
     NSApplication::sharedApplication(mtm).terminate(None);
 }
 
-/// 读 NSSwitch / NSButton 的 state(NSOnState=1 / NSOffState=0)。三个 toggle action
-/// (toggleClickThrough / toggleHideInFullscreen / toggleLaunchAtLogin)共用此样板。
+/// 读 NSSwitch / NSButton 的 state(NSOnState=1 / NSOffState=0)。四个 toggle action
+/// (toggleClickThrough / toggleShowLight / toggleHideInFullscreen / toggleLaunchAtLogin)
+/// 共用此样板。
 fn ns_switch_on(sender: *mut NSObject) -> bool {
     let s: i64 = unsafe { msg_send![sender, state] };
     s == 1
@@ -220,6 +221,16 @@ define_class!(
             self.apply_click_through();
         }
 
+        /// Drop-down「悬浮灯」勾选框 action。开=恢复悬浮灯展示;关=orderOut 收起(仅留
+        /// 菜单灯)。落 Settings 存盘(跨启动记忆;隐藏期间位置记忆照常)。
+        #[unsafe(method(toggleShowLight:))]
+        fn toggle_show_light(&self, sender: *mut NSObject) {
+            let on = ns_switch_on(sender);
+            self.ivars().settings.borrow_mut().show_light = on;
+            self.ivars().settings.borrow().save();
+            self.apply_show_light();
+        }
+
         /// General「全屏自动隐藏」开关 action。改完存盘 + 即时切换浮窗 collectionBehavior:
         /// on → Managed(不进全屏 Space,全屏自动隐藏 + 不打断菜单栏);off → CanJoinAllSpaces(跨 Space)。
         #[unsafe(method(toggleHideInFullscreen:))]
@@ -246,7 +257,7 @@ define_class!(
             self.ivars().settings.borrow().save();
         }
 
-        /// 设置面板「浮窗灯大小」滑块 action;同步刷新右侧 `xx px` 标签。
+        /// 设置面板「悬浮灯大小」滑块 action;同步刷新右侧 `xx px` 标签。
         #[unsafe(method(changeSize:))]
         fn change_size(&self, sender: *mut NSObject) {
             let v: f64 = unsafe { msg_send![sender, doubleValue] };
@@ -411,12 +422,13 @@ define_class!(
             let _ = crate::launch::unregister();
             self.ivars().settings.borrow().save();
             *self.ivars().click_through.borrow_mut() = true;
-            // 重应用:浮窗大小 + 点击穿透 + tick 重排
+            // 重应用:悬浮灯大小 + 点击穿透 + 悬浮灯展示 + tick 重排
             let dot = self.ivars().settings.borrow().dot_size;
             if let Some(view) = self.ivars().overlay_view.borrow().as_ref() {
                 crate::overlay::set_size(view, dot);
             }
             self.apply_click_through();
+            self.apply_show_light();
             let ms = self.ivars().settings.borrow().poll_interval_ms;
             crate::tray::reschedule(self, ms as f64 / 1000.0);
             let snap = self.snap();
@@ -635,6 +647,14 @@ impl AppDelegate {
         let on = *self.ivars().click_through.borrow();
         if let Some(w) = self.ivars().overlay_window.borrow().as_ref() {
             crate::overlay::set_click_through(w, on);
+        }
+    }
+
+    /// 把 show_light 设置同步到悬浮灯窗口(展示 / orderOut 收起)。
+    fn apply_show_light(&self) {
+        let show = self.ivars().settings.borrow().show_light;
+        if let Some(w) = self.ivars().overlay_window.borrow().as_ref() {
+            crate::overlay::set_visible(w, show);
         }
     }
 

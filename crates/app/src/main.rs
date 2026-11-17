@@ -54,11 +54,13 @@ fn main() {
     let settings = agent_light_core::Settings::load();
     let theme = settings.theme; // 在 settings 移入 delegate 前取出
 
-    // Phase 2:置顶透明药丸浮窗(按设置里的圆点大小 + 上次记忆的位置初始化)。
+    // Phase 2:置顶透明药丸浮窗(按设置里的圆点大小 + 上次记忆的位置初始化;
+    // show_light=false 则不上屏,只保留窗口与位置记忆)。
     let (overlay_window, overlay_view) = overlay::build(
         settings.dot_size,
         settings.light_pos,
         settings.hide_in_fullscreen,
+        settings.show_light,
     );
     // Phase 2.5:详情 popover + 设置窗口。
     let delegate = AppDelegate::new(AppIvars {

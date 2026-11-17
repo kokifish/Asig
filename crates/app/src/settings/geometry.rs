@@ -110,7 +110,7 @@ pub const GRADIENT_LABEL_OFF: i64 = 51;
 // General pane 语言单选 tag。
 pub const LANG_EN_TAG: i64 = 501;
 pub const LANG_ZH_TAG: i64 = 502;
-// General pane「浮窗灯大小」右侧 `xx px` 实时标签 tag(changeSize 时按它刷新)。
+// General pane「悬浮灯大小」右侧 `xx px` 实时标签 tag(changeSize 时按它刷新)。
 pub const SIZE_LABEL_TAG: i64 = 503;
 // General pane「Theme」radio tag 基数(+0/1/2 = 跟随系统/深色/浅色)。
 pub const THEME_OFF: i64 = 600;
